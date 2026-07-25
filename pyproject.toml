@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ugc-video-harness"
+version = "0.1.0"
+description = "Beat-first UGC content planning and script generation harness"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=1.68.0",
+  "pydantic>=2.10.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3.0"]
+
+[project.scripts]
+ugc-harness = "ugc_harness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
