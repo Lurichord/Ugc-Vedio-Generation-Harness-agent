@@ -5,11 +5,11 @@ import json
 import sys
 from pathlib import Path
 
-from .artifacts import ArtifactWriter
-from .models import StageOneArtifact
-from .settings import TTSSettings
+from ..shared.artifacts import ArtifactWriter
+from ..shared.settings import TTSSettings
+from ..stage_one.models import StageOneArtifact
 from .tts import VolcengineTTS
-from .voice_pipeline import VoiceStagePipeline
+from .pipeline import VoiceStagePipeline
 
 
 def build_parser() -> argparse.ArgumentParser:

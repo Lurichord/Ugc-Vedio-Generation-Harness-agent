@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 
-from .settings import TTSSettings
+from ..shared.settings import TTSSettings
 
 
 @dataclass(frozen=True)
@@ -159,4 +159,3 @@ def _parse_native_words(frontend: object) -> list[NativeWord]:
             )
         )
     return words
-

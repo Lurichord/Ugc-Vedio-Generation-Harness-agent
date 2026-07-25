@@ -1,12 +1,13 @@
 """UGC video generation harness."""
 
-from .models import CreativeBrief, StageOneArtifact
-from .pipeline import StageOnePipeline
-from .voice_models import VoiceStageArtifact
-from .voice_pipeline import VoiceStagePipeline
+from .stage_one import CreativeBrief, StageOneArtifact, StageOnePipeline
+from .stage_three import EditorialStageArtifact, EditorialStagePipeline
+from .stage_two import VoiceStageArtifact, VoiceStagePipeline
 
 __all__ = [
     "CreativeBrief",
+    "EditorialStageArtifact",
+    "EditorialStagePipeline",
     "StageOneArtifact",
     "StageOnePipeline",
     "VoiceStageArtifact",

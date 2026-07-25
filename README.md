@@ -24,6 +24,49 @@ ScriptSegment[]
   → RealizedBeat[]
 ```
 
+证据与视觉规划阶段使用真实语音形成的 Beat：
+
+```text
+RealizedBeat[]
+  → Claim Inventory
+  → EvidenceRequest[]
+  → Research Query[]
+  → VisualRequirement[]
+```
+
+事实来源和画面素材被分别管理：事实主张必须产生证据检索需求；没有合适的
+真实画面时仍可使用 B-roll、动态图形或 AI 说明性素材，但这些素材永远不能
+满足证据要求，也不能伪装成新闻现场或真实记录。
+
+## 代码结构
+
+```text
+src/ugc_harness/
+├── shared/                 # 跨阶段基础设施
+│   ├── artifacts.py        # 项目产物与 manifest 写入
+│   ├── llm.py              # 结构化 LLM 调用
+│   ├── llm_prompts.py      # 全局 JSON 与事实规则
+│   └── settings.py         # LLM / TTS 配置
+├── stage_one/              # 内容结构与剧本
+│   ├── models.py
+│   ├── prompts.py
+│   ├── pipeline.py
+│   ├── quality.py
+│   └── cli.py
+├── stage_two/              # 配音、对齐与 RealizedBeat
+│   ├── models.py
+│   ├── plan.py
+│   ├── tts.py
+│   ├── audio.py
+│   ├── pipeline.py
+│   └── cli.py
+└── stage_three/            # 主张、证据需求与视觉需求
+    ├── models.py
+    ├── prompts.py
+    ├── pipeline.py
+    └── cli.py
+```
+
 这里生成的是声音主导、按信息 Beat 推进的 UGC，而不是电影分镜。第一阶段不会生成素材、镜头或视频；事实性主张只会形成待核实的 `evidence_need`，留给下一阶段的 Research / Evidence Agent。
 
 时长字段在这一阶段是规划提示，而不是本地硬约束：
@@ -111,8 +154,13 @@ outputs/
     ├── 09_word_alignment.json
     ├── 10_realized_beats.json
     ├── 11_voice_quality_report.json
+    ├── 12_claim_evidence_map.json
+    ├── 13_research_queries.json
+    ├── 14_visual_requirements.json
+    ├── 15_editorial_quality_report.json
     ├── stage_one_artifact.json
     ├── stage_two_artifact.json
+    ├── stage_three_artifact.json
     └── audio/
         ├── narration.wav
         └── segments/
@@ -149,6 +197,24 @@ outputs/
 - 将分段 WAV 与停顿拼接成 `audio/narration.wav`。
 - 根据真实音频区间将 PlannedBeat 实现为 RealizedBeat。
 - 将所有 JSON、完整音频和分段音频登记到 `manifest.json`。
+
+## 生成主张、证据需求与视觉需求
+
+语音阶段完成后运行：
+
+```powershell
+.\.venv\Scripts\ugc-evidence-plan.exe `
+  "outputs\AI公司为什么争夺电力" `
+  --fail-on-quality-error
+```
+
+这一阶段不执行联网搜索，也不会编造已经找到的来源。它会：
+
+- 将口播主张分类为事实、观点、推断或修辞。
+- 为所有事实主张生成待执行的 `EvidenceRequest` 和搜索词。
+- 为每个真实音频区间形成一个 `VisualRequirement`。
+- 允许 AI 说明性素材作为视觉降级方案，但禁止将它作为证据首选素材。
+- 分开计算事实证据需求覆盖率和 Beat 视觉需求覆盖率。
 
 ## 测试
 

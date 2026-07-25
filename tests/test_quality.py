@@ -1,6 +1,6 @@
-from ugc_harness.models import PlanningArtifact, ScriptArtifact
-from ugc_harness.pipeline import make_brief
-from ugc_harness.quality import evaluate
+from ugc_harness.stage_one.models import PlanningArtifact, ScriptArtifact
+from ugc_harness.stage_one.pipeline import make_brief
+from ugc_harness.stage_one.quality import evaluate
 
 
 def sample_plan() -> PlanningArtifact:

@@ -8,8 +8,9 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .models import StageOneArtifact
-from .voice_models import VoiceStageArtifact
+from ..stage_one.models import StageOneArtifact
+from ..stage_three.models import EditorialStageArtifact
+from ..stage_two.models import VoiceStageArtifact
 
 
 _INVALID_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -161,6 +162,87 @@ class ArtifactWriter:
         }
         indexed.update(
             {entry["relative_path"]: entry for entry in new_entries}
+        )
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        written.append(manifest_path)
+        return written
+
+    def write_editorial_stage(
+        self,
+        project_dir: str | Path,
+        artifact: EditorialStageArtifact,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        plan = artifact.editorial_plan
+        payloads: list[tuple[str, BaseModel | dict[str, Any] | list[Any]]] = [
+            (
+                "12_claim_evidence_map.json",
+                {
+                    "project_id": artifact.project_id,
+                    "claims": [
+                        claim.model_dump(mode="json") for claim in plan.claims
+                    ],
+                    "evidence_requests": [
+                        request.model_dump(mode="json")
+                        for request in plan.evidence_requests
+                    ],
+                },
+            ),
+            (
+                "13_research_queries.json",
+                {
+                    "project_id": artifact.project_id,
+                    "requests": [
+                        request.model_dump(mode="json")
+                        for request in plan.evidence_requests
+                    ],
+                },
+            ),
+            (
+                "14_visual_requirements.json",
+                {
+                    "project_id": artifact.project_id,
+                    "requirements": [
+                        requirement.model_dump(mode="json")
+                        for requirement in plan.visual_requirements
+                    ],
+                },
+            ),
+            ("15_editorial_quality_report.json", artifact.quality),
+            ("stage_three_artifact.json", artifact),
+        ]
+        written = [
+            _write_json(root / filename, payload)
+            for filename, payload in payloads
+        ]
+
+        manifest_path = root / "manifest.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        else:
+            manifest = {
+                "schema_version": "artifact-manifest.v1",
+                "project_id": artifact.project_id,
+                "project_name": root.name,
+                "topic": None,
+                "artifacts": [],
+            }
+        manifest["stage"] = "editorial_plan_complete"
+        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+        manifest["editorial_quality_passed"] = artifact.quality.passed
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed.update(
+            {
+                path.relative_to(root).as_posix(): _manifest_entry(
+                    path, root, "json"
+                )
+                for path in written
+            }
         )
         manifest["artifacts"] = list(indexed.values())
         _write_json(manifest_path, manifest)

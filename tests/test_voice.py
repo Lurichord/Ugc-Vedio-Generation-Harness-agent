@@ -2,13 +2,17 @@ import io
 import wave
 from pathlib import Path
 
-from ugc_harness.artifacts import ArtifactWriter
-from ugc_harness.models import StageOneArtifact
-from ugc_harness.pipeline import make_brief
-from ugc_harness.quality import evaluate
-from ugc_harness.tts import NativeWord, SynthesisResult, _parse_native_words
-from ugc_harness.voice_pipeline import VoiceStagePipeline
-from ugc_harness.voice_plan import build_voice_plan
+from ugc_harness.shared.artifacts import ArtifactWriter
+from ugc_harness.stage_one.models import StageOneArtifact
+from ugc_harness.stage_one.pipeline import make_brief
+from ugc_harness.stage_one.quality import evaluate
+from ugc_harness.stage_two.pipeline import VoiceStagePipeline
+from ugc_harness.stage_two.plan import build_voice_plan
+from ugc_harness.stage_two.tts import (
+    NativeWord,
+    SynthesisResult,
+    _parse_native_words,
+)
 from tests.test_quality import sample_plan, sample_script
 
 

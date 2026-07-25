@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from .models import BeatRole, StrictModel
+from ..stage_one.models import BeatRole, StrictModel
 
 
 class VoiceSpeaker(StrictModel):
@@ -135,4 +135,3 @@ class VoiceStageArtifact(StrictModel):
     word_alignment: WordAlignment
     realized_beats: list[RealizedBeat]
     quality: VoiceStageQuality
-

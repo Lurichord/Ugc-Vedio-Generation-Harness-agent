@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from .models import CreativeBrief, ScriptArtifact
-from .voice_models import (
+from ..stage_one.models import CreativeBrief, ScriptArtifact
+from .models import (
     VoiceGlobalSettings,
     VoicePlan,
     VoiceSegmentPlan,

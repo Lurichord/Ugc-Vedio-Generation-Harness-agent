@@ -4,10 +4,10 @@ import re
 from pathlib import Path
 from typing import Protocol
 
-from .audio_utils import concatenate_wavs, inspect_wav
-from .models import StageOneArtifact
+from .audio import concatenate_wavs, inspect_wav
+from ..stage_one.models import StageOneArtifact
 from .tts import NativeWord, SynthesisResult
-from .voice_models import (
+from .models import (
     AudioSegment,
     RealizedBeat,
     TimedAudio,
@@ -16,7 +16,7 @@ from .voice_models import (
     WordAlignment,
     WordTimestamp,
 )
-from .voice_plan import build_voice_plan
+from .plan import build_voice_plan
 
 
 class TTSProvider(Protocol):

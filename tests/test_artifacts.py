@@ -1,10 +1,10 @@
 import json
 from pathlib import Path
 
-from ugc_harness.artifacts import ArtifactWriter, safe_project_folder_name
-from ugc_harness.models import StageOneArtifact
-from ugc_harness.pipeline import make_brief
-from ugc_harness.quality import evaluate
+from ugc_harness.shared.artifacts import ArtifactWriter, safe_project_folder_name
+from ugc_harness.stage_one.models import StageOneArtifact
+from ugc_harness.stage_one.pipeline import make_brief
+from ugc_harness.stage_one.quality import evaluate
 from tests.test_quality import sample_plan, sample_script
 
 
@@ -46,4 +46,3 @@ def test_writer_creates_project_directory_with_all_artifacts(
 
 def test_project_folder_name_removes_path_characters() -> None:
     assert safe_project_folder_name('项目: A/B?') == "项目_ A_B_"
-

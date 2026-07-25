@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ugc_harness.settings import TTSSettings, load_shell_env
+from ugc_harness.shared.settings import TTSSettings, load_shell_env
 
 
 def test_load_shell_env_without_executing(tmp_path: Path) -> None:

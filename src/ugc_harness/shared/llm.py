@@ -7,7 +7,7 @@ from typing import TypeVar
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
-from .prompts import SYSTEM_PROMPT, repair_prompt
+from .llm_prompts import SYSTEM_PROMPT, repair_prompt
 from .settings import LLMSettings
 
 T = TypeVar("T", bound=BaseModel)
@@ -65,4 +65,3 @@ class StructuredLLM:
             f"Model output failed validation after repair: {last_error}\n"
             f"Last response preview: {last_text[:500]}"
         )
-

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ugc-video-harness"
-version = "0.2.0"
-description = "Beat-first UGC content planning and script generation harness"
+version = "0.3.0"
+description = "Beat-first UGC content, voice, evidence, and visual planning harness"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,8 +18,9 @@ dependencies = [
 dev = ["pytest>=8.3.0"]
 
 [project.scripts]
-ugc-harness = "ugc_harness.cli:main"
-ugc-voice = "ugc_harness.voice_cli:main"
+ugc-harness = "ugc_harness.stage_one.cli:main"
+ugc-voice = "ugc_harness.stage_two.cli:main"
+ugc-evidence-plan = "ugc_harness.stage_three.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

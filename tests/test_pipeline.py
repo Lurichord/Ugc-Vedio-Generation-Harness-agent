@@ -2,8 +2,8 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
-from ugc_harness.models import PlanningArtifact, ScriptArtifact
-from ugc_harness.pipeline import StageOnePipeline, make_brief
+from ugc_harness.stage_one.models import PlanningArtifact, ScriptArtifact
+from ugc_harness.stage_one.pipeline import StageOnePipeline, make_brief
 from tests.test_quality import sample_plan, sample_script
 
 T = TypeVar("T", bound=BaseModel)
