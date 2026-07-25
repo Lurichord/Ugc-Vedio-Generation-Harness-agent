@@ -13,6 +13,17 @@ Topic / User Constraints
   → Local Quality Report
 ```
 
+语音阶段继续执行：
+
+```text
+ScriptSegment[]
+  → VoicePlan
+  → Volcengine TTS WAV segments
+  → Native WordAlignment
+  → TimedAudio
+  → RealizedBeat[]
+```
+
 这里生成的是声音主导、按信息 Beat 推进的 UGC，而不是电影分镜。第一阶段不会生成素材、镜头或视频；事实性主张只会形成待核实的 `evidence_need`，留给下一阶段的 Research / Evidence Agent。
 
 时长字段在这一阶段是规划提示，而不是本地硬约束：
@@ -47,6 +58,10 @@ $env:UGC_LLM_MODEL = "google/gemini-2.5-flash"
 OPENROUTER_API_KEY="..."
 OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
 UGC_LLM_MODEL="google/gemini-2.5-flash"
+VOLCENGINE_TTS_API_KEY="..."
+VOLCENGINE_TTS_ENDPOINT="https://openspeech.bytedance.com/api/v1/tts"
+VOLCENGINE_TTS_RESOURCE_ID="volc.service_type.10029"
+VOLCENGINE_TTS_VOICE_ID="zh_male_qingshuangnanda_mars_bigtts"
 ```
 
 `.env` 已加入 `.gitignore`，`.env.example` 可安全提交。
@@ -59,6 +74,7 @@ UGC_LLM_MODEL="google/gemini-2.5-flash"
   --project-name "AI公司为什么争夺电力" `
   --duration 90 `
   --platform douyin `
+  --with-voice `
   --output-root "outputs"
 ```
 
@@ -72,6 +88,8 @@ UGC_LLM_MODEL="google/gemini-2.5-flash"
 - `--creator-persona`：创作者口吻与身份。
 - `--model`：覆盖默认模型。
 - `--output-root`：项目输出根目录，默认是 `outputs`。
+- `--with-voice`：内容阶段完成后继续生成语音阶段全部产物。
+- `--voice-id`：覆盖默认火山 TTS 音色。
 - `--fail-on-quality-error`：本地结构质检发现 error 时返回非零退出码。
 
 ## 输出
@@ -88,7 +106,18 @@ outputs/
     ├── 04_content_plan.json
     ├── 05_script.json
     ├── 06_quality_report.json
-    └── stage_one_artifact.json
+    ├── 07_voice_plan.json
+    ├── 08_timed_audio.json
+    ├── 09_word_alignment.json
+    ├── 10_realized_beats.json
+    ├── 11_voice_quality_report.json
+    ├── stage_one_artifact.json
+    ├── stage_two_artifact.json
+    └── audio/
+        ├── narration.wav
+        └── segments/
+            ├── vs01.wav
+            └── ...
 ```
 
 其中：
@@ -100,6 +129,26 @@ outputs/
 - `quality`：宽松时长提示、Beat 覆盖率、证据主张数量和结构问题。
 - `stage_one_artifact.json`：以上所有内容的完整聚合版本。
 - `manifest.json`：项目产物索引，供后续阶段发现文件。
+
+## 生成配音和 Realized Beats
+
+第一阶段完成后，传入项目目录：
+
+```powershell
+.\.venv\Scripts\ugc-voice.exe `
+  "outputs\AI公司为什么争夺电力" `
+  --fail-on-quality-error
+```
+
+语音阶段会：
+
+- 根据 CreativeBrief 的 tone 和每段 speech act 生成 `VoicePlan`。
+- 每个 ScriptSegment 独立设置语速、能量与前后停顿。
+- 调用火山 TTS 输出 24kHz 单声道 WAV。
+- 使用 TTS 返回的原生逐字时间戳。
+- 将分段 WAV 与停顿拼接成 `audio/narration.wav`。
+- 根据真实音频区间将 PlannedBeat 实现为 RealizedBeat。
+- 将所有 JSON、完整音频和分段音频登记到 `manifest.json`。
 
 ## 测试
 
