@@ -1,4 +1,4 @@
-"""Stage three: claim audit, evidence requests, and visual requirements."""
+"""Stage three: claim extraction and visual exploration directions."""
 
 from .models import EditorialStageArtifact
 from .pipeline import EditorialStagePipeline

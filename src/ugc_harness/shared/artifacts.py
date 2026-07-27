@@ -9,6 +9,10 @@ from typing import Any
 from pydantic import BaseModel
 
 from ..stage_one.models import StageOneArtifact
+from ..stage_four.models import AssetStageArtifact
+from ..stage_five.models import TimelineStageArtifact
+from ..stage_seven.models import ImagePreparationStageArtifact
+from ..stage_six.models import RenderStageArtifact
 from ..stage_three.models import EditorialStageArtifact
 from ..stage_two.models import VoiceStageArtifact
 
@@ -178,30 +182,16 @@ class ArtifactWriter:
         plan = artifact.editorial_plan
         payloads: list[tuple[str, BaseModel | dict[str, Any] | list[Any]]] = [
             (
-                "12_claim_evidence_map.json",
+                "12_claim_map.json",
                 {
                     "project_id": artifact.project_id,
                     "claims": [
                         claim.model_dump(mode="json") for claim in plan.claims
                     ],
-                    "evidence_requests": [
-                        request.model_dump(mode="json")
-                        for request in plan.evidence_requests
-                    ],
                 },
             ),
             (
-                "13_research_queries.json",
-                {
-                    "project_id": artifact.project_id,
-                    "requests": [
-                        request.model_dump(mode="json")
-                        for request in plan.evidence_requests
-                    ],
-                },
-            ),
-            (
-                "14_visual_requirements.json",
+                "13_visual_requirements.json",
                 {
                     "project_id": artifact.project_id,
                     "requirements": [
@@ -210,7 +200,7 @@ class ArtifactWriter:
                     ],
                 },
             ),
-            ("15_editorial_quality_report.json", artifact.quality),
+            ("14_editorial_quality_report.json", artifact.quality),
             ("stage_three_artifact.json", artifact),
         ]
         written = [
@@ -236,6 +226,17 @@ class ArtifactWriter:
             entry["relative_path"]: entry
             for entry in manifest.get("artifacts", [])
         }
+        obsolete = {
+            "12_claim_evidence_map.json",
+            "13_research_queries.json",
+            "14_visual_requirements.json",
+            "15_editorial_quality_report.json",
+        }
+        for filename in obsolete:
+            stale_path = root / filename
+            if stale_path.is_file():
+                stale_path.unlink()
+            indexed.pop(filename, None)
         indexed.update(
             {
                 path.relative_to(root).as_posix(): _manifest_entry(
@@ -244,6 +245,294 @@ class ArtifactWriter:
                 for path in written
             }
         )
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        written.append(manifest_path)
+        return written
+
+    def write_asset_stage(
+        self,
+        project_dir: str | Path,
+        artifact: AssetStageArtifact,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        payloads: list[tuple[str, BaseModel | dict[str, Any] | list[Any]]] = [
+            (
+                "15_asset_cards.json",
+                {
+                    "project_id": artifact.project_id,
+                    "assets": [
+                        asset.model_dump(mode="json")
+                        for asset in artifact.assets
+                    ],
+                },
+            ),
+            (
+                "16_visual_resolutions.json",
+                {
+                    "project_id": artifact.project_id,
+                    "resolutions": [
+                        resolution.model_dump(mode="json")
+                        for resolution in artifact.resolutions
+                    ],
+                },
+            ),
+            ("17_asset_quality_report.json", artifact.quality),
+            ("stage_four_artifact.json", artifact),
+        ]
+        written = [
+            _write_json(root / filename, payload)
+            for filename, payload in payloads
+        ]
+
+        manifest_path = root / "manifest.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        else:
+            manifest = {
+                "schema_version": "artifact-manifest.v1",
+                "project_id": artifact.project_id,
+                "project_name": root.name,
+                "topic": None,
+                "artifacts": [],
+            }
+        manifest["stage"] = "asset_acquisition_complete"
+        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+        manifest["asset_quality_passed"] = artifact.quality.passed
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed.update(
+            {
+                path.relative_to(root).as_posix(): _manifest_entry(
+                    path, root, "json"
+                )
+                for path in written
+            }
+        )
+        for asset in artifact.assets:
+            asset_path = root / asset.local_path
+            indexed[asset.local_path] = _manifest_entry(
+                asset_path, root, "asset"
+            )
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        written.append(manifest_path)
+        return written
+
+    def write_timeline_stage(
+        self,
+        project_dir: str | Path,
+        artifact: TimelineStageArtifact,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        payloads: list[tuple[str, BaseModel | dict[str, Any] | list[Any]]] = [
+            ("18_timeline_plan.json", artifact.timeline),
+            (
+                "19_caption_plan.json",
+                {
+                    "project_id": artifact.project_id,
+                    "captions": [
+                        item.model_dump(mode="json")
+                        for item in artifact.captions
+                    ],
+                },
+            ),
+            (
+                "20_visual_transform_plan.json",
+                {
+                    "project_id": artifact.project_id,
+                    "transforms": [
+                        item.model_dump(mode="json")
+                        for item in artifact.visual_transforms
+                    ],
+                },
+            ),
+            (
+                "21_overlay_plan.json",
+                {
+                    "project_id": artifact.project_id,
+                    "overlays": [
+                        item.model_dump(mode="json")
+                        for item in artifact.overlays
+                    ],
+                },
+            ),
+            ("22_timeline_quality_report.json", artifact.quality),
+            ("stage_five_artifact.json", artifact),
+        ]
+        written = [
+            _write_json(root / filename, payload)
+            for filename, payload in payloads
+        ]
+
+        manifest_path = root / "manifest.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        else:
+            manifest = {
+                "schema_version": "artifact-manifest.v1",
+                "project_id": artifact.project_id,
+                "project_name": root.name,
+                "topic": None,
+                "artifacts": [],
+            }
+        manifest["stage"] = "timeline_composition_complete"
+        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+        manifest["timeline_quality_passed"] = artifact.quality.passed
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed.update(
+            {
+                path.relative_to(root).as_posix(): _manifest_entry(
+                    path, root, "json"
+                )
+                for path in written
+            }
+        )
+        for derivative in artifact.derivatives:
+            path = root / derivative.local_path
+            indexed[derivative.local_path] = _manifest_entry(
+                path, root, "derived_asset"
+            )
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        written.append(manifest_path)
+        return written
+
+    def write_image_preparation_stage(
+        self,
+        project_dir: str | Path,
+        artifact: ImagePreparationStageArtifact,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        payloads: list[tuple[str, BaseModel | dict[str, Any] | list[Any]]] = [
+            (
+                "23_image_analysis.json",
+                {
+                    "project_id": artifact.project_id,
+                    "analyses": [
+                        item.analysis.model_dump(mode="json")
+                        for item in artifact.processed_images
+                    ],
+                },
+            ),
+            (
+                "24_processed_images.json",
+                {
+                    "project_id": artifact.project_id,
+                    "images": [
+                        item.model_dump(mode="json")
+                        for item in artifact.processed_images
+                    ],
+                },
+            ),
+            (
+                "25_render_asset_map.json",
+                {
+                    "project_id": artifact.project_id,
+                    "mappings": [
+                        item.model_dump(mode="json")
+                        for item in artifact.render_asset_mappings
+                    ],
+                },
+            ),
+            ("26_image_quality_report.json", artifact.quality),
+            ("stage_seven_artifact.json", artifact),
+        ]
+        written = [
+            _write_json(root / filename, payload)
+            for filename, payload in payloads
+        ]
+        manifest_path = root / "manifest.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        else:
+            manifest = {
+                "schema_version": "artifact-manifest.v1",
+                "project_id": artifact.project_id,
+                "project_name": root.name,
+                "topic": None,
+                "artifacts": [],
+            }
+        manifest["stage"] = "image_preparation_complete"
+        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+        manifest["image_quality_passed"] = artifact.quality.passed
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed.update(
+            {
+                path.relative_to(root).as_posix(): _manifest_entry(
+                    path, root, "json"
+                )
+                for path in written
+            }
+        )
+        for image in artifact.processed_images:
+            path = root / image.output_path
+            indexed[image.output_path] = _manifest_entry(
+                path, root, "processed_image"
+            )
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        written.append(manifest_path)
+        return written
+
+    def write_render_stage(
+        self,
+        project_dir: str | Path,
+        artifact: RenderStageArtifact,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        payloads: list[tuple[str, BaseModel | dict[str, Any] | list[Any]]] = [
+            ("27_render_composition.json", artifact.composition),
+            ("28_render_quality_report.json", artifact.quality),
+            ("stage_six_artifact.json", artifact),
+        ]
+        written = [
+            _write_json(root / filename, payload)
+            for filename, payload in payloads
+        ]
+        manifest_path = root / "manifest.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        else:
+            manifest = {
+                "schema_version": "artifact-manifest.v1",
+                "project_id": artifact.project_id,
+                "project_name": root.name,
+                "topic": None,
+                "artifacts": [],
+            }
+        manifest["stage"] = "final_render_complete"
+        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+        manifest["render_quality_passed"] = artifact.quality.passed
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed.update(
+            {
+                path.relative_to(root).as_posix(): _manifest_entry(
+                    path, root, "json"
+                )
+                for path in written
+            }
+        )
+        for output in artifact.outputs:
+            path = root / output.local_path
+            indexed[output.local_path] = _manifest_entry(
+                path, root, f"{output.kind}_video"
+            )
         manifest["artifacts"] = list(indexed.values())
         _write_json(manifest_path, manifest)
         written.append(manifest_path)

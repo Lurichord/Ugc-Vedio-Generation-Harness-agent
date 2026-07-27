@@ -58,6 +58,45 @@ class LLMSettings(BaseModel):
         return cls(api_key=api_key, base_url=base_url, model=selected_model)
 
 
+class AssetGenerationSettings(BaseModel):
+    image_model: str = "google/gemini-3.1-flash-lite-image"
+    video_model: str = "google/veo-3.1-lite"
+    video_resolution: str = "720p"
+    video_poll_seconds: float = 30.0
+    video_timeout_seconds: float = 600.0
+
+    @classmethod
+    def from_environment(
+        cls,
+        api_keys_file: str | Path | None = None,
+        *,
+        image_model: str | None = None,
+        video_model: str | None = None,
+    ) -> "AssetGenerationSettings":
+        config_path = Path(api_keys_file) if api_keys_file else Path(".env")
+        file_values = load_shell_env(config_path) if config_path.is_file() else {}
+
+        def get(name: str, fallback: str) -> str:
+            return os.getenv(name) or file_values.get(name) or fallback
+
+        return cls(
+            image_model=image_model
+            or get(
+                "UGC_IMAGE_MODEL",
+                cls.model_fields["image_model"].default,
+            ),
+            video_model=video_model
+            or get(
+                "UGC_VIDEO_MODEL",
+                cls.model_fields["video_model"].default,
+            ),
+            video_resolution=get(
+                "UGC_VIDEO_RESOLUTION",
+                cls.model_fields["video_resolution"].default,
+            ),
+        )
+
+
 class TTSSettings(BaseModel):
     api_key: str = Field(min_length=8)
     endpoint: str = "https://openspeech.bytedance.com/api/v1/tts"

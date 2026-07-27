@@ -1,12 +1,5 @@
-"""Infrastructure shared by all pipeline stages."""
+"""Infrastructure shared by all pipeline stages.
 
-from .artifacts import ArtifactWriter
-from .llm import StructuredLLM
-from .settings import LLMSettings, TTSSettings
-
-__all__ = [
-    "ArtifactWriter",
-    "LLMSettings",
-    "StructuredLLM",
-    "TTSSettings",
-]
+Import concrete shared modules directly so package initialization does not
+eagerly load every stage and create circular dependencies.
+"""

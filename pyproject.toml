@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ugc-video-harness"
-version = "0.3.0"
-description = "Beat-first UGC content, voice, evidence, and visual planning harness"
+version = "0.8.1"
+description = "Beat-first UGC content, voice, visual planning, and asset acquisition harness"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "httpx>=0.28.0",
   "openai>=1.68.0",
+  "Pillow>=11.0.0",
   "pydantic>=2.10.0",
 ]
 
@@ -20,7 +21,11 @@ dev = ["pytest>=8.3.0"]
 [project.scripts]
 ugc-harness = "ugc_harness.stage_one.cli:main"
 ugc-voice = "ugc_harness.stage_two.cli:main"
-ugc-evidence-plan = "ugc_harness.stage_three.cli:main"
+ugc-visual-plan = "ugc_harness.stage_three.cli:main"
+ugc-assets = "ugc_harness.stage_four.cli:main"
+ugc-timeline = "ugc_harness.stage_five.cli:main"
+ugc-images = "ugc_harness.stage_seven.cli:main"
+ugc-render = "ugc_harness.stage_six.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

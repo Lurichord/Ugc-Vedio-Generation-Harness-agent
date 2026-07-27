@@ -1,4 +1,6 @@
 .venv/
+renderer/node_modules/
+renderer/public/jobs/
 __pycache__/
 .pytest_cache/
 *.py[cod]

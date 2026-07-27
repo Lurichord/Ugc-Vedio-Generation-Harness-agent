@@ -39,7 +39,7 @@ class EditorialStagePipeline:
             editorial_plan_prompt(stage_one, stage_two),
             EditorialPlan,
         )
-        quality = evaluate_editorial_plan(stage_one, stage_two, plan)
+        quality = evaluate_editorial_plan(stage_two, plan)
         if not quality.passed:
             plan = self.generator.generate(
                 editorial_repair_prompt(
@@ -50,7 +50,7 @@ class EditorialStagePipeline:
                 ),
                 EditorialPlan,
             )
-            quality = evaluate_editorial_plan(stage_one, stage_two, plan)
+            quality = evaluate_editorial_plan(stage_two, plan)
 
         return EditorialStageArtifact(
             model=self.model_name,
@@ -61,7 +61,6 @@ class EditorialStagePipeline:
 
 
 def evaluate_editorial_plan(
-    stage_one: StageOneArtifact,
     stage_two: VoiceStageArtifact,
     plan: EditorialPlan,
 ) -> EditorialQuality:
@@ -88,37 +87,12 @@ def evaluate_editorial_plan(
     factual_claims = [
         claim for claim in plan.claims if claim.claim_type == "factual"
     ]
-    requested_claim_ids = {
-        request.claim_id for request in plan.evidence_requests
-    }
-    missing_evidence = {
-        claim.claim_id
-        for claim in factual_claims
-        if claim.claim_id not in requested_claim_ids
-    }
-    if missing_evidence:
-        issues.append(f"事实主张缺少 EvidenceRequest: {sorted(missing_evidence)}")
-
-    planned_evidence_beat_ids = {
-        realized.beat_id
-        for realized in stage_two.realized_beats
-        for planned in stage_one.planning.beats
-        if realized.planned_beat_id == planned.planned_beat_id
-        and planned.evidence_need.required
-    }
-    factual_beat_ids = {claim.beat_id for claim in factual_claims}
-    missing_planned_claims = planned_evidence_beat_ids - factual_beat_ids
-    if missing_planned_claims:
-        issues.append(
-            "第一阶段要求核实、但未抽取为 factual 的 Beat: "
-            f"{sorted(missing_planned_claims)}"
-        )
-
     evidence_visual_claims = {
         claim_id
         for visual in plan.visual_requirements
-        if visual.primary_role == "evidence"
-        for claim_id in visual.evidence_claim_ids
+        for direction in visual.directions
+        if direction.visual_role == "evidence"
+        for claim_id in direction.covers_claim_ids
     }
     factual_ids = {claim.claim_id for claim in factual_claims}
     invalid_evidence_visuals = evidence_visual_claims - factual_ids
@@ -133,24 +107,9 @@ def evaluate_editorial_plan(
         if beat_ids
         else 1.0
     )
-    evidence_coverage = (
-        len(factual_ids.intersection(requested_claim_ids)) / len(factual_ids)
-        if factual_ids
-        else 1.0
-    )
-    planned_evidence_coverage = (
-        len(planned_evidence_beat_ids.intersection(factual_beat_ids))
-        / len(planned_evidence_beat_ids)
-        if planned_evidence_beat_ids
-        else 1.0
-    )
     return EditorialQuality(
         passed=not issues,
         beat_visual_coverage=round(beat_visual_coverage, 4),
-        factual_evidence_request_coverage=round(evidence_coverage, 4),
-        planned_evidence_beat_coverage=round(
-            planned_evidence_coverage, 4
-        ),
         claim_count=len(plan.claims),
         factual_claim_count=len(factual_claims),
         interpretation_count=sum(

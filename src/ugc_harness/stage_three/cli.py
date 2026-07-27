@@ -15,10 +15,8 @@ from .pipeline import EditorialStagePipeline
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="ugc-evidence-plan",
-        description=(
-            "读取内容与真实配音产物，生成主张、证据检索需求和视觉需求。"
-        ),
+        prog="ugc-visual-plan",
+        description="读取内容与真实配音产物，生成主张和视觉探索方向。",
     )
     parser.add_argument(
         "project",
@@ -50,7 +48,7 @@ def main(argv: list[str] | None = None) -> None:
             project_dir.parent
         ).write_editorial_stage(project_dir, artifact)
     except Exception as exc:
-        print(f"证据与视觉规划阶段失败：{exc}", file=sys.stderr)
+        print(f"主张与视觉规划阶段失败：{exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     summary = {
@@ -63,12 +61,6 @@ def main(argv: list[str] | None = None) -> None:
             artifact.editorial_plan.visual_requirements
         ),
         "beat_visual_coverage": artifact.quality.beat_visual_coverage,
-        "factual_evidence_request_coverage": (
-            artifact.quality.factual_evidence_request_coverage
-        ),
-        "planned_evidence_beat_coverage": (
-            artifact.quality.planned_evidence_beat_coverage
-        ),
         "quality_passed": artifact.quality.passed,
         "quality_issues": artifact.quality.issues,
         "artifact_files": [path.name for path in written],
