@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ..agents.asset_agent.models import AssetArtifact
+from ..agents.editorial_agent.models import EditorialArtifact
+from ..agents.timeline_agent import TimelineAgent, TimelineArtifact
+from ..agents.timeline_agent.capabilities import ScreenAnimationProvider, TimelineCapabilities
+from ..agents.voice_agent.models import VoiceArtifact
+from ..evaluators.timeline_critic import TimelineCritic
+from ..tools.registry import ToolRegistry
+from .dependencies import DependencyGraph
+from .dependency_builders import timeline_commits
+from .models import AgentResult, EvaluationResult, ProjectState, TaskBudget, TaskEnvelope, TaskScope, TransitionRecord
+from .repair import repair_input_hash, select_repair_commits
+from .trajectory import record_task, task_kind_for
+from .transitions import transition_after_review
+
+
+class TimelineRunRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    task: TaskEnvelope
+    agent_result: AgentResult
+    evaluation: EvaluationResult
+    transition: TransitionRecord
+    committed_state_version: int = Field(ge=1)
+    project_state: ProjectState
+
+
+class TimelineHarnessRun(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    artifact: TimelineArtifact
+    record: TimelineRunRecord
+
+
+class TimelineHarnessController:
+    def __init__(self, agent: TimelineAgent, critic: TimelineCritic) -> None:
+        self.agent = agent
+        self.critic = critic
+
+    @classmethod
+    def from_provider(cls, provider: ScreenAnimationProvider) -> "TimelineHarnessController":
+        tools = ToolRegistry()
+        tools.register(TimelineAgent.COMPOSE_TOOL, TimelineCapabilities(provider).run)
+        return cls(TimelineAgent(tools), TimelineCritic())
+
+    def create_task(self, voice: VoiceArtifact, editorial: EditorialArtifact, assets: AssetArtifact, state: ProjectState) -> TaskEnvelope:
+        graph = DependencyGraph(state.dependency_graph)
+        dependencies = ["artifact:voice", "artifact:editorial", "artifact:assets"]
+        return TaskEnvelope(
+            task_id=f"task_timeline_{voice.project_id}_v{state.video.state_version}",
+            agent="timeline_agent",
+            goal="Compose an audio-clocked clip, caption, transform, and overlay timeline.",
+            scope=TaskScope(project_id=voice.project_id, beat_ids=[item.beat_id for item in voice.realized_beats]),
+            based_on_state_version=state.video.state_version,
+            allowed_tools=[TimelineAgent.COMPOSE_TOOL],
+            forbidden_actions=["modify_voice", "modify_editorial_plan", "replace_assets", "render_video"],
+            acceptance_criteria=["Every RealizedBeat has one contiguous clip.", "The timeline covers the complete narration audio.", "All playback media exists.", "The Timeline Critic approves the artifact."],
+            budget=TaskBudget(max_steps=2, max_retries=0),
+            input_hash=self._input_hash(voice, editorial, assets),
+            dependency_snapshot=graph.snapshot(dependencies),
+        )
+
+    def run(self, voice: VoiceArtifact, editorial: EditorialArtifact, assets: AssetArtifact, project_dir: str | Path, state: ProjectState, task: TaskEnvelope | None = None, current_artifact: TimelineArtifact | None = None) -> TimelineHarnessRun:
+        project_id = voice.project_id
+        if {editorial.project_id, assets.project_id, state.video.project_id} != {project_id}:
+            raise ValueError("timeline inputs have different project_id values")
+        if state.video.asset_status != "passed":
+            raise ValueError("timeline_agent requires an approved asset artifact")
+        is_repair = bool(task and task.scope.target_refs)
+        if state.video.timeline_status not in {"ready", "needs_revision", "stale"} and not (is_repair and state.video.timeline_status == "passed"):
+            raise ValueError("timeline_agent is not ready in project state")
+        input_hash = self._input_hash(voice, editorial, assets)
+        envelope = task or self.create_task(voice, editorial, assets, state)
+        if envelope.based_on_state_version != state.video.state_version:
+            raise ValueError("STALE_RESULT: timeline task uses an obsolete state version")
+        expected_hash = repair_input_hash(envelope.dependency_snapshot, envelope.scope.target_refs) if envelope.scope.target_refs else input_hash
+        if envelope.input_hash != expected_hash:
+            raise ValueError("timeline task input_hash does not match inputs")
+        graph = DependencyGraph(state.dependency_graph)
+        graph.validate_snapshot(envelope.dependency_snapshot)
+        execution = self.agent.run(envelope, voice=voice, editorial=editorial, assets=assets, project_dir=project_dir, current_artifact=current_artifact)
+        if execution.result.status != "completed" or execution.candidate is None:
+            raise RuntimeError(execution.result.error or "timeline agent did not complete")
+        self._validate_result(envelope, execution.result, state)
+        graph.validate_snapshot(envelope.dependency_snapshot)
+        target_ref = execution.result.evaluation_target
+        assert target_ref is not None
+        quality, evaluation = self.critic.evaluate(project_dir, voice, execution.candidate, target_ref)
+        artifact = TimelineArtifact(
+            **execution.candidate.model_dump(),
+            quality=quality,
+        )
+        committed_version = state.video.state_version + 1
+        transition = transition_after_review(current_agent="timeline_agent", evaluation=evaluation, committed_state_version=committed_version, approved_target="repair_scheduler" if envelope.scope.target_refs else None)
+        next_state = state.model_copy(deep=True)
+        next_state.video.state_version = committed_version
+        next_state.video.timeline_status = "passed" if evaluation.passed else "needs_revision"
+        next_state.video.render_status = "ready" if evaluation.passed else "blocked"
+        next_graph = DependencyGraph(next_state.dependency_graph)
+        commits = select_repair_commits(next_graph, timeline_commits(artifact), envelope)
+        graph_update = next_graph.commit_batch(task_id=envelope.task_id, produced_by="timeline_agent", commits=commits) if evaluation.passed else next_graph.reject_update(task_id=envelope.task_id, candidate_refs=[item.ref for item in commits], reason="Timeline Critic rejected the candidate artifact")
+        record_task(next_state.trajectory, phase="timeline", task_kind="repair" if envelope.scope.target_refs else task_kind_for(state.trajectory, "timeline"), task=envelope, agent_result=execution.result, evaluation=evaluation, transition=transition, graph_update=graph_update)
+        next_state.runtime_context.available_tools = sorted(set(next_state.runtime_context.available_tools) | self.agent.tools.names)
+        return TimelineHarnessRun(artifact=artifact, record=TimelineRunRecord(task=envelope, agent_result=execution.result, evaluation=evaluation, transition=transition, committed_state_version=committed_version, project_state=next_state))
+
+    @staticmethod
+    def _input_hash(voice: VoiceArtifact, editorial: EditorialArtifact, assets: AssetArtifact) -> str:
+        payload = "\n".join([voice.model_dump_json(), editorial.model_dump_json(), assets.model_dump_json()])
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    @staticmethod
+    def _validate_result(task: TaskEnvelope, result: AgentResult, state: ProjectState) -> None:
+        if result.task_id != task.task_id or result.input_hash != task.input_hash:
+            raise ValueError("timeline agent result does not match task")
+        if result.state_version_used != state.video.state_version:
+            raise ValueError("STALE_RESULT: timeline agent used an obsolete state")
+        if set(result.state_patch.set) - {"video.timeline_status"}:
+            raise ValueError("timeline agent proposed forbidden state paths")
+        if set(result.state_patch.invalidate) - {"render:final"}:
+            raise ValueError("timeline agent proposed invalid invalidations")

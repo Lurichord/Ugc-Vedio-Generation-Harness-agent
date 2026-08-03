@@ -1,30 +1,24 @@
 """UGC video generation harness."""
 
-from .stage_one import CreativeBrief, StageOneArtifact, StageOnePipeline
-from .stage_four import AssetAcquisitionPipeline, AssetStageArtifact
-from .stage_five import TimelineCompositionPipeline, TimelineStageArtifact
-from .stage_seven import (
-    ImagePreparationPipeline,
-    ImagePreparationStageArtifact,
-)
-from .stage_six import FinalRenderPipeline, RenderStageArtifact
-from .stage_three import EditorialStageArtifact, EditorialStagePipeline
-from .stage_two import VoiceStageArtifact, VoiceStagePipeline
+from .agents.narrative_agent import CreativeBrief, NarrativeAgent, NarrativeArtifact
+from .agents.voice_agent import VoiceAgent, VoiceArtifact
+from .agents.editorial_agent import EditorialAgent, EditorialArtifact
+from .agents.asset_agent import AssetAgent, AssetArtifact
+from .agents.timeline_agent import TimelineAgent, TimelineArtifact
+from .agents.render_agent import RenderAgent, RenderArtifact
 
 __all__ = [
     "CreativeBrief",
-    "AssetAcquisitionPipeline",
-    "AssetStageArtifact",
-    "TimelineCompositionPipeline",
-    "TimelineStageArtifact",
-    "ImagePreparationPipeline",
-    "ImagePreparationStageArtifact",
-    "FinalRenderPipeline",
-    "RenderStageArtifact",
-    "EditorialStageArtifact",
-    "EditorialStagePipeline",
-    "StageOneArtifact",
-    "StageOnePipeline",
-    "VoiceStageArtifact",
-    "VoiceStagePipeline",
+    "AssetAgent",
+    "AssetArtifact",
+    "TimelineAgent",
+    "TimelineArtifact",
+    "RenderAgent",
+    "RenderArtifact",
+    "EditorialAgent",
+    "EditorialArtifact",
+    "NarrativeAgent",
+    "NarrativeArtifact",
+    "VoiceAgent",
+    "VoiceArtifact",
 ]

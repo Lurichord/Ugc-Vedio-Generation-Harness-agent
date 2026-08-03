@@ -102,6 +102,9 @@ class TTSSettings(BaseModel):
     endpoint: str = "https://openspeech.bytedance.com/api/v1/tts"
     resource_id: str = "volc.service_type.10029"
     voice_id: str = "zh_male_qingshuangnanda_mars_bigtts"
+    male_voice_id: str = "zh_male_qingshuangnanda_mars_bigtts"
+    female_voice_id: str = "zh_female_shuangkuaisisi_moon_bigtts"
+    neutral_voice_id: str = "zh_male_qingshuangnanda_mars_bigtts"
     sample_rate: int = 24_000
     timeout_seconds: float = 90.0
     max_retries: int = 2
@@ -121,7 +124,7 @@ class TTSSettings(BaseModel):
             raise ValueError(
                 "Missing VOLCENGINE_TTS_API_KEY in environment or .env"
             )
-        return cls(
+        settings = cls(
             api_key=api_key,
             endpoint=get(
                 "VOLCENGINE_TTS_ENDPOINT",
@@ -135,4 +138,24 @@ class TTSSettings(BaseModel):
                 "VOLCENGINE_TTS_VOICE_ID",
                 cls.model_fields["voice_id"].default,
             ),
+            male_voice_id=get(
+                "VOLCENGINE_TTS_MALE_VOICE_ID",
+                cls.model_fields["male_voice_id"].default,
+            ),
+            female_voice_id=get(
+                "VOLCENGINE_TTS_FEMALE_VOICE_ID",
+                cls.model_fields["female_voice_id"].default,
+            ),
+            neutral_voice_id=get(
+                "VOLCENGINE_TTS_NEUTRAL_VOICE_ID",
+                cls.model_fields["neutral_voice_id"].default,
+            ),
         )
+        return settings
+
+    def voice_for_gender(self, gender: str) -> str:
+        return {
+            "male": self.male_voice_id,
+            "female": self.female_voice_id,
+            "neutral": self.neutral_voice_id,
+        }.get(gender, self.voice_id)

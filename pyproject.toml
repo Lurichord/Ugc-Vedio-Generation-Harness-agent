@@ -19,13 +19,12 @@ dependencies = [
 dev = ["pytest>=8.3.0"]
 
 [project.scripts]
-ugc-harness = "ugc_harness.stage_one.cli:main"
-ugc-voice = "ugc_harness.stage_two.cli:main"
-ugc-visual-plan = "ugc_harness.stage_three.cli:main"
-ugc-assets = "ugc_harness.stage_four.cli:main"
-ugc-timeline = "ugc_harness.stage_five.cli:main"
-ugc-images = "ugc_harness.stage_seven.cli:main"
-ugc-render = "ugc_harness.stage_six.cli:main"
+ugc-harness = "ugc_harness.agents.narrative_agent.cli:main"
+ugc-voice = "ugc_harness.agents.voice_agent.cli:main"
+ugc-visual-plan = "ugc_harness.agents.editorial_agent.cli:main"
+ugc-assets = "ugc_harness.agents.asset_agent.cli:main"
+ugc-timeline = "ugc_harness.agents.timeline_agent.cli:main"
+ugc-render = "ugc_harness.agents.render_agent.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

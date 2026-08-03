@@ -1,6 +1,9 @@
-from ugc_harness.stage_one.models import PlanningArtifact, ScriptArtifact
-from ugc_harness.stage_one.pipeline import make_brief
-from ugc_harness.stage_one.quality import evaluate
+from ugc_harness.agents.narrative_agent import (
+    PlanningArtifact,
+    ScriptArtifact,
+    make_brief,
+)
+from ugc_harness.agents.narrative_agent.quality import evaluate
 
 
 def sample_plan() -> PlanningArtifact:
@@ -18,6 +21,46 @@ def sample_plan() -> PlanningArtifact:
         {
             "narrative_pattern": "Question→Evidence→Explanation→Implication",
             "one_sentence_thesis": "核心判断",
+            "world_state": {
+                "topic_frame": "解释测试为什么重要",
+                "entities": [
+                    {
+                        "entity_id": "entity_testing",
+                        "name": "软件测试",
+                        "kind": "concept",
+                        "narrative_role": "核心解释对象",
+                        "description": "用于发现风险并验证行为的工程活动",
+                    }
+                ],
+                "claims": [
+                    {
+                        "claim_id": "wc01",
+                        "statement": "测试可以暴露软件风险",
+                        "epistemic_status": "to_verify",
+                        "evidence_required": True,
+                    }
+                ],
+                "causal_links": [
+                    {
+                        "cause": "尽早执行测试",
+                        "effect": "更早暴露风险",
+                        "explanation": "反馈发生在变更上下文仍然清晰的时候",
+                    }
+                ],
+                "open_questions": ["哪些风险最值得优先测试？"],
+                "narrative_boundaries": ["不声称测试能够消除所有缺陷"],
+            },
+            "video_profile": {
+                "requested": "auto",
+                "resolved": "b_roll",
+                "selection_source": "ai",
+                "rationale": "测试主题适合画外音配说明画面",
+                "speaker_presence_ratio_min": 0.0,
+                "speaker_presence_ratio_max": 0.15,
+                "character_consistency_required": False,
+                "character_id": None,
+                "character_description": None,
+            },
             "sections": [
                 {
                     "section_id": "section_hook",

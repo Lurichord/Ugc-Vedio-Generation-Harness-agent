@@ -2,9 +2,8 @@ import json
 from pathlib import Path
 
 from ugc_harness.shared.artifacts import ArtifactWriter, safe_project_folder_name
-from ugc_harness.stage_one.models import StageOneArtifact
-from ugc_harness.stage_one.pipeline import make_brief
-from ugc_harness.stage_one.quality import evaluate
+from ugc_harness.agents.narrative_agent import NarrativeArtifact, make_brief
+from ugc_harness.agents.narrative_agent.quality import evaluate
 from tests.test_quality import sample_plan, sample_script
 
 
@@ -18,7 +17,7 @@ def test_writer_creates_project_directory_with_all_artifacts(
     )
     plan = sample_plan()
     script = sample_script(plan)
-    artifact = StageOneArtifact(
+    artifact = NarrativeArtifact(
         model="fake-model",
         brief=brief,
         planning=plan,
@@ -36,7 +35,7 @@ def test_writer_creates_project_directory_with_all_artifacts(
         "04_content_plan.json",
         "05_script.json",
         "06_quality_report.json",
-        "stage_one_artifact.json",
+        "narrative_artifact.json",
         "manifest.json",
     }
     manifest = json.loads((project_dir / "manifest.json").read_text(encoding="utf-8"))

@@ -1,73 +1,108 @@
 import math
 from pathlib import Path
 
-from tests.test_editorial import FakeGenerator, _plan
-from tests.test_images import FakeImageAnalyzer
+from tests.test_editorial import _editorial_run, _plan
 from tests.test_timeline import AllSuccessAssets, FakeScreenAnimation
-from tests.test_voice import FakeTTS, _stage_one
-from ugc_harness.stage_five.pipeline import TimelineCompositionPipeline
-from ugc_harness.stage_four.pipeline import AssetAcquisitionPipeline
-from ugc_harness.stage_seven.pipeline import ImagePreparationPipeline
-from ugc_harness.stage_six.pipeline import _build_composition
-from ugc_harness.stage_three.pipeline import EditorialStagePipeline
-from ugc_harness.stage_two.pipeline import VoiceStagePipeline
+from tests.test_assets import _asset_run
+from tests.test_voice import _narrative, _voice_run
+from ugc_harness.harness.timeline_controller import TimelineHarnessController
+from ugc_harness.agents.render_agent.capabilities import _build_composition
+from ugc_harness.agents.render_agent.models import (
+    RenderCandidate,
+    RenderedMedia,
+)
+from ugc_harness.harness.render_controller import RenderHarnessController
 
 
-def test_render_composition_uses_processed_images_and_audio_clock(
+def test_render_composition_uses_prepared_images_and_audio_clock(
     tmp_path: Path,
 ) -> None:
-    stage_one = _stage_one()
-    stage_two = VoiceStagePipeline(FakeTTS(), "test-voice").run(
-        stage_one,
-        tmp_path,
-    )
+    narrative = _narrative()
+    voice_run = _voice_run(narrative, tmp_path)
+    voice = voice_run.artifact
     factual_beat_id = next(
         beat.beat_id
-        for beat in stage_two.realized_beats
+        for beat in voice.realized_beats
         if beat.planned_beat_id == "pb04"
     )
     plan = _plan(
-        [beat.beat_id for beat in stage_two.realized_beats],
-        stage_one.brief.project_id,
+        [beat.beat_id for beat in voice.realized_beats],
+        narrative.brief.project_id,
         factual_beat_id,
     )
-    stage_three = EditorialStagePipeline(
-        FakeGenerator(plan),
-        "fake-model",
-    ).run(stage_one, stage_two)
-    stage_four = AssetAcquisitionPipeline(AllSuccessAssets()).run(
-        stage_three,
-        stage_two.realized_beats,
-        tmp_path,
+    editorial_run = _editorial_run(narrative, voice_run, plan)
+    editorial = editorial_run.artifact
+    assets_run = _asset_run(
+        editorial_run, voice_run, AllSuccessAssets(), tmp_path
     )
-    stage_five = TimelineCompositionPipeline(FakeScreenAnimation()).run(
-        stage_two,
-        stage_three,
-        stage_four,
+    timeline_run = TimelineHarnessController.from_provider(
+        FakeScreenAnimation()
+    ).run(
+        voice,
+        editorial,
+        assets_run.artifact,
         tmp_path,
+        assets_run.record.project_state,
     )
-    stage_seven = ImagePreparationPipeline(FakeImageAnalyzer()).run(
-        stage_two,
-        stage_four,
-        stage_five,
-        tmp_path,
-    )
-
     composition, missing = _build_composition(
         tmp_path,
-        stage_two,
-        stage_five,
-        stage_seven,
+        voice,
+        timeline_run.artifact,
     )
 
     assert missing == []
-    assert composition.duration_ms == stage_two.timed_audio.duration_ms
+    assert composition.duration_ms == voice.timed_audio.duration_ms
     assert composition.duration_in_frames == math.ceil(
-        stage_two.timed_audio.duration_ms * 30 / 1000
+        voice.timed_audio.duration_ms * 30 / 1000
     )
-    assert len(composition.clips) == len(stage_two.realized_beats)
+    assert len(composition.clips) == len(voice.realized_beats)
     assert all(
-        clip.media_path.startswith("assets/processed_image/")
+        clip.media_path.startswith("assets/prepared_image/")
         for clip in composition.clips
+        if clip.media_type == "image"
     )
-    assert composition.audio_path == stage_two.timed_audio.audio_file
+    assert composition.audio_path == voice.timed_audio.audio_file
+
+    def fake_render(*, voice, timeline_artifact, project_dir):
+        composition, _ = _build_composition(project_dir, voice, timeline_artifact)
+        outputs = []
+        for kind, size in (("final", (1080, 1920)), ("preview", (540, 960))):
+            path = project_dir / "video" / f"{kind}.mp4"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(bytes(2048))
+            outputs.append(
+                RenderedMedia(
+                    kind=kind,
+                    local_path=path.relative_to(project_dir).as_posix(),
+                    sha256="1" * 64,
+                    size_bytes=2048,
+                    width=size[0],
+                    height=size[1],
+                    fps=30,
+                    duration_ms=voice.timed_audio.duration_ms,
+                    video_duration_ms=voice.timed_audio.duration_ms,
+                    audio_duration_ms=voice.timed_audio.duration_ms,
+                    container_duration_ms=voice.timed_audio.duration_ms,
+                    video_codec="h264",
+                    audio_codec="aac",
+                    has_video=True,
+                    has_audio=True,
+                )
+            )
+        return RenderCandidate(
+            project_id=voice.project_id,
+            composition=composition,
+            outputs=outputs,
+        )
+
+    render_run = RenderHarnessController.from_renderer(fake_render).run(
+        voice,
+        timeline_run.artifact,
+        tmp_path,
+        timeline_run.record.project_state,
+    )
+    assert render_run.artifact.quality.passed is True
+    assert render_run.record.transition.to_agent == "project_complete"
+    assert render_run.record.project_state.video.render_status == "passed"
+    assert "artifact:render" in render_run.record.project_state.dependency_graph.nodes
+    assert render_run.record.project_state.trajectory.phases["render"].tasks
