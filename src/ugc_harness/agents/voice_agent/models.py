@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from ..narrative_agent.models import BeatRole
+from ...content import BeatRole
 from ...shared.models import StrictModel
 
 

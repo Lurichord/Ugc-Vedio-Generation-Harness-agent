@@ -2,19 +2,30 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..agents.generic import (
+    CompletionSpec,
+    EnvironmentToolModel,
+    GenericAgent,
+    RegistryTool,
+    RegistryToolTransport,
+)
+from ..agents.instructions import load_instructions
 from ..agents.narrative_agent.models import NarrativeArtifact
-from ..agents.voice_agent import VoiceAgent, VoiceArtifact
 from ..agents.voice_agent.capabilities import TTSProvider, VoiceCapabilities
+from ..agents.voice_agent.models import VoiceArtifact, VoicePlan
 from ..agents.voice_agent.planning import build_voice_plan
 from ..evaluators.voice_critic import VoiceCritic
 from ..tools.registry import ToolRegistry
 from .models import (
     AgentResult,
+    ArtifactRef,
     EvaluationResult,
     ProjectState,
+    StatePatch,
     TaskBudget,
     TaskEnvelope,
     TaskScope,
@@ -23,8 +34,14 @@ from .models import (
 from .transitions import transition_after_review
 from .dependencies import DependencyGraph
 from .dependency_builders import narrative_commits, voice_commits
+from .description_realization import apply_voice_realization
 from .trajectory import record_task, task_kind_for
 from .repair import repair_input_hash, select_repair_commits
+
+
+PLAN_TOOL = "voice.create_plan"
+SYNTHESIZE_TOOL = "audio.synthesize_narration"
+SUBMIT_TOOL = "voice.submit_candidate"
 
 
 class VoiceRunRecord(BaseModel):
@@ -46,24 +63,125 @@ class VoiceHarnessRun(BaseModel):
 
 
 class VoiceHarnessController:
-    def __init__(self, agent: VoiceAgent, critic: VoiceCritic) -> None:
+    def __init__(
+        self,
+        agent: GenericAgent,
+        critic: VoiceCritic,
+        voice_id: str,
+    ) -> None:
         self.agent = agent
         self.critic = critic
+        self.voice_id = voice_id
 
     @classmethod
     def from_provider(
         cls,
         provider: TTSProvider,
         voice_id: str,
+        tool_model: object | None = None,
     ) -> "VoiceHarnessController":
         capabilities = VoiceCapabilities(provider)
         tools = ToolRegistry()
-        tools.register(VoiceAgent.PLAN_TOOL, build_voice_plan)
-        tools.register(
-            VoiceAgent.SYNTHESIZE_TOOL,
-            capabilities.synthesize_narration,
+        for tool_name in (PLAN_TOOL, SYNTHESIZE_TOOL, SUBMIT_TOOL):
+            tools.register(tool_name, lambda: None)
+
+        def transport_factory(
+            task: TaskEnvelope,
+            kwargs: dict[str, Any],
+        ) -> RegistryToolTransport:
+            narrative = kwargs["narrative"]
+            project_dir = kwargs["project_dir"]
+            assert isinstance(narrative, NarrativeArtifact)
+            session: dict[str, Any] = {}
+
+            def create_plan(problems: list[str] | None = None) -> VoicePlan:
+                plan = build_voice_plan(
+                    narrative.brief,
+                    narrative.script,
+                    voice_id=voice_id,
+                    character=narrative.planning.world_state.aroll_character,
+                )
+                session["plan"] = plan
+                return plan
+
+            def synthesize(problems: list[str] | None = None) -> VoiceArtifact:
+                plan = session.get("plan")
+                if not isinstance(plan, VoicePlan):
+                    raise RuntimeError("voice.create_plan must succeed first")
+                artifact = capabilities.synthesize_narration(
+                    narrative,
+                    plan,
+                    project_dir,
+                )
+                session["artifact"] = artifact
+                return artifact
+
+            def submit(problems: list[str] | None = None) -> VoiceArtifact:
+                artifact = session.get("artifact")
+                if not isinstance(artifact, VoiceArtifact):
+                    raise RuntimeError(
+                        "candidate is incomplete: narration audio has not been "
+                        "synthesized yet"
+                    )
+                return artifact
+
+            return RegistryToolTransport(
+                [
+                    RegistryTool(
+                        name=PLAN_TOOL,
+                        description=(
+                            "根据已批准的叙事脚本生成配音计划：发声人、语速、"
+                            "停顿与逐段语气。"
+                        ),
+                        handler=create_plan,
+                    ),
+                    RegistryTool(
+                        name=SYNTHESIZE_TOOL,
+                        description=(
+                            "按配音计划合成全部音频段，拼接完整旁白并产出字级"
+                            "时间戳与 RealizedBeat。需要先有配音计划。"
+                        ),
+                        handler=synthesize,
+                    ),
+                    RegistryTool(
+                        name=SUBMIT_TOOL,
+                        description="配音候选完整后提交；缺少音频时会返回可修复错误。",
+                        handler=submit,
+                    ),
+                ]
+            )
+
+        def context_builder(
+            task: TaskEnvelope,
+            kwargs: dict[str, Any],
+        ) -> dict[str, Any]:
+            narrative = kwargs["narrative"]
+            assert isinstance(narrative, NarrativeArtifact)
+            segments = (
+                len(narrative.script.segments)
+                if narrative.script is not None
+                else 0
+            )
+            return {
+                "voice_context": {
+                    "project_id": narrative.brief.project_id,
+                    "voice_id": voice_id,
+                    "script_segment_count": segments,
+                }
+            }
+
+        return cls(
+            GenericAgent(
+                tool_model=tool_model or EnvironmentToolModel(),  # type: ignore[arg-type]
+                transport_factory=transport_factory,
+                candidate_type=VoiceArtifact,
+                completion_builder=_voice_completion,
+                context_builder=context_builder,
+                capability_tools=tools,
+            ),
+            VoiceCritic(),
+            voice_id,
         )
-        return cls(VoiceAgent(tools, voice_id), VoiceCritic())
 
     def create_task(
         self,
@@ -80,7 +198,9 @@ class VoiceHarnessController:
             goal="生成完整配音、原生字级时间戳与 RealizedBeat",
             scope=TaskScope(project_id=narrative.brief.project_id),
             based_on_state_version=state.video.state_version,
-            allowed_tools=[VoiceAgent.PLAN_TOOL, VoiceAgent.SYNTHESIZE_TOOL],
+            agent_instructions=load_instructions("voice"),
+            allowed_tools=[PLAN_TOOL, SYNTHESIZE_TOOL, SUBMIT_TOOL],
+            required_outputs=["voice_artifact"],
             forbidden_actions=[
                 "modify_narrative",
                 "modify_visuals",
@@ -93,7 +213,7 @@ class VoiceHarnessController:
                 "所有 PlannedBeat 均形成 RealizedBeat",
                 "输出通过独立 Voice Critic",
             ],
-            budget=TaskBudget(max_steps=2, max_retries=0),
+            budget=TaskBudget(max_steps=6, max_retries=1),
             input_hash=self._input_hash(narrative),
             dependency_snapshot=graph.snapshot(["artifact:narrative"]),
         )
@@ -140,14 +260,17 @@ class VoiceHarnessController:
             narrative=narrative,
             project_dir=project_dir,
         )
-        if execution.result.status != "completed" or execution.artifact is None:
+        artifact = execution.candidate
+        if execution.result.status != "completed" or not isinstance(
+            artifact, VoiceArtifact
+        ):
             raise RuntimeError(execution.result.error or "voice agent did not complete")
         self._validate_result(envelope, execution.result, state)
         graph.validate_snapshot(envelope.dependency_snapshot)
         target_ref = execution.result.evaluation_target
         assert target_ref is not None
         evaluation = self.critic.evaluate(
-            execution.artifact,
+            artifact,
             narrative,
             project_dir,
             target_ref,
@@ -169,8 +292,10 @@ class VoiceHarnessController:
         next_state.video.editorial_status = (
             "ready" if evaluation.passed else "blocked"
         )
+        if evaluation.passed:
+            apply_voice_realization(next_state, artifact)
         next_graph = DependencyGraph(next_state.dependency_graph)
-        commits = voice_commits(execution.artifact)
+        commits = voice_commits(artifact)
         commits = select_repair_commits(next_graph, commits, envelope)
         if evaluation.passed:
             graph_update = next_graph.commit_batch(
@@ -201,9 +326,9 @@ class VoiceHarnessController:
         next_state.runtime_context.available_tools = sorted(
             set(next_state.runtime_context.available_tools) | self.agent.tools.names
         )
-        next_state.runtime_context.available_models["tts"] = [self.agent.voice_id]
+        next_state.runtime_context.available_models["tts"] = [self.voice_id]
         return VoiceHarnessRun(
-            artifact=execution.artifact,
+            artifact=artifact,
             record=VoiceRunRecord(
                 task=envelope,
                 agent_result=execution.result,
@@ -235,3 +360,23 @@ class VoiceHarnessController:
         allowed = {"editorial:all", "timeline:all", "render:final"}
         if set(result.state_patch.invalidate) - allowed:
             raise ValueError("voice agent proposed invalid invalidations")
+
+
+def _voice_completion(
+    task: TaskEnvelope,
+    kwargs: dict[str, Any],
+) -> CompletionSpec:
+    narrative = kwargs["narrative"]
+    assert isinstance(narrative, NarrativeArtifact)
+    return CompletionSpec(
+        artifact_refs=[
+            ArtifactRef(kind="voice", id=narrative.brief.project_id)
+        ],
+        state_patch=StatePatch(
+            set={"video.voice_status": "ready"},
+            invalidate=["editorial:all", "timeline:all", "render:final"],
+        ),
+        evaluation_target=(
+            f"voice:{narrative.brief.project_id}@{task.based_on_state_version + 1}"
+        ),
+    )

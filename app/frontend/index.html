@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="用对话做 UGC 视频，右侧实时看到脚本、声音和镜头" />
+    <title>UGC Beat Studio</title>
+    <link rel="stylesheet" href="/styles.css?v=20260826a" />
+    <link rel="stylesheet" href="/editorial.css?v=20260826a" />
+    <link rel="stylesheet" href="/media.css?v=20260826a" />
+    <link rel="stylesheet" href="/chat.css?v=20260826a" />
+  </head>
+  <body>
+    <div class="studio">
+      <header class="studio-topbar">
+        <div class="brand">
+          <span class="brand-mark">UB</span>
+          <div>
+            <strong>UGC Beat Studio</strong>
+            <small>对话制作 · 每一步停下来确认</small>
+          </div>
+        </div>
+        <div class="project-control">
+          <label class="sr-only" for="projectSelect">打开已有项目</label>
+          <select id="projectSelect"><option value="">打开已有项目</option></select>
+          <button id="newSessionButton" class="secondary" type="button">新对话</button>
+        </div>
+      </header>
+
+      <div class="studio-body">
+        <section class="chat-pane" aria-label="制作对话">
+          <div id="chatThread" class="chat-thread"></div>
+          <div class="chat-dock">
+            <div id="gateBar" class="gate-bar hidden">
+              <p id="gateQuestion"></p>
+              <div class="gate-actions">
+                <button id="continueButton" class="primary" type="button">可以，继续下一步</button>
+                <button id="reviseButton" class="secondary" type="button">先改这一步</button>
+              </div>
+            </div>
+            <form id="composer" class="composer">
+              <textarea id="composerInput" rows="1" placeholder="想做什么视频、给谁看、大概多长……"></textarea>
+              <button id="sendButton" class="primary" type="submit">发送</button>
+            </form>
+          </div>
+        </section>
+
+        <aside class="rail" aria-label="已完成内容">
+          <div class="rail-header">
+            <p class="eyebrow">PRODUCTION</p>
+            <h1>已完成内容</h1>
+            <p id="railHint" class="muted">开工之后，脚本、声音、镜头会写在这里。</p>
+          </div>
+          <div id="stageRail" class="stage-rail"></div>
+          <div class="rail-footer">
+            <button class="tab-link" type="button" data-drawer="timeline">时间线</button>
+            <button class="tab-link" type="button" data-drawer="tasks">Task 历史</button>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <dialog id="drawer">
+      <div class="drawer-head">
+        <h2 id="drawerTitle">详情</h2>
+        <button type="button" class="icon-button" data-close-drawer>×</button>
+      </div>
+      <div id="drawerBody" class="drawer-body"></div>
+    </dialog>
+
+    <dialog id="feedbackDialog">
+      <form id="feedbackForm" method="dialog">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">LOCAL REPAIR</p><h2>指出具体问题</h2></div>
+          <button type="button" class="icon-button" data-close-dialog>×</button>
+        </div>
+        <div class="target-summary"><span id="feedbackBeat"></span><code id="feedbackRef"></code></div>
+        <label for="feedbackInstruction">应该怎么修改</label>
+        <textarea id="feedbackInstruction" rows="5" required placeholder="例如：这段太书面，改得更口语化。"></textarea>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" data-close-dialog>取消</button>
+          <button type="submit" class="primary">提交并局部修复</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js?v=20260826a"></script>
+  </body>
+</html>

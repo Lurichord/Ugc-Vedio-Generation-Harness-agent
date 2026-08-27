@@ -1,6 +1,5 @@
-"""Final media render agent."""
+"""Final media render contracts; execution lives in the unified GenericAgent."""
 
-from .agent import RenderAgent, RenderAgentExecution
 from .models import RenderArtifact
 
-__all__ = ["RenderAgent", "RenderAgentExecution", "RenderArtifact"]
+__all__ = ["RenderArtifact"]

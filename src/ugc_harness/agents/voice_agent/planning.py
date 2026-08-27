@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ...harness.models import ArollCharacter
+from ...content import ArollCharacter
 from ..narrative_agent.models import CreativeBrief, ScriptArtifact
 from .models import (
     VoiceGlobalSettings,

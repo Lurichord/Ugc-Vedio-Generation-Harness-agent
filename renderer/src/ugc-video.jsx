@@ -50,7 +50,7 @@ const ClipMedia = ({clip}) => {
       <OffthreadVideo
         src={staticFile(clip.media_path)}
         style={style}
-        muted
+        muted={clip.muted}
         loop
         pauseWhenBuffering
       />
@@ -142,7 +142,7 @@ const Overlay = ({item}) => {
 export const UGCVideo = (props) => {
   return (
     <AbsoluteFill style={{backgroundColor: '#05070a'}}>
-      <Audio src={staticFile(props.audio_path)} />
+      {props.audio_path ? <Audio src={staticFile(props.audio_path)} /> : null}
       {props.clips.map((clip) => (
         <Sequence
           key={clip.clip_id}

@@ -2,7 +2,7 @@
 
 内容规划已经由固定 Stage 改造成受 Harness Controller 调度的 Narrative Agent：
 用户输入一个主题，Agent 在任务范围、工具白名单、步数/重试预算和输出契约内，
-生成约 1–2 分钟 UGC 视频所需的内容结构与口播剧本。
+生成约 1–2 分钟 UGC 视频所需的内容结构、口播或剧情表演 Shot。
 
 Narrative Harness 的执行关系为：
 
@@ -10,16 +10,26 @@ Narrative Harness 的执行关系为：
 Harness Controller
   → TaskEnvelope + RuntimeContext
   → NarrativeAgent
-      → narrative.generate_plan + VideoWorldState
-      → narrative.generate_script
+      → spawn stdio Narrative MCP Server
+      → tools/list
+      → LLM selects narrative.explainer.plan_sections
+      → LLM selects narrative.explainer.expand_beats
+      → LLM selects narrative.explainer.write_script
+      → LLM selects narrative.explainer.compile_shots
   → AgentResult + StatePatch
   → Independent NarrativeCritic
   → Controller Commit + Trajectory
 ```
 
+Narrative 的默认 CLI 和应用入口使用官方 `mcp` Python SDK v2，通过 stdio 启动
+独立 MCP 子进程。Agent 根据 MCP `tools/list` 返回的 Schema 选择工具，Harness 再按
+`TaskEnvelope.allowed_tools`、步数和重试预算执行调用并记录 `ActionRecord`。MCP Server
+不提交 Project State；状态版本检查、Critic 和 commit 仍由 Harness Controller 负责。
+详细接口见 [Narrative stdio MCP 架构](docs/narrative-mcp.md)。
+
 旧的内容规划 Stage 和兼容 Pipeline 已删除。CLI 直接创建
 `NarrativeHarnessController` 并调度 Agent，输出 `NarrativeArtifact`；其 Schema 为
-`narrative.v1`，包含必填的 `PlanningArtifact.world_state`。Agent 只提交结构化
+`narrative.v3`，包含统一的 Planning、World State 与 ProductionShot 协议。Agent 只提交结构化
 Patch；状态版本检查、Critic 验收、下游失效标记和最终提交均由 Controller 负责。
 
 这里的 `VideoWorldState` 是规划阶段生成的视频内容世界，包括实体、主张及其
@@ -71,8 +81,8 @@ src/ugc_harness/
 │   └── settings.py         # LLM / TTS 配置
 ```
 
-这里生成的是声音主导、按信息 Beat 推进的 UGC，而不是电影分镜。Narrative
-Agent 不会生成素材、镜头或视频。
+Explainer 生成声音主导、按信息 Beat 推进的 UGC；Drama 生成角色、场景、动作以及
+带原生音轨的 AI 视频 ProductionShot。Narrative Agent 只规划候选产物，不直接生成媒体。
 
 时长字段在这一阶段是规划提示，而不是本地硬约束：
 
@@ -95,20 +105,24 @@ python -m venv .venv
 支持 OpenAI-compatible Chat Completions API。可通过环境变量配置：
 
 ```powershell
-$env:OPENROUTER_API_KEY = "..."
-$env:OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-$env:UGC_LLM_MODEL = "google/gemini-2.5-flash"
+$env:VOLCENGINE_ARK_API_KEY = "..."
+$env:VOLCENGINE_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+$env:UGC_LLM_MODEL = "doubao-seed-2-0-lite-260215"
+$env:UGC_IMAGE_MODEL = "doubao-seedream-5-0-260128"
+$env:UGC_VIDEO_MODEL = "doubao-seedance-2-0-260128"
 ```
 
 默认会读取项目根目录的 `.env`。程序只解析 `KEY=value`，不会执行文件：
 
 ```text
-OPENROUTER_API_KEY="..."
-OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
-UGC_LLM_MODEL="google/gemini-2.5-flash"
+VOLCENGINE_ARK_API_KEY="..."
+VOLCENGINE_ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+UGC_LLM_MODEL="doubao-seed-2-0-lite-260215"
+UGC_IMAGE_MODEL="doubao-seedream-5-0-260128"
+UGC_VIDEO_MODEL="doubao-seedance-2-0-260128"
 VOLCENGINE_TTS_API_KEY="..."
 VOLCENGINE_TTS_ENDPOINT="https://openspeech.bytedance.com/api/v1/tts"
-VOLCENGINE_TTS_RESOURCE_ID="volc.service_type.10029"
+VOLCENGINE_TTS_RESOURCE_ID="seed-tts-2.0"
 VOLCENGINE_TTS_VOICE_ID="zh_male_qingshuangnanda_mars_bigtts"
 ```
 
@@ -122,6 +136,7 @@ VOLCENGINE_TTS_VOICE_ID="zh_male_qingshuangnanda_mars_bigtts"
   --project-name "AI公司为什么争夺电力" `
   --duration 90 `
   --platform douyin `
+  --production-mode explainer `
   --output-root "outputs"
 ```
 
@@ -133,14 +148,17 @@ VOLCENGINE_TTS_VOICE_ID="zh_male_qingshuangnanda_mars_bigtts"
 - `--goal`：希望观众看完后理解什么。
 - `--tone`：可多次传入。
 - `--creator-persona`：创作者口吻与身份。
+- `--production-mode`：`auto`、`explainer`、`drama` 或 `tutorial`；三种 Pack 均已安装，
+  `auto` 暂时解析为 `explainer`。
 - `--video-profile`：`auto`、`a_roll`、`b_roll` 或 `ab_roll`；默认由 AI 判断。
 - `--model`：覆盖默认模型。
 - `--output-root`：项目输出根目录，默认是 `outputs`。
 - `--fail-on-quality-error`：本地结构质检发现 error 时返回非零退出码。
 
 状态推进不再由 CLI flag 控制。Narrative 最终产物通过独立 Critic 后，Controller
-会在同一次 commit 中把 Narrative 标记为 `passed`、把 `voice_agent` 标记为
-`ready`，并写入 `advance` transition；审核失败则生成回到
+会在同一次 commit 中把 Narrative 标记为 `passed`。Explainer 将 `voice_agent` 标记为
+`ready`；Drama 使用生成视频原生音轨，Tutorial 使用制作动作原声与按需讲解，二者当前都跳过
+Voice/Editorial 并转给 Asset Agent。审核失败则生成回到
 `narrative_agent` 的 `revise` transition，并将 `voice_agent` 保持为 `blocked`。
 
 `voice_agent` 被调度后只通过 `voice.create_plan` 和
@@ -160,10 +178,11 @@ first-success。最终 `AssetArtifact` 通过独立 Asset Critic 后，Controlle
 `asset_agent`。Repair Task 只重新获取 `scope.visual_request_ids` 指定的素材，其余已批准
 AssetCard 和 VisualResolution 必须保持不变。
 
-Project State 内的 `dependency_graph` 使用 Beat 级双向依赖节点。每个节点同时保存
-`depends_on`、`dependents`、依赖版本和内容 hash；目前覆盖 PlannedBeat、
-ScriptSegment、AudioSegment、AlignmentSegment、RealizedBeat、Claim 与
-VisualRequirement。上游内容变化时只把实际后继节点标记为 `stale`。Task 创建时保存
+Project State 内的 `dependency_graph` 只记录 Agent 之间已经提交的产物边界。Narrative
+无论是科普还是剧情，都只提交 `brief / world / profile / artifact:narrative`，不会把
+Section、PlannedBeat、ScriptSegment 或剧情 Action 暴露成 Harness 流程节点。Voice 之后
+仍可按 AudioSegment、AlignmentSegment、RealizedBeat、Claim 与 VisualRequirement 记录
+跨 Agent 依赖。上游内容变化时只把实际后继节点标记为 `stale`。Task 创建时保存
 依赖快照，提交前再次核对，避免运行中的旧结果覆盖新状态。图更新采用原子提交，循环依赖、
 缺失依赖或 locked 节点覆盖都会整体回滚。
 
@@ -314,7 +333,7 @@ Voice Agent 审核通过后运行：
 
 阶段四严格按每个视觉需求的 `directions.order` 执行。某个方向获得第一份
 合格素材后立即停止，不继续后续方向，也不保存 top-k。联网页面通过现有
-OpenRouter Web Search 查找；来源只做追溯记录，不做事实正确性判断。
+火山方舟 Web Search 查找；来源只做追溯记录，不做事实正确性判断。
 
 当前自动 Provider 支持：
 
@@ -335,8 +354,11 @@ OpenRouter Web Search 查找；来源只做追溯记录，不做事实正确性�
 默认生成模型可以在 `.env` 中替换：
 
 ```dotenv
-UGC_IMAGE_MODEL="google/gemini-3.1-flash-lite-image"
-UGC_VIDEO_MODEL="google/veo-3.1-lite"
+UGC_LLM_MODEL="doubao-seed-2-0-lite-260215"
+UGC_IMAGE_MODEL="doubao-seedream-5-0-260128"
+UGC_VIDEO_MODEL="doubao-seedance-2-0-260128"
+VOLCENGINE_ARK_API_KEY="your-ark-api-key"
+VOLCENGINE_ARK_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
 UGC_VIDEO_RESOLUTION="720p"
 ```
 

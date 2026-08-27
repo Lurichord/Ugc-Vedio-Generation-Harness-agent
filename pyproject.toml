@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "httpx>=0.28.0",
+  "mcp>=2.0.0,<3",
   "openai>=1.68.0",
   "Pillow>=11.0.0",
   "pydantic>=2.10.0",
@@ -20,6 +21,7 @@ dev = ["pytest>=8.3.0"]
 
 [project.scripts]
 ugc-harness = "ugc_harness.agents.narrative_agent.cli:main"
+ugc-intake = "ugc_harness.intake.cli:main"
 ugc-voice = "ugc_harness.agents.voice_agent.cli:main"
 ugc-visual-plan = "ugc_harness.agents.editorial_agent.cli:main"
 ugc-assets = "ugc_harness.agents.asset_agent.cli:main"
@@ -28,6 +30,9 @@ ugc-render = "ugc_harness.agents.render_agent.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+ugc_harness = ["**/*.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

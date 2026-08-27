@@ -11,15 +11,15 @@ from ugc_harness.agents.voice_agent.tts import (
     SynthesisResult,
     _parse_native_words,
 )
+from ugc_harness.content import ArollCharacter, ArollVoiceProfile
 from ugc_harness.harness.models import (
-    ArollCharacter,
-    ArollVoiceProfile,
     CriticIssue,
     EvaluationResult,
     ProjectState,
     RuntimeContext,
     VideoState,
 )
+from ugc_harness.shared.llm import ModelToolCall
 from ugc_harness.shared.settings import TTSSettings
 from ugc_harness.harness.voice_controller import VoiceHarnessController
 from tests.test_quality import sample_plan, sample_script
@@ -57,6 +57,36 @@ class FakeTTS:
                 NativeWord(text[-1], 250, 480, 0.98),
             ],
         )
+
+
+class VoiceToolModel:
+    """Deterministic fixture walking the voice happy path in order."""
+
+    SEQUENCE = [
+        "voice.create_plan",
+        "audio.synthesize_narration",
+        "voice.submit_candidate",
+    ]
+
+    def __init__(self) -> None:
+        self.selected: list[str] = []
+
+    def choose_tool(self, *, messages, tools):
+        name = self.SEQUENCE[len(self.selected) % len(self.SEQUENCE)]
+        self.selected.append(name)
+        return ModelToolCall(
+            call_id=f"call_{len(self.selected)}",
+            name=name,
+            arguments={},
+        )
+
+
+def make_voice_controller() -> VoiceHarnessController:
+    return VoiceHarnessController.from_provider(
+        FakeTTS(),
+        "test-voice",
+        tool_model=VoiceToolModel(),
+    )
 
 
 def _narrative() -> NarrativeArtifact:
@@ -119,8 +149,6 @@ def test_world_character_drives_voice_identity_and_gender_voice() -> None:
 def _ready_state(narrative: NarrativeArtifact) -> ProjectState:
     return ProjectState(
         runtime_context=RuntimeContext(),
-        world_state=narrative.planning.world_state,
-        video_profile=narrative.planning.video_profile,
         video=VideoState(
             project_id=narrative.brief.project_id,
             state_version=1,
@@ -132,9 +160,9 @@ def _ready_state(narrative: NarrativeArtifact) -> ProjectState:
 
 
 def _voice_run(narrative: NarrativeArtifact, project_dir: Path):
-    return VoiceHarnessController.from_provider(
-        FakeTTS(), "test-voice"
-    ).run(narrative, project_dir, _ready_state(narrative))
+    return make_voice_controller().run(
+        narrative, project_dir, _ready_state(narrative)
+    )
 
 
 def test_voice_agent_creates_audio_alignment_and_realized_beats(
@@ -161,6 +189,7 @@ def test_voice_agent_creates_audio_alignment_and_realized_beats(
     assert [item.tool for item in run.record.agent_result.actions] == [
         "voice.create_plan",
         "audio.synthesize_narration",
+        "voice.submit_candidate",
     ]
     harness_files = ArtifactWriter(tmp_path).write_voice_run(
         project_dir, run.record
@@ -199,7 +228,7 @@ def test_voice_review_failure_does_not_open_editorial_agent(
             )
 
     narrative = _narrative()
-    controller = VoiceHarnessController.from_provider(FakeTTS(), "test-voice")
+    controller = make_voice_controller()
     controller.critic = RejectingCritic()
 
     run = controller.run(

@@ -3,16 +3,19 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_narrative_controller import FakeGenerator
+from tests.test_narrative_controller import (
+    FakeGenerator,
+    narrative_controller_from_generator,
+)
 from tests.test_quality import sample_plan, sample_script
-from ugc_harness.agents.narrative_agent import NarrativeAgent, ScriptArtifact
-from ugc_harness.harness.controller import NarrativeHarnessController
+from ugc_harness.agents.narrative_agent import ScriptArtifact
+from ugc_harness.harness.narrative_formats import EXPLAINER_PACK
 from ugc_harness.shared.artifacts import ArtifactWriter
 from ugc_harness.agents.narrative_agent import make_brief
 
 
 def test_controller_runs_constrained_narrative_agent() -> None:
-    controller = NarrativeHarnessController.from_generator(
+    controller = narrative_controller_from_generator(
         FakeGenerator(), "fake-model"
     )
     run = controller.run(make_brief(topic="Agent 化测试"))
@@ -21,11 +24,10 @@ def test_controller_runs_constrained_narrative_agent() -> None:
     assert artifact.quality.passed is True
     assert run.record.task.agent == "narrative_agent"
     assert run.record.task.allowed_tools == [
-        NarrativeAgent.PLAN_TOOL,
-        NarrativeAgent.SCRIPT_TOOL,
+        *EXPLAINER_PACK.capability_tools(),
     ]
     assert [action.tool for action in run.record.agent_result.actions][0] == (
-        NarrativeAgent.PLAN_TOOL
+        EXPLAINER_PACK.capability_tools()[0]
     )
     assert run.record.evaluation.critic_id == "narrative_critic"
     assert artifact.planning.world_state.entities[0].name == "软件测试"
@@ -47,7 +49,7 @@ def test_failed_review_keeps_control_with_narrative_agent() -> None:
                 return script
             return super().generate(prompt, output_type)
 
-    run = NarrativeHarnessController.from_generator(
+    run = narrative_controller_from_generator(
         CriticFailureGenerator(), "fake-model"
     ).run(make_brief(topic="审核失败测试"))
 
@@ -68,10 +70,10 @@ def test_narrative_revision_preserves_both_tasks() -> None:
             return super().generate(prompt, output_type)
 
     brief = make_brief(topic="叙事修订历史测试")
-    rejected = NarrativeHarnessController.from_generator(
+    rejected = narrative_controller_from_generator(
         CriticFailureGenerator(), "fake-model"
     ).run(brief)
-    revised = NarrativeHarnessController.from_generator(
+    revised = narrative_controller_from_generator(
         FakeGenerator(), "fake-model"
     ).run(brief, state=rejected.record.project_state)
 
@@ -85,7 +87,7 @@ def test_narrative_revision_preserves_both_tasks() -> None:
 
 
 def test_controller_rejects_task_based_on_stale_state() -> None:
-    controller = NarrativeHarnessController.from_generator(
+    controller = narrative_controller_from_generator(
         FakeGenerator(), "fake-model", state_version=2
     )
     brief = make_brief(topic="状态版本测试")
@@ -98,7 +100,7 @@ def test_controller_rejects_task_based_on_stale_state() -> None:
 
 
 def test_explicit_video_profile_cannot_be_overridden_by_ai() -> None:
-    run = NarrativeHarnessController.from_generator(
+    run = narrative_controller_from_generator(
         FakeGenerator(), "fake-model"
     ).run(make_brief(topic="人物口播测试", video_profile="ab_roll"))
 
@@ -111,7 +113,7 @@ def test_explicit_video_profile_cannot_be_overridden_by_ai() -> None:
 
 
 def test_writer_persists_task_result_critic_and_state(tmp_path: Path) -> None:
-    run = NarrativeHarnessController.from_generator(
+    run = narrative_controller_from_generator(
         FakeGenerator(), "fake-model"
     ).run(make_brief(topic="轨迹落盘测试"))
     artifact = run.artifact
@@ -134,8 +136,11 @@ def test_writer_persists_task_result_critic_and_state(tmp_path: Path) -> None:
         )
     )
     assert state["runtime_context"]["available_tools"]
-    assert "world" not in state
-    assert state["world_state"]["topic_frame"] == "解释测试为什么重要"
+    assert "world_state" not in state
+    assert (
+        state["description"]["world"]["state"]["topic_frame"]
+        == "解释测试为什么重要"
+    )
     tasks = state["trajectory"]["phases"]["narrative"]["tasks"]
     assert tasks[0]["agent_result"]["actions"]
     assert tasks[0]["transition"]["to_agent"] == "voice_agent"

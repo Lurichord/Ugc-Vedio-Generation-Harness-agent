@@ -28,60 +28,24 @@ def narrative_commits(artifact: NarrativeArtifact) -> list[NodeCommit]:
             (brief_ref, world_ref),
         ),
     ]
-    for section in artifact.planning.sections:
-        commits.append(
-            NodeCommit(
-                f"section:{section.section_id}",
-                "section",
-                section,
-                (brief_ref, world_ref),
-            )
-        )
-    for beat in artifact.planning.beats:
-        commits.append(
-            NodeCommit(
-                f"planned_beat:{beat.planned_beat_id}",
-                "planned_beat",
-                beat,
-                (
-                    f"section:{beat.section_id}",
-                    world_ref,
-                    profile_ref,
-                ),
-            )
-        )
-    for segment in artifact.script.segments:
-        commits.append(
-            NodeCommit(
-                f"script_segment:{segment.script_segment_id}",
-                "script_segment",
-                segment,
-                (
-                    f"planned_beat:{segment.planned_beat_id}",
-                    world_ref,
-                ),
-            )
-        )
-    aggregate_dependencies = tuple(
-        [world_ref, profile_ref]
-        + [
-            f"planned_beat:{beat.planned_beat_id}"
-            for beat in artifact.planning.beats
-        ]
-        + [
-            f"script_segment:{segment.script_segment_id}"
-            for segment in artifact.script.segments
-        ]
-    )
     commits.append(
         NodeCommit(
             "artifact:narrative",
             "narrative_artifact",
             {
                 "planning": artifact.planning.model_dump(mode="json"),
-                "script": artifact.script.model_dump(mode="json"),
+                "script": (
+                    artifact.script.model_dump(mode="json")
+                    if artifact.script is not None
+                    else None
+                ),
+                "shots": (
+                    artifact.shots.model_dump(mode="json")
+                    if artifact.shots is not None
+                    else None
+                ),
             },
-            aggregate_dependencies,
+            (world_ref, profile_ref),
         )
     )
     return commits
@@ -114,7 +78,7 @@ def voice_commits(artifact: VoiceArtifact) -> list[NodeCommit]:
                 "voice_segment",
                 segment,
                 (
-                    f"script_segment:{segment.script_segment_id}",
+                    "artifact:narrative",
                     "voice_profile:main",
                 ),
             )
@@ -127,7 +91,6 @@ def voice_commits(artifact: VoiceArtifact) -> list[NodeCommit]:
                 audio,
                 (
                     f"voice_segment:{audio.voice_segment_id}",
-                    f"script_segment:{audio.script_segment_id}",
                 ),
             )
         )
@@ -153,10 +116,7 @@ def voice_commits(artifact: VoiceArtifact) -> list[NodeCommit]:
             )
         )
     for beat in artifact.realized_beats:
-        dependencies = [f"planned_beat:{beat.planned_beat_id}"]
-        dependencies.extend(
-            f"script_segment:{ref}" for ref in beat.script_segment_ids
-        )
+        dependencies = ["artifact:narrative"]
         dependencies.extend(
             f"audio_segment:{ref}" for ref in beat.audio_segment_ids
         )
@@ -222,9 +182,6 @@ def editorial_commits(artifact: EditorialArtifact) -> list[NodeCommit]:
     commits: list[NodeCommit] = []
     for claim in artifact.editorial_plan.claims:
         dependencies = [f"realized_beat:{claim.beat_id}"]
-        dependencies.extend(
-            f"script_segment:{ref}" for ref in claim.script_segment_ids
-        )
         commits.append(
             NodeCommit(
                 f"claim:{claim.claim_id}",

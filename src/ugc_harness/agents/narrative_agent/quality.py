@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import re
 
+from ...content import PlannedBeat
 from .models import (
     CreativeBrief,
-    PlannedBeat,
     PlanningArtifact,
     QualityIssue,
     QualityReport,

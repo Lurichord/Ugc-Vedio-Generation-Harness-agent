@@ -47,7 +47,7 @@ class BasicImageAnalyzer:
         )
 
 
-class OpenRouterImageAnalyzer:
+class VolcengineImageAnalyzer:
     def __init__(self, settings: LLMSettings) -> None:
         self.settings = settings
         self.client = httpx.Client(
@@ -59,13 +59,56 @@ class OpenRouterImageAnalyzer:
     def close(self) -> None:
         self.client.close()
 
-    def __enter__(self) -> "OpenRouterImageAnalyzer":
+    def __enter__(self) -> "VolcengineImageAnalyzer":
         return self
 
     def __exit__(self, *_: object) -> None:
         self.close()
 
     def analyze(
+        self,
+        *,
+        asset: AssetCard,
+        beat: RealizedBeat,
+        image_path: Path,
+    ) -> AssetInspection:
+        try:
+            return self._analyze_remote(
+                asset=asset,
+                beat=beat,
+                image_path=image_path,
+            )
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status not in {402, 408, 429} and status < 500:
+                raise
+            return BasicImageAnalyzer().analyze(
+                asset=asset,
+                beat=beat,
+                image_path=image_path,
+            ).model_copy(
+                update={
+                    "reason": (
+                        f"Remote image analyzer returned HTTP {status}; "
+                        "used local integrity and presentation fallback."
+                    )
+                }
+            )
+        except httpx.TransportError:
+            return BasicImageAnalyzer().analyze(
+                asset=asset,
+                beat=beat,
+                image_path=image_path,
+            ).model_copy(
+                update={
+                    "reason": (
+                        "Remote image analyzer was unavailable; used local "
+                        "integrity and presentation fallback."
+                    )
+                }
+            )
+
+    def _analyze_remote(
         self,
         *,
         asset: AssetCard,

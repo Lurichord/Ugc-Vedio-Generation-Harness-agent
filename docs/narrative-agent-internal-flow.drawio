@@ -1,0 +1,257 @@
+<mxfile host="Electron" agent="Codex">
+  <diagram id="narrative-internal" name="Narrative Agent内部流程">
+    <mxGraphModel dx="1695" dy="974" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="7200" pageHeight="4050" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=25;fontColor=#0F172A;" value="&lt;b&gt;Narrative Agent 内部流程：自主 Tool Loop、stdio MCP 与三种 Format 工具&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;Harness 只提供任务契约并接收候选；Agent 自主选择工具和修复路径；MCP Server 保存本次任务的临时草稿。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="75" width="5420" x="70" y="25" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=15;fillColor=#F8FAFC;strokeColor=#94A3B8;fontSize=15;" value="&lt;b&gt;图例：&lt;/b&gt;蓝色＝Agent 控制流　绿色＝MCP 调用结果/候选　橙色＝MCP Server 与任务内草稿　紫色＝LLM 结构化生成　红色＝错误反馈与失败　灰色＝Harness 边界" vertex="1">
+          <mxGeometry height="55" width="5420" x="70" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="h-in" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=13;fillColor=#F1F5F9;strokeColor=#64748B;strokeWidth=2;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;HARNESS → Narrative Agent&lt;/b&gt;&lt;br&gt;&lt;b&gt;TaskEnvelope：&lt;/b&gt;task_id, goal, scope, based_on_state_version, format_id, agent_instructions, allowed_tools[], required_outputs[], forbidden_actions[], acceptance_criteria[], budget, input_hash, dependency_snapshot[]&lt;br&gt;&lt;b&gt;CreativeBrief：&lt;/b&gt;project_id, topic, target, audience, communication, production_mode, video_profile, content_policy&lt;br&gt;&lt;b&gt;Agent 配置：&lt;/b&gt;model_name, generation_context?, StdioMCPServerConfig&lt;/font&gt;" vertex="1">
+          <mxGeometry height="255" width="1120" x="70" y="225" as="geometry" />
+        </mxCell>
+        <mxCell id="h-out" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=13;fillColor=#F1F5F9;strokeColor=#64748B;strokeWidth=2;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;Narrative Agent → HARNESS&lt;/b&gt;&lt;br&gt;&lt;b&gt;NarrativeAgentExecution：&lt;/b&gt;world_state?, planning?, script?, shots?, result&lt;br&gt;&lt;b&gt;AgentResult：&lt;/b&gt;task_id, status, state_version_used, input_hash, actions[], artifact_refs[], proposed StatePatch, evaluation_target?, error?&lt;br&gt;返回的是候选和建议；Narrative Critic 与正式 Commit 在 Agent 外部由 Harness 执行。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="255" width="1180" x="4310" y="225" as="geometry" />
+        </mxCell>
+        <mxCell id="agent-zone" parent="1" style="swimlane;html=1;rounded=1;startSize=55;horizontal=1;fillColor=#EAF2FF;strokeColor=#2563EB;strokeWidth=3;fontColor=#1E3A8A;fontStyle=1;fontSize=22;" value="NARRATIVE AGENT（agent.py）" vertex="1">
+          <mxGeometry height="1780" width="2940" x="1281" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="run" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;1　run(task, brief)&lt;/b&gt;&lt;br&gt;validate_task(task)&lt;br&gt;CreativeBrief 类型检查&lt;br&gt;asyncio.run(_run_mcp(task, brief))&lt;/font&gt;" vertex="1">
+          <mxGeometry height="170" width="620" x="1360" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="precheck" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;2　_run_mcp() Agent 前置检查&lt;/b&gt;&lt;br&gt;actions = []&lt;br&gt;必须存在 task.format_id 与 required_outputs&lt;br&gt;brief.production_mode 必须与 task.format_id 对齐（auto 除外）&lt;br&gt;失败 → failed_result，不启动 MCP&lt;/font&gt;" vertex="1">
+          <mxGeometry height="200" width="720" x="2070" y="275" as="geometry" />
+        </mxCell>
+        <mxCell id="messages" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;3　初始化 messages[]&lt;/b&gt;&lt;br&gt;system.content = task.agent_instructions || task.goal&lt;br&gt;user.content = JSON{task: TaskEnvelope, creative_brief: CreativeBrief}&lt;br&gt;&lt;br&gt;之后每次 tool call、tool result、tool error 和继续规划提示都会追加到这里；它是模型下一步决策的可见上下文。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="210" width="1240" x="2880" y="270" as="geometry" />
+        </mxCell>
+        <mxCell id="stdio" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;4　启动 stdio MCP 子进程&lt;/b&gt;&lt;br&gt;stdio_client(mcp_server.server_parameters())&lt;br&gt;→ (read, write)&lt;br&gt;ClientSession(read, write)&lt;br&gt;→ await session.initialize()&lt;br&gt;&lt;br&gt;ClientSession 是 MCP 协议会话，不是业务 JSON，也不保存正式项目状态。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="235" width="760" x="1360" y="540" as="geometry" />
+        </mxCell>
+        <mxCell id="discover" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;5　发现并校验 MCP 工具&lt;/b&gt;&lt;br&gt;listing = await session.list_tools()&lt;br&gt;discovered = {tool.name: tool}&lt;br&gt;required = {configure_task} ∪ task.allowed_tools&lt;br&gt;缺少任一 required tool → RuntimeError&lt;br&gt;&lt;br&gt;configure_task 必须存在，但不会暴露给模型自主选择。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="235" width="800" x="2220" y="540" as="geometry" />
+        </mxCell>
+        <mxCell id="configure" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;6　Agent 主动调用 configure_task&lt;/b&gt;&lt;br&gt;_call_mcp_tool(session, &quot;narrative.configure_task&quot;, {brief, model, generation_context}, record=False)&lt;br&gt;&lt;br&gt;它只初始化 MCP Server 的本次任务 Session；不计入 actions[]，也不消耗模型自主 Action 记录。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="235" width="1000" x="3120" y="540" as="geometry" />
+        </mxCell>
+        <mxCell id="expose" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;7　构造模型可见工具&lt;/b&gt;&lt;br&gt;逐个读取 task.allowed_tools&lt;br&gt;仅保留 discovered ∩ allowed_tools&lt;br&gt;MCP name → safe model name&lt;br&gt;model_tools[] = {name, description, parameters=MCP input_schema}&lt;br&gt;exposed[safe_name] = active MCP name&lt;br&gt;&lt;br&gt;FormatPack 决定白名单；模型只能从白名单内自主选工具。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="255" width="930" x="1360" y="840" as="geometry" />
+        </mxCell>
+        <mxCell id="budget" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b style=&quot;&quot;&gt;8　检查 Action Budget&lt;/b&gt;&lt;br&gt;while candidate is None&lt;br&gt;len(actions) &amp;lt; task.budget.max_steps ?&lt;br&gt;否 → task step budget exhausted → failed_result&lt;/font&gt;" vertex="1">
+          <mxGeometry height="235" width="620" x="2440" y="850" as="geometry" />
+        </mxCell>
+        <mxCell id="choose" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;9　模型自主规划下一步&lt;/b&gt;&lt;br&gt;model.choose_tool(messages, model_tools)&lt;br&gt;OpenAI tool_choice = required&lt;br&gt;必须且只能返回 1 个 ModelToolCall&lt;br&gt;ModelToolCall{name, arguments: dict, call_id}&lt;br&gt;&lt;br&gt;Harness/Agent 没有固定内部 dependency graph；模型根据当前 messages 决定生成、重做、修复或提交。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="280" width="950" x="3170" y="825" as="geometry" />
+        </mxCell>
+        <mxCell id="permission" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;10　权限映射与调用准备&lt;/b&gt;&lt;br&gt;active_name = exposed.get(decision.name)&lt;br&gt;不存在 → PermissionError&lt;br&gt;arguments = dict(decision.arguments)&lt;br&gt;messages.append(decision.assistant_message())&lt;/font&gt;" vertex="1">
+          <mxGeometry height="200" width="720" x="1360" y="1190" as="geometry" />
+        </mxCell>
+        <mxCell id="call" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;11　_call_mcp_tool()&lt;/b&gt;&lt;br&gt;await session.call_tool(active_name, arguments)&lt;br&gt;is_error=true → RuntimeError&lt;br&gt;优先读取 structured_content&lt;br&gt;否则读取 content.text 并 json.loads&lt;br&gt;兼容解包 {result: {...}}&lt;br&gt;最终必须得到 dict&lt;/font&gt;" vertex="1">
+          <mxGeometry height="245" width="760" x="2180" y="1170" as="geometry" />
+        </mxCell>
+        <mxCell id="action" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;12　ActionRecord 审计&lt;/b&gt;&lt;br&gt;record=True 时，无论成功或失败都追加：&lt;br&gt;action_id / agent / task_id / tool&lt;br&gt;result=success|failed&lt;br&gt;reason? / duration_ms&lt;br&gt;&lt;br&gt;ActionRecord 只记录调用事实，不控制 Agent 下一步。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="245" width="700" x="3040" y="1170" as="geometry" />
+        </mxCell>
+        <mxCell id="feedback" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;13　结果回灌 messages[]&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#15803D&quot;&gt;&lt;b&gt;成功：&lt;/b&gt;&lt;/font&gt;追加 role=tool 的结构化 JSON；若不是 submit，再追加“判断还缺什么”的 user 提示&lt;br&gt;&lt;font color=&quot;#B91C1C&quot;&gt;&lt;b&gt;失败：&lt;/b&gt;&lt;/font&gt;追加 role=tool 的 {error} 和“根据错误选择下一步”的 user 提示&lt;br&gt;&lt;br&gt;随后返回 Budget → choose_tool；模型自行决定修复哪个草稿。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="260" width="1110" x="1360" y="1490" as="geometry" />
+        </mxCell>
+        <mxCell id="is-submit" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;" value="&lt;b&gt;active_name ==&lt;br&gt;narrative.submit_candidate ?&lt;/b&gt;" vertex="1">
+          <mxGeometry height="220" width="520" x="2630" y="1510" as="geometry" />
+        </mxCell>
+        <mxCell id="validate-candidate" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;14　接受 Candidate&lt;/b&gt;&lt;br&gt;NarrativeCandidate.model_validate(value)&lt;br&gt;_validate_candidate_for_task(task, candidate)&lt;br&gt;检查 required_outputs、planning 类型、script 规则与 format 对齐&lt;br&gt;通过 → 退出 Tool Loop&lt;br&gt;失败 → 外层异常转 failed_result&lt;/font&gt;" vertex="1">
+          <mxGeometry height="250" width="820" x="3300" y="1485" as="geometry" />
+        </mxCell>
+        <mxCell id="complete-result" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;15　组装 NarrativeAgentExecution&lt;/b&gt;&lt;br&gt;复制 candidate.world_state / planning / script / shots&lt;br&gt;_completed_result() 创建 AgentResult：status=completed、state_version_used、input_hash、actions[]、artifact_refs[]、proposed StatePatch&lt;br&gt;返回 Harness；Agent 不执行 Critic 和正式 Commit。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="145" width="1520" x="2600" y="1800" as="geometry" />
+        </mxCell>
+        <mxCell id="server-zone" parent="1" style="swimlane;html=1;rounded=1;startSize=55;horizontal=1;fillColor=#FFF7ED;strokeColor=#EA580C;strokeWidth=3;fontColor=#9A3412;fontStyle=1;fontSize=21;" value="STDIO MCP SERVER（mcp_servers/narrative.py，任务子进程）" vertex="1">
+          <mxGeometry height="1430" width="5420" x="70" y="2400" as="geometry" />
+        </mxCell>
+        <mxCell id="server-config" parent="server-zone" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;configure_task(brief, model, generation_context)&lt;/b&gt;&lt;br&gt;CreativeBrief.model_validate(brief)&lt;br&gt;LLMSettings.from_environment(model) → StructuredLLM&lt;br&gt;production_mode=auto → explainer；否则使用指定 format&lt;br&gt;创建对应 FormatSessionState&lt;/font&gt;" vertex="1">
+          <mxGeometry height="210" width="1000" x="20" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="session" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;NarrativeTaskSession（仅本次 stdio 子进程）&lt;/b&gt;&lt;br&gt;brief: CreativeBrief&lt;br&gt;generator: StructuredLLM&lt;br&gt;format_id: explainer | drama | tutorial&lt;br&gt;format_state: ExplainerFormatState | DramaFormatState | TutorialFormatState&lt;br&gt;generation_context: {instruction, scope_note, baselines}&lt;br&gt;world_state / planning / script / shots&lt;br&gt;&lt;br&gt;这里保存工具间共享草稿&lt;/font&gt;" vertex="1">
+          <mxGeometry height="250" width="1080" x="1240" y="2470" as="geometry" />
+        </mxCell>
+        <mxCell id="format-gate" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;调用工具时检查当前 FormatState 类型&lt;/b&gt;&lt;br&gt;_explainer_state() / _drama_state() / _tutorial_state()&lt;br&gt;跨格式工具调用 → RuntimeError → 错误返回 Agent messages[]&lt;/font&gt;" vertex="1">
+          <mxGeometry height="225" width="820" x="2430" y="2480" as="geometry" />
+        </mxCell>
+        <mxCell id="structured" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;统一 StructuredLLM.generate(prompt, output_type)&lt;/b&gt;&lt;br&gt;业务 Prompt + current draft + problems[]&lt;br&gt;+ generation_context 的 baseline / instruction / scope_note&lt;br&gt;+ output_type.model_json_schema()&lt;br&gt;调用模型 response_format=json_object&lt;br&gt;_extract_json → output_type.model_validate&lt;br&gt;首次校验失败：把 ValidationError 与旧输出加入 repair_prompt，低温重试 1 次&lt;br&gt;仍失败 → RuntimeError 返回 Agent Tool Loop&lt;/font&gt;" vertex="1">
+          <mxGeometry height="270" width="2010" x="3370" y="2460" as="geometry" />
+        </mxCell>
+        <mxCell id="explainer" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FEF3C7;strokeColor=#D97706;fontSize=14;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;EXPLAINER 工具&lt;/b&gt;&lt;br&gt;&lt;b&gt;plan_sections(problems?)&lt;/b&gt; → SectionPlanArtifact；写 section_plan + world_state&lt;br&gt;&lt;b&gt;expand_beats(problems?)&lt;/b&gt; → BeatPlanArtifact；要求 section_plan；组装 PlanningArtifact&lt;br&gt;&lt;b&gt;write_script(problems?)&lt;/b&gt; → ScriptArtifact；要求 planning&lt;br&gt;&lt;b&gt;compile_shots(problems?)&lt;/b&gt; → ShotPlanArtifact；确定性编译 planning + script&lt;br&gt;&lt;br&gt;Required outputs：planning + script + shots&lt;br&gt;Shot：shot_kind=explainer；visual=explainer；audio=external_narration&lt;/font&gt;" vertex="1">
+          <mxGeometry height="350" width="1640" x="140" y="2810" as="geometry" />
+        </mxCell>
+        <mxCell id="drama" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=14;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;DRAMA 工具&lt;/b&gt;&lt;br&gt;&lt;b&gt;design_world(problems?)&lt;/b&gt; → DramaWorldArtifact；写 world + world_state&lt;br&gt;&lt;b&gt;plan_story(problems?)&lt;/b&gt; → DramaStoryArtifact；写 story/scenes&lt;br&gt;&lt;b&gt;expand_scenes(problems?)&lt;/b&gt; → DramaActionPlanArtifact；要求 story；组装 DramaPlanningArtifact&lt;br&gt;&lt;b&gt;compile_shots(problems?)&lt;/b&gt; → ShotPlanArtifact；组装 world + story + actions&lt;br&gt;&lt;br&gt;Required outputs：world_state + planning + shots；script 必须为空&lt;br&gt;Shot：generated_scene + embedded_in_video；音频随 AI Video 生成&lt;/font&gt;" vertex="1">
+          <mxGeometry height="350" width="1640" x="1920" y="2810" as="geometry" />
+        </mxCell>
+        <mxCell id="tutorial" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#ECFCCB;strokeColor=#65A30D;fontSize=14;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;TUTORIAL 工具&lt;/b&gt;&lt;br&gt;&lt;b&gt;define_result(problems?)&lt;/b&gt; → TutorialDefinitionArtifact；写 definition + world_state&lt;br&gt;&lt;b&gt;plan_steps(problems?)&lt;/b&gt; → TutorialProcedureArtifact；组装 TutorialPlanningArtifact&lt;br&gt;&lt;b&gt;plan_explanations(problems?)&lt;/b&gt; → TutorialScriptArtifact；只写有增量价值的讲解&lt;br&gt;&lt;b&gt;compile_shots(problems?)&lt;/b&gt; → ShotPlanArtifact；要求 planning + explanation script&lt;br&gt;&lt;br&gt;Required outputs：world_state + planning + script + shots&lt;br&gt;Shot：procedure_demo + mixed audio；制作动作是画面主体&lt;/font&gt;" vertex="1">
+          <mxGeometry height="350" width="1640" x="3700" y="2810" as="geometry" />
+        </mxCell>
+        <mxCell id="submit" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;narrative.submit_candidate()&lt;/b&gt;&lt;br&gt;读取 NarrativeTaskSession 当前草稿，不再调用生成模型&lt;br&gt;Explainer：section + beats + script + shots 必须完整&lt;br&gt;Drama：world + story + action_plan + shots 必须完整&lt;br&gt;Tutorial：definition + procedure + TutorialScript + shots 必须完整&lt;br&gt;缺失字段 → ValueError（可修复错误）&lt;br&gt;完整 → NarrativeCandidate{world_state, planning, script?, shots}&lt;/font&gt;" vertex="1">
+          <mxGeometry height="250" width="3060" x="1220" y="3270" as="geometry" />
+        </mxCell>
+        <mxCell id="candidate-schema" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=14;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;NarrativeCandidate Schema&lt;/b&gt;&lt;br&gt;world_state?: VideoWorldState&lt;br&gt;planning?: PlanningArtifact | DramaPlanningArtifact | TutorialPlanningArtifact&lt;br&gt;script?: ScriptArtifact | TutorialScriptArtifact&lt;br&gt;shots?: ShotPlanArtifact{shots: ProductionShot[]}&lt;br&gt;内部 model_validator 检查 world_state 对齐、planning/script 类型匹配、Drama 无外部 script、Tutorial step 引用有效。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="190" width="2840" x="1330" y="3580" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="h-in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#64748B;strokeWidth=3;fontSize=14;" target="run" value="TaskEnvelope + CreativeBrief">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="run" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="precheck" value="validated inputs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="precheck" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="messages" value="checks pass">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="messages" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="stdio" value="open subprocess">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="4160" y="500" />
+              <mxPoint x="1740" y="500" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="stdio" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="discover" value="initialized ClientSession">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="discover" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="configure" value="required tools available">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="configure" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#EA580C;strokeWidth=3;fontSize=14;" target="server-config" value="configure_task call">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="4170" y="805" />
+              <mxPoint x="4170" y="2370" />
+              <mxPoint x="640" y="2020" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="server-config" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#EA580C;strokeWidth=3;fontSize=14;" target="session" value="create task-local session">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="configure" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="expose" value="configured">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="3650" y="805" />
+              <mxPoint x="1825" y="805" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="expose" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="budget" value="model_tools[]">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="budget" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="choose" value="budget available">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="choose" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#7C3AED;strokeWidth=3;fontSize=14;" target="permission" value="ModelToolCall">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="4160" y="1140" />
+              <mxPoint x="1720" y="1140" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="permission" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="call" value="authorized name + arguments">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2140" y="1330" />
+              <mxPoint x="2140" y="1292.5" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="call" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#64748B;strokeWidth=2;fontSize=14;" target="action" value="record call">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="call" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#EA580C;strokeWidth=3;fontSize=14;" target="format-gate" value="session.call_tool(name, arguments)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2560" y="2320" />
+              <mxPoint x="2840" y="2320" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e16" edge="1" parent="1" source="format-gate" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#7C3AED;strokeWidth=3;fontSize=14;" target="structured" value="当前 Format Tool：生成或修复">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e22" edge="1" parent="1" source="structured" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#EA580C;strokeWidth=3;fontSize=14;" target="session" value="validated artifact → 写回任务草稿">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="4380" y="2760" />
+              <mxPoint x="1780" y="2760" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e23" edge="1" parent="1" source="session" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="feedback" value="structured tool result / error">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1180" y="2740" />
+              <mxPoint x="1180" y="1450" />
+              <mxPoint x="1900" y="1450" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e24" edge="1" parent="1" source="action" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#64748B;strokeWidth=2;fontSize=14;" target="feedback" value="append ActionRecord">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1915" y="1390" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e25" edge="1" parent="1" source="feedback" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="is-submit" value="result added">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e26" edge="1" parent="1" source="is-submit" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="budget" value="no → continue planning">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2890" y="1440" />
+              <mxPoint x="2750" y="1440" />
+              <mxPoint x="2750" y="1120" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e27" edge="1" parent="1" source="session" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="submit" value="submit_candidate 读取完整草稿">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="100" y="2740" />
+              <mxPoint x="100" y="3220" />
+              <mxPoint x="2750" y="3220" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e28" edge="1" parent="1" source="submit" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="candidate-schema" value="NarrativeCandidate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e29" edge="1" parent="1" source="is-submit" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="validate-candidate" value="yes → returned tool value">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e30" edge="1" parent="1" source="validate-candidate" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="complete-result" value="valid candidate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e31" edge="1" parent="1" source="complete-result" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#64748B;strokeWidth=3;fontSize=14;" target="h-out" value="NarrativeAgentExecution">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="4200" y="1870" />
+              <mxPoint x="4260" y="1870" />
+              <mxPoint x="4260" y="350" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e32" edge="1" parent="1" source="precheck" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#DC2626;strokeWidth=3;fontSize=14;" target="h-out" value="exception → failed_result">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2830" y="510" />
+              <mxPoint x="4260" y="510" />
+              <mxPoint x="4260" y="430" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="tool-list" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fillColor=#FFF7ED;strokeColor=#EA580C;strokeWidth=3;fontColor=#9A3412;fontSize=17;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;Narrative 阶段现有 MCP Tools&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;b&gt;公共 Tool&lt;/b&gt;&lt;br&gt;narrative.configure_task&lt;br&gt;narrative.submit_candidate&lt;br&gt;&lt;br&gt;&lt;b&gt;Explainer&lt;/b&gt;&lt;br&gt;narrative.explainer.plan_sections&lt;br&gt;narrative.explainer.expand_beats&lt;br&gt;narrative.explainer.write_script&lt;br&gt;narrative.explainer.compile_shots&lt;br&gt;&lt;br&gt;&lt;b&gt;Drama&lt;/b&gt;&lt;br&gt;narrative.drama.design_world&lt;br&gt;narrative.drama.plan_story&lt;br&gt;narrative.drama.expand_scenes&lt;br&gt;narrative.drama.compile_shots&lt;br&gt;&lt;br&gt;&lt;b&gt;Tutorial&lt;/b&gt;&lt;br&gt;narrative.tutorial.define_result&lt;br&gt;narrative.tutorial.plan_steps&lt;br&gt;narrative.tutorial.plan_explanations&lt;br&gt;narrative.tutorial.compile_shots&lt;/font&gt;" vertex="1">
+          <mxGeometry height="720" width="520" x="5700" y="200" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

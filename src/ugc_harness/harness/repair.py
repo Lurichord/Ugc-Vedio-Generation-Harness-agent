@@ -6,6 +6,7 @@ import json
 from pydantic import Field
 
 from .dependencies import DependencyGraph, NodeCommit, semantic_hash
+from .narrative_formats import default_narrative_format_registry
 from .models import (
     DependencySnapshot,
     HarnessModel,
@@ -28,13 +29,26 @@ class RepairPlan(HarnessModel):
     complete: bool = False
 
 
+_NARRATIVE_FORMATS = default_narrative_format_registry()
+
+
 _TOOLS: dict[str, list[str]] = {
-    "narrative_agent": ["narrative.generate_plan", "narrative.generate_script"],
-    "voice_agent": ["voice.create_plan", "audio.synthesize_narration"],
-    "editorial_agent": ["editorial.create_plan"],
-    "asset_agent": ["asset.acquire_requirement", "asset.prepare_image"],
-    "timeline_agent": ["timeline.compose"],
-    "render_agent": ["render.execute"],
+    "narrative_agent": [
+        *_NARRATIVE_FORMATS.capability_tools,
+    ],
+    "voice_agent": [
+        "voice.create_plan",
+        "audio.synthesize_narration",
+        "voice.submit_candidate",
+    ],
+    "editorial_agent": ["editorial.create_plan", "editorial.submit_candidate"],
+    "asset_agent": [
+        "asset.acquire_requirement",
+        "asset.prepare_image",
+        "asset.submit_candidate",
+    ],
+    "timeline_agent": ["timeline.compose", "timeline.submit_candidate"],
+    "render_agent": ["render.execute", "render.submit_candidate"],
 }
 
 
@@ -123,6 +137,30 @@ class RepairScheduler:
                 state.video.state_version,
                 state.dependency_graph.graph_version,
             )
+            if agent == "narrative_agent":
+                mode = state.runtime_context.constraints.get(
+                    "narrative_format",
+                    state.runtime_context.constraints.get(
+                        "production_mode",
+                        "auto",
+                    ),
+                )
+                if not isinstance(mode, str):
+                    mode = "auto"
+                pack = _NARRATIVE_FORMATS.resolve(mode)
+                tasks.append(
+                    pack.create_repair_task(
+                        task_id=task_id,
+                        scope=scope,
+                        state_version=state.video.state_version,
+                        input_hash=repair_input_hash(
+                            snapshots,
+                            sorted(targets),
+                        ),
+                        dependency_snapshot=snapshots,
+                    )
+                )
+                continue
             tasks.append(
                 TaskEnvelope(
                     task_id=task_id,
@@ -143,7 +181,11 @@ class RepairScheduler:
                         "scope 外节点的语义 hash 不变",
                         "输出通过所属领域的独立 Critic",
                     ],
-                    budget=TaskBudget(max_steps=4, max_retries=1),
+                    budget=TaskBudget(
+                        max_steps=8 if agent == "narrative_agent" else 4,
+                        max_retries=1,
+                        fallback_policy="use_best_available",
+                    ),
                     input_hash=repair_input_hash(snapshots, sorted(targets)),
                     dependency_snapshot=snapshots,
                 )
@@ -212,11 +254,11 @@ class RepairScheduler:
                 continue
             visited.add(ref)
             prefix, _, identifier = ref.partition(":")
-            if prefix in {"planned_beat", "realized_beat"}:
+            if prefix == "realized_beat":
                 beat_ids.add(identifier)
             elif prefix in {"timeline_clip", "timeline_transform"}:
                 beat_ids.add(identifier)
-            elif prefix in {"script_segment", "alignment_segment"}:
+            elif prefix == "alignment_segment":
                 script_ids.add(identifier)
             elif prefix == "visual_requirement":
                 visual_ids.add(identifier)

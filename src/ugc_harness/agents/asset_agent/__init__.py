@@ -1,8 +1,12 @@
-"""Asset acquisition agent and its constrained capabilities."""
+"""Asset domain contracts and constrained acquisition capabilities.
 
-from .agent import AssetAgent, AssetAgentExecution, AssetCandidate
+Execution moved to the unified GenericAgent; this package keeps the asset
+artifact models and the acquisition/image tools used as its tools.
+"""
+
 from .models import (
     AssetArtifact,
+    AssetCandidate,
     AssetCard,
     AssetQuality,
     AssetUsabilityReview,
@@ -12,8 +16,6 @@ from .models import (
 )
 
 __all__ = [
-    "AssetAgent",
-    "AssetAgentExecution",
     "AssetArtifact",
     "AssetCandidate",
     "AssetCard",

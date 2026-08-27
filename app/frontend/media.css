@@ -1,0 +1,41 @@
+.artifact-media.visual-media {
+  display: block;
+  width: min(100%, 320px);
+  height: auto;
+  max-height: none;
+  aspect-ratio: 9 / 16;
+  object-fit: contain;
+  margin: 10px auto;
+  background: #111;
+}
+
+.inspector-media {
+  display: block;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  max-height: 420px;
+  object-fit: contain;
+  margin: 10px 0;
+}
+
+video.visual-media:fullscreen,
+video.inspector-media:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  object-fit: contain !important;
+  background: #000;
+}
+
+video.visual-media:-webkit-full-screen,
+video.inspector-media:-webkit-full-screen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  object-fit: contain !important;
+  background: #000;
+}

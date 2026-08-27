@@ -1,6 +1,5 @@
-"""Audio-clocked timeline agent."""
+"""Audio-clocked timeline contracts; execution lives in the unified GenericAgent."""
 
-from .agent import TimelineAgent, TimelineAgentExecution
-from .models import TimelineArtifact
+from .models import TimelineArtifact, TimelineCandidate
 
-__all__ = ["TimelineAgent", "TimelineAgentExecution", "TimelineArtifact"]
+__all__ = ["TimelineArtifact", "TimelineCandidate"]

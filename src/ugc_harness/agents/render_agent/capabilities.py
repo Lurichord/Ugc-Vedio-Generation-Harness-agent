@@ -239,9 +239,10 @@ def _prepare_job_media(
         destination = media_dir / f"{clip.clip_id}{suffix}"
         shutil.copy2(project_dir / clip.media_path, destination)
         payload_clip["media_path"] = destination.relative_to(job_dir).as_posix()
-    audio_destination = audio_dir / "narration.wav"
-    shutil.copy2(project_dir / composition.audio_path, audio_destination)
-    payload["audio_path"] = audio_destination.relative_to(job_dir).as_posix()
+    if composition.audio_path is not None:
+        audio_destination = audio_dir / "narration.wav"
+        shutil.copy2(project_dir / composition.audio_path, audio_destination)
+        payload["audio_path"] = audio_destination.relative_to(job_dir).as_posix()
     return payload
 
 

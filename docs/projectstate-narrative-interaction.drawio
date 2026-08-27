@@ -1,0 +1,163 @@
+<mxfile host="Electron" agent="Cursor">
+  <diagram id="projectstate-design" name="ProjectState字段与Narrative实时交互">
+    <mxGraphModel dx="1695" dy="974" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="6300" pageHeight="3500" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=25;fontColor=#0F172A;" value="&lt;b&gt;ProjectState v2：以 VideoDescription 为主体的项目状态，与 Narrative Agent 的逐 Tool 实时交互&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;描述面（这个视频是什么）成为唯一事实源；执行面退居标签；Agent 只见受控工作副本，提交权始终在 Controller。★＝本次设计新增&lt;/font&gt;" vertex="1">
+          <mxGeometry height="75" width="6000" x="70" y="25" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=15;fillColor=#F8FAFC;strokeColor=#94A3B8;fontSize=15;" value="&lt;b&gt;图例：&lt;/b&gt;蓝色＝描述面 spec（规划 Agent 提议填写）　绿色＝realization（生产 Stage 填写）／状态合入与提交　橙色＝新增机制（工作副本、风格层、续接）　紫色＝LLM 决策与独立 Critic　灰色＝执行面记账（Controller 独占）　红色＝拒绝与修订路径" vertex="1">
+          <mxGeometry height="55" width="6000" x="70" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="zoneA" parent="1" style="swimlane;html=1;rounded=1;startSize=55;horizontal=1;fillColor=#F8FAFC;strokeColor=#334155;strokeWidth=3;fontColor=#0F172A;fontStyle=1;fontSize=22;" value="PROJECTSTATE v2（真实账本：Controller 独占写入，project_state.json）" vertex="1">
+          <mxGeometry height="2880" width="2780" x="70" y="225" as="geometry" />
+        </mxCell>
+        <mxCell id="exec1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;video: VideoState（阶段聚合视图）&lt;/b&gt;&lt;br&gt;state_version + 七个 *_status 字段全保留（narrative / script / voice / editorial / asset / timeline / render）&lt;br&gt;语义升级：shot 路线下由 description.shots 的明细&lt;b&gt;单向派生&lt;/b&gt;，禁止反向写&lt;/font&gt;" vertex="1">
+          <mxGeometry height="190" width="860" x="100" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="exec2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;execution: 元素状态标签★&lt;/b&gt;&lt;br&gt;elements: dict[ref → ElementStatus]&lt;br&gt;ElementStatus{status, version, last_error, attempts, generation_job_id, cost_usd}&lt;br&gt;ref 与描述元素一一对应（beat:b3 / scene:s2 / shot:shot_5…）&lt;/font&gt;" vertex="1">
+          <mxGeometry height="190" width="900" x="990" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="exec3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;dependency_graph / trajectory / runtime_context&lt;/b&gt;&lt;br&gt;图节点 ref ＝ 描述元素 ref（不再两套账）&lt;br&gt;新增节点：shot_contract / shot_video / shot_narration / shot_clip★&lt;br&gt;RepairScheduler 零改动覆盖 drama、tutorial&lt;/font&gt;" vertex="1">
+          <mxGeometry height="190" width="900" x="1920" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="descZone" parent="1" style="swimlane;html=1;rounded=1;startSize=55;horizontal=1;fillColor=#EFF6FF;strokeColor=#2563EB;strokeWidth=3;fontColor=#1E3A8A;fontStyle=1;fontSize=22;" value="description: VideoDescription（视频描述文档＝唯一事实源，磁盘 artifact 降级为导出视图）" vertex="1">
+          <mxGeometry height="2520" width="2720" x="100" y="520" as="geometry" />
+        </mxCell>
+        <mxCell id="L-intent" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;intent: VideoIntent（意图层，brief 解析后基本只读）&lt;/b&gt;&lt;br&gt;format_id（auto 已解析掉）｜topic｜one_sentence_thesis（从 planning 上提）&lt;br&gt;promise★：看完观众得到什么，critic 验收 hook 兑现的锚点&lt;br&gt;audience{description, knowledge_level}｜communication{goal, tone[], creator_persona}&lt;br&gt;target{platform, duration_target_ms, aspect_ratio, language}&lt;br&gt;content_policy（三条红线）｜presentation: VideoProfileDecision（a_roll/b_roll/ab_roll）&lt;/font&gt;" vertex="1">
+          <mxGeometry height="280" width="1300" x="130" y="600" as="geometry" />
+        </mxCell>
+        <mxCell id="L-world" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;world: VideoWorld（世界层）&lt;/b&gt;&lt;br&gt;state: VideoWorldState（现有原样：topic_frame, entities[], claims[], causal_links[], open_questions[], narrative_boundaries[]）&lt;br&gt;&lt;b&gt;cast[]★（演员表，从 drama planning 上提为跨阶段资产）&lt;/b&gt;&lt;br&gt;character_id（须对应 entity）｜name｜role: narrator | performer&lt;br&gt;description｜dramatic_objective｜appearance_constraints[]（跨镜一致性）&lt;br&gt;voice_constraints[]｜voice_profile（narrator 用）&lt;/font&gt;" vertex="1">
+          <mxGeometry height="280" width="1300" x="1490" y="600" as="geometry" />
+        </mxCell>
+        <mxCell id="L-visual" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;visual_language: VisualLanguage★（全局视觉风格锚点）&lt;/b&gt;&lt;br&gt;style_keywords[]｜color_mood｜lighting?｜camera_style?&lt;br&gt;reference_notes[]｜negative_constraints[]（明确不要什么）&lt;br&gt;compile_shots 编译 generation_prompt 时必须引用 → 解决跨镜风格漂移&lt;/font&gt;" vertex="1">
+          <mxGeometry height="190" width="1300" x="130" y="910" as="geometry" />
+        </mxCell>
+        <mxCell id="L-sound" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=14;fontStyle=1;dashed=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;sound_design: SoundDesign★（占位，等 BGM/混音能力上线再填）&lt;/b&gt;&lt;br&gt;bgm?{style, mood, anchor_refs[], ducking 规则}｜sfx_cues[]{anchor_ref, effect}&lt;br&gt;层级与 ref 语法现在定死，字段最小集合&lt;/font&gt;" vertex="1">
+          <mxGeometry height="190" width="1300" x="1490" y="910" as="geometry" />
+        </mxCell>
+        <mxCell id="L-structure" parent="1" style="swimlane;html=1;rounded=1;startSize=50;horizontal=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontColor=#1E3A8A;fontStyle=1;fontSize=19;" value="structure: VideoStructure（结构层：判别联合 kind，格式差异全部收在这一层）" vertex="1">
+          <mxGeometry height="600" width="2660" x="130" y="1130" as="geometry" />
+        </mxCell>
+        <mxCell id="st-ex" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#EFF6FF;strokeColor=#2563EB;fontSize=13;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;ExplainerStructure&lt;/b&gt;&lt;br&gt;narrative_pattern&lt;br&gt;&lt;b style=&quot;&quot;&gt;sections[3]&lt;/b&gt;：role(hook|body|close), target_duration_ms, goal, attention_strategy&lt;br&gt;&lt;b style=&quot;&quot;&gt;beats[6..24]&lt;/b&gt;：section_id, order, semantic_goal, discourse_role, relation_to_previous, target_effect, target_duration_ms, audience_delta{knowledge_added, belief_update, question_added/resolved, emotion_target}, evidence_need{required, claim_to_verify, acceptable_source_types}, visual_intent_hint&lt;/font&gt;" vertex="1">
+          <mxGeometry height="490" width="850" x="160" y="1210" as="geometry" />
+        </mxCell>
+        <mxCell id="st-dr" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#EFF6FF;strokeColor=#2563EB;fontSize=13;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;DramaStructure&lt;/b&gt;&lt;br&gt;premise（characters 已上提到 world.cast）&lt;br&gt;&lt;b style=&quot;&quot;&gt;scenes[2..12]&lt;/b&gt;：order, location_id, purpose, character_ids[], emotional_turn?, continuity_constraints[]&lt;br&gt;&lt;b style=&quot;&quot;&gt;actions[4..24]&lt;/b&gt;：order, scene_id, description, character_ids[], objective?, reaction?, &lt;b style=&quot;&quot;&gt;dialogue_lines[]（唯一台词源，shot payload 改为引用）&lt;/b&gt;, state_changes[], camera_instruction, ambient_audio?, target_duration_ms&lt;/font&gt;" vertex="1">
+          <mxGeometry height="490" width="850" x="1030" y="1210" as="geometry" />
+        </mxCell>
+        <mxCell id="st-tu" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#EFF6FF;strokeColor=#2563EB;fontSize=13;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;TutorialStructure&lt;/b&gt;&lt;br&gt;objective｜&lt;b style=&quot;&quot;&gt;result★&lt;/b&gt;{description 成品长什么样, success_criteria[] 怎么判定做成}&lt;br&gt;materials[]{material_id, name, quantity?}｜tools[]&lt;br&gt;&lt;b style=&quot;&quot;&gt;steps[]&lt;/b&gt;：order, instruction, input_state?, expected_result?, visual_evidence[], common_mistakes[], safety_constraints[]&lt;br&gt;&lt;b style=&quot;&quot;&gt;actions[]&lt;/b&gt;：step_id, description, subject_ref?, critical_detail?, target_duration_ms&lt;br&gt;coverage_requirements[]&lt;/font&gt;" vertex="1">
+          <mxGeometry height="490" width="860" x="1900" y="1210" as="geometry" />
+        </mxCell>
+        <mxCell id="L-voice" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;voice: VoiceDesign?（声音层；drama＝None，台词在 structure.actions）&lt;/b&gt;&lt;br&gt;speaker?: VoiceSpeaker（provider, voice_id, language, persona, character_id → world.cast）&lt;br&gt;global_settings（encoding, sample_rate, channels, base_speed_ratio, volume_ratio）&lt;br&gt;&lt;b style=&quot;&quot;&gt;utterances[]（合并 ScriptSegment＋VoiceSegmentPlan）&lt;/b&gt;：utterance_id, anchor_ref（beat:|step:）, placement(full|before/during/after_action), text, delivery{speech_act, emphasis_words, pause_before/after_ms, energy}&lt;br&gt;&lt;font color=&quot;#15803D&quot;&gt;&lt;b style=&quot;&quot;&gt;realization：&lt;/b&gt;utterance.audio_segment?{file, start_ms, end_ms, duration_ms}；narration_audio?{audio_file, duration_ms, sample_rate, channels}；alignment?{coverage, word_count}（词级时间戳留磁盘）&lt;/font&gt;&lt;/font&gt;" vertex="1">
+          <mxGeometry height="480" width="1300" x="130" y="1760" as="geometry" />
+        </mxCell>
+        <mxCell id="L-shots" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;shots: list[ShotDescription]（镜头层：三格式统一货币）&lt;/b&gt;&lt;br&gt;&lt;b style=&quot;&quot;&gt;spec（＝现有 ProductionShot）&lt;/b&gt;：shot_id, order, shot_kind, purpose, source_refs[] → 结构层, world_state_before/after_ref?, visual（判别：explainer|generated_scene|procedure_demo）, audio（判别：external_narration|embedded_in_video|mixed）, timing{duration_driver, target_duration_ms?}, payload（判别）&lt;br&gt;&lt;font color=&quot;#C2410C&quot;&gt;&lt;b&gt;continuity★&lt;/b&gt;{join: fresh|continue_from_previous, previous_shot_id?}——尾帧续接是生产约束不是剪辑转场；同 scene/step 且机位不变 → continue，换场景/换机位 → fresh&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#15803D&quot;&gt;&lt;b style=&quot;&quot;&gt;realization：&lt;/b&gt;media?{modality: ai_video|composed, local_path?, sha256?, duration_ms?, generator_model?, generation_prompt?, generation_job_id?, generation_cost_usd?}（explainer＝composed，画面在时间线合成）&lt;/font&gt;&lt;/font&gt;" vertex="1">
+          <mxGeometry height="480" width="1300" x="1490" y="1760" as="geometry" />
+        </mxCell>
+        <mxCell id="L-timeline" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;timeline: TimelineDescription?（成片层）&lt;/b&gt;&lt;br&gt;canvas_width 1080｜canvas_height 1920｜fps 30｜duration_ms｜audio_file?（口播轨，drama＝None）&lt;br&gt;&lt;b style=&quot;&quot;&gt;clips[]&lt;/b&gt;：clip_id, &lt;b style=&quot;&quot;&gt;shot_ref（统一锚点）&lt;/b&gt;, timeline_start/end_ms, content_start/end_ms, playback_path, playback_modality(image|video|ai_video), playback_policy?, audio_mode(narration_over|embedded_in_video|mixed), source_asset_id?, derivative_id?, &lt;font color=&quot;#C2410C&quot;&gt;transition_in?★（仅 explainer；drama/tutorial 恒硬切＝not_required）&lt;/font&gt;&lt;br&gt;captions[]{anchor_ref, start/end_ms, text, word_ids[], style}｜overlays[]{overlay_type: 溯源|AI披露|解读标签＋title_card/花字/步骤进度★扩展}｜transforms[]{fit_mode, motion_preset, focal, scale, safe_area}&lt;br&gt;校验沿用：clip 连续、从 0 开始、覆盖 duration_ms&lt;/font&gt;" vertex="1">
+          <mxGeometry height="480" width="1300" x="130" y="2270" as="geometry" />
+        </mxCell>
+        <mxCell id="L-deliverable" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;deliverable: Deliverable?（交付层）&lt;/b&gt;&lt;br&gt;&lt;b style=&quot;&quot;&gt;publish&lt;/b&gt;{title_options[]（从 ScriptArtifact 移入：标题是交付物属性）, description?, hashtags[], cover?★ 封面}&lt;br&gt;disclosures[]（必须烧入的声明：AI 生成披露等）&lt;br&gt;&lt;font color=&quot;#15803D&quot;&gt;&lt;b style=&quot;&quot;&gt;realization：&lt;/b&gt;video_file?, sha256?, duration_ms?, width?, height?, fps?, renderer?, rendered_at?&lt;/font&gt;&lt;/font&gt;" vertex="1">
+          <mxGeometry height="480" width="1300" x="1490" y="2270" as="geometry" />
+        </mxCell>
+        <mxCell id="L-rules" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;横向约定（贯穿所有层）&lt;/b&gt;　①统一 ref 语法：beat:b3 / scene:s2 / action:a5 / step:s1 / utterance:u4 / shot:shot_3 / clip:c2，跨层引用与依赖图节点同一套　②瘦身原则：词级时间戳、媒体字节不进文档（存磁盘，文档存路径＋sha256），标准＝有没有 Agent 要看着它做决策　③锁定规则：realization 填充后对应 spec 锁定，改 spec ⇒ 依赖失效 → 重新生产 realization&lt;/font&gt;" vertex="1">
+          <mxGeometry height="200" width="2660" x="130" y="2780" as="geometry" />
+        </mxCell>
+        <mxCell id="zoneB" parent="1" style="swimlane;html=1;rounded=1;startSize=55;horizontal=1;fillColor=#FFFBEB;strokeColor=#B45309;strokeWidth=3;fontColor=#78350F;fontStyle=1;fontSize=22;" value="NARRATIVE AGENT × PROJECTSTATE 实时交互（每执行一个 Tool 交互一次状态；真实账本全程冻结只读）" vertex="1">
+          <mxGeometry height="2100" width="3230" x="2920" y="225" as="geometry" />
+        </mxCell>
+        <mxCell id="b1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;1　Controller 派发任务＋投影 StateView&lt;/b&gt;&lt;br&gt;create_task → TaskEnvelope（契约不变）&lt;br&gt;&lt;b&gt;StateView（只读，按 scope 裁剪）&lt;/b&gt;：state_version, format_id, scope 内 description 片段, pending_objectives（由 required_outputs 推导）, budget_remaining&lt;br&gt;修复任务：只含 target_refs 相关片段，scope 外物理隔离&lt;/font&gt;" vertex="1">
+          <mxGeometry height="250" width="1000" x="2970" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="b2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;2　初始化 ExecutionBoard★（工作副本）&lt;/b&gt;&lt;br&gt;description 的 scope 内可变副本，活在一次 run() 里，任务结束即弃&lt;br&gt;Agent 全程只见 Board，不见真实账本&lt;br&gt;等价于 git 的 working tree；commit 权在 Controller&lt;/font&gt;" vertex="1">
+          <mxGeometry height="250" width="1000" x="4020" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="b8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;Tool → 文档写入路径映射（提议目标）&lt;/b&gt;&lt;br&gt;drama.design_world → world.state ＋ world.cast&lt;br&gt;drama.plan_story → structure.premise ＋ scenes&lt;br&gt;drama.expand_scenes → structure.actions&lt;br&gt;explainer.plan_sections → structure.sections&lt;br&gt;explainer.expand_beats → structure.beats&lt;br&gt;explainer.write_script → voice.utterances&lt;br&gt;tutorial.define_result → structure.result ＋ materials&lt;br&gt;tutorial.plan_steps → structure.steps ＋ actions&lt;br&gt;tutorial.plan_explanations → voice.utterances&lt;br&gt;*.compile_shots → shots[].spec ＋ continuity★（必须引用 visual_language★）&lt;br&gt;submit_candidate → 候选定稿，退出循环&lt;/font&gt;" vertex="1">
+          <mxGeometry height="560" width="1000" x="5070" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="b3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;3　循环开头：注入最新视图&lt;/b&gt;&lt;br&gt;把 Board 当前状态摘要作为 user 消息追加进 messages[]：&lt;br&gt;文档哪些层已填实／还空着、pending_objectives、剩余预算&lt;br&gt;规划依据从&quot;翻聊天记录&quot;变成&quot;看逐步变实的文档&quot;&lt;/font&gt;" vertex="1">
+          <mxGeometry height="230" width="1000" x="2970" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="b4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;4　模型规划下一步&lt;/b&gt;&lt;br&gt;model.choose_tool(messages, model_tools)&lt;br&gt;返回 1 个 ModelToolCall{name, arguments}&lt;br&gt;生成／重做／修复／提交，由模型自主决定&lt;/font&gt;" vertex="1">
+          <mxGeometry height="230" width="1000" x="4020" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="b5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;5　Harness 门禁&lt;/b&gt;&lt;br&gt;tool ∈ task.allowed_tools ?&lt;br&gt;len(actions) &amp;lt; budget.max_steps ?&lt;br&gt;违规 → 拒绝该步／budget_exhausted&lt;/font&gt;" vertex="1">
+          <mxGeometry height="230" width="1000" x="5070" y="940" as="geometry" />
+        </mxCell>
+        <mxCell id="b6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;6　执行 MCP Tool&lt;/b&gt;&lt;br&gt;tool 读 Board 中相关文档片段作为输入&lt;br&gt;产出候选内容（结构块／脚本段／shot 列表…）&lt;br&gt;错误原样回灌 messages，模型自行决定修复&lt;/font&gt;" vertex="1">
+          <mxGeometry height="230" width="1000" x="2970" y="940" as="geometry" />
+        </mxCell>
+        <mxCell id="b7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;7　提议合入 ExecutionBoard（每 Tool 一次状态交互）&lt;/b&gt;&lt;br&gt;tool 输出按映射表作为 patch 合入工作副本&lt;br&gt;合入前校验：Pydantic schema＋ref 引用存在＋格式对齐&lt;br&gt;刷新 pending_objectives；登记 ActionRecord&lt;br&gt;→ 回到 3，Agent 看着新视图规划下一步&lt;/font&gt;" vertex="1">
+          <mxGeometry height="230" width="1000" x="4020" y="940" as="geometry" />
+        </mxCell>
+        <mxCell id="b9" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;8　required_outputs 齐了？&lt;/b&gt;&lt;br&gt;模型自主调用 submit_candidate&lt;br&gt;否 → 继续循环（预算内）&lt;/font&gt;" vertex="1">
+          <mxGeometry height="220" width="1000" x="2970" y="1250" as="geometry" />
+        </mxCell>
+        <mxCell id="b10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;9　Agent 返回（仍然只是提议）&lt;/b&gt;&lt;br&gt;NarrativeCandidate（Board 定稿内容）&lt;br&gt;AgentResult{actions[], artifact_refs[], 提议 StatePatch, evaluation_target}&lt;/font&gt;" vertex="1">
+          <mxGeometry height="220" width="1000" x="4020" y="1250" as="geometry" />
+        </mxCell>
+        <mxCell id="b11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;10　Controller 验收&lt;/b&gt;&lt;br&gt;task_id / input_hash / state_version 一致性&lt;br&gt;StatePatch 白名单校验（越权路径直接拒绝）&lt;br&gt;required_outputs 完整性＋格式 schema 对齐&lt;/font&gt;" vertex="1">
+          <mxGeometry height="250" width="1000" x="2970" y="1550" as="geometry" />
+        </mxCell>
+        <mxCell id="b12" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;11　独立 Critic 评审&lt;/b&gt;&lt;br&gt;NarrativeCritic.evaluate(候选)&lt;br&gt;→ EvaluationResult{passed, issues[]}&lt;br&gt;评审对象是最终候选文档，不干预循环中间步&lt;/font&gt;" vertex="1">
+          <mxGeometry height="250" width="1000" x="4020" y="1550" as="geometry" />
+        </mxCell>
+        <mxCell id="b13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;12　commit / reject（唯一写入口）&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#15803D&quot;&gt;&lt;b&gt;passed：&lt;/b&gt;Board 合入 ProjectState.description；依赖图按元素级 ref commit_batch；bump state_version；transition=advance&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#B91C1C&quot;&gt;&lt;b&gt;failed：&lt;/b&gt;reject_update（候选 ref 记入拒绝）；transition=revise → 带 issues 重新派发&lt;/font&gt;&lt;/font&gt;" vertex="1">
+          <mxGeometry height="250" width="1000" x="5070" y="1550" as="geometry" />
+        </mxCell>
+        <mxCell id="b14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;&lt;b&gt;协议对其他环节的推广&lt;/b&gt;　voice / editorial / asset / timeline / render 同协议接入：读 StateView → 干活 → 提议 realization patch → Controller 落账。shot 阶段（drama/tutorial）为确定性 Stage，不加 LLM 循环，但&lt;b&gt;每处理完一个 shot 就落一次该 shot 的 realization 与 execution 标签&lt;/b&gt;——支持断点续跑、单镜重试、失败精确定位。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="170" width="3100" x="2970" y="1880" as="geometry" />
+        </mxCell>
+        <mxCell id="edA" edge="1" parent="1" source="descZone" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#64748B;fontSize=17;fontStyle=1;fontColor=#334155;exitX=1;exitY=0.25;entryX=0;entryY=0.5;" target="b1" value="投影：只读裁剪">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed1" edge="1" parent="1" source="b1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#2563EB;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="b2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed2" edge="1" parent="1" source="b2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#2563EB;exitX=0.25;exitY=1;entryX=0.5;entryY=0;" target="b3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed3" edge="1" parent="1" source="b3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#2563EB;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="b4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed4" edge="1" parent="1" source="b4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#2563EB;exitX=1;exitY=0.5;entryX=0.5;entryY=0;" target="b5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed5" edge="1" parent="1" source="b5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#2563EB;fontSize=16;fontStyle=1;fontColor=#1D4ED8;exitX=0;exitY=0.5;entryX=1;entryY=0.25;" target="b6" value="放行">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed6" edge="1" parent="1" source="b6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#16A34A;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="b7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed7" edge="1" parent="1" source="b7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#16A34A;dashed=1;fontSize=17;fontStyle=1;fontColor=#15803D;exitX=0;exitY=0.25;entryX=1;entryY=0.5;" target="b3" value="循环：刷新视图后回到 3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed8" edge="1" parent="1" source="b7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#2563EB;exitX=0.25;exitY=1;entryX=0.5;entryY=0;" target="b9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed9" edge="1" parent="1" source="b9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#16A34A;fontSize=16;fontStyle=1;fontColor=#15803D;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="b10" value="submit_candidate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed10" edge="1" parent="1" source="b10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#2563EB;exitX=0.25;exitY=1;entryX=0.5;entryY=0;" target="b11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed11" edge="1" parent="1" source="b11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#7C3AED;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="b12">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed12" edge="1" parent="1" source="b12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#16A34A;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="b13">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed13" edge="1" parent="1" source="b13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=4;strokeColor=#16A34A;fontSize=18;fontStyle=1;fontColor=#15803D;exitX=0.5;exitY=1;entryX=1;entryY=0.75;" target="descZone" value="passed：Controller commit（唯一写入口）＋ bump state_version">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed14" edge="1" parent="1" source="b13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#DC2626;dashed=1;fontSize=17;fontStyle=1;fontColor=#B91C1C;exitX=0.75;exitY=0;entryX=0.75;entryY=1;" target="b8" value="failed：revise，带 issues 重新派发">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed15" edge="1" parent="1" source="b8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=3;strokeColor=#EA580C;dashed=1;fontSize=16;fontStyle=1;fontColor=#C2410C;exitX=0;exitY=0.75;entryX=1;entryY=0.25;" target="b7" value="按映射写入对应层">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

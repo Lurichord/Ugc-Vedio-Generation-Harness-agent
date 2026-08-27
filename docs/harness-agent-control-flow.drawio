@@ -1,0 +1,222 @@
+<mxfile host="Electron" agent="Codex">
+  <diagram id="central-harness" name="Harness中央编排与Agent交互">
+    <mxGraphModel dx="1695" dy="974" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="5600" pageHeight="3700" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=25;fontColor=#0F172A;" value="&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;蓝线发送 TaskEnvelope + 领域输入，绿线返回 Candidate + AgentResult。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="75" width="5360" x="70" y="25" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=15;fillColor=#F8FAFC;strokeColor=#94A3B8;fontSize=15;" value="&lt;b&gt;图例：&lt;/b&gt;　蓝色实线＝Harness 调度　绿色实线＝Agent 返回候选　紫色＝Critic / 验收　红色＝返修　橙色＝Format 分流　灰色＝正式状态读写" vertex="1">
+          <mxGeometry height="55" width="5360" x="70" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="task-ref" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F8FAFC;strokeColor=#64748B;strokeWidth=2;fontSize=15;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;TaskEnvelope 数据结构&lt;/b&gt;&lt;br&gt;task_id / agent / goal / scope: TaskScope&lt;br&gt;based_on_state_version / format_id / agent_instructions&lt;br&gt;allowed_tools[] / required_outputs[] / forbidden_actions[]&lt;br&gt;acceptance_criteria[] / budget: TaskBudget / input_hash / dependency_snapshot[]&lt;br&gt;&lt;b style=&quot;&quot;&gt;TaskScope：&lt;/b&gt;project_id / shot_ids / section_ids / beat_ids / script_segment_ids / visual_request_ids / asset_ids / target_refs&lt;/font&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="245" width="1660" x="70" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="result-ref" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#F8FAFC;strokeColor=#64748B;strokeWidth=2;fontSize=15;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;AgentResult 数据结构参考（不参与流程）&lt;/b&gt;&lt;br&gt;task_id / status / state_version_used / input_hash&lt;br&gt;actions: ActionRecord[] / artifact_refs[] / state_patch: StatePatch&lt;br&gt;evaluation_target / error&lt;br&gt;&lt;b&gt;ActionRecord：&lt;/b&gt;tool / result / reason / duration_ms / cost_usd&lt;br&gt;StatePatch 只是建议；Agent 无正式状态写权限。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="245" width="1660" x="3770" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="harness" parent="1" style="swimlane;html=1;rounded=1;startSize=60;horizontal=1;fillColor=#EAF2FF;strokeColor=#2563EB;strokeWidth=3;fontColor=#1E3A8A;fontStyle=1;fontSize=24;" value="HARNESS" vertex="1">
+          <mxGeometry height="2920" width="1800" x="1850" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="kernel" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=13;fillColor=#BFDBFE;strokeColor=#1D4ED8;fontColor=#1E3A8A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;统一执行内核：所有阶段使用同一套 Harness 控制&lt;/b&gt;&lt;br&gt;① Load 正式状态与上游产物 → ② Build TaskEnvelope → ③ Precheck project_id / status / state_version / input_hash / dependency snapshot → ④ Dispatch Agent → ⑤ Validate AgentResult + Candidate Schema + required_outputs → ⑥ Independent Critic → ⑦ passed 才 Commit Artifact / 状态 / 依赖图 / 轨迹 → ⑧ Router 选择下一阶段；failed 创建 revision/repair TaskEnvelope&lt;br&gt;&lt;font color=&quot;#475569&quot;&gt;关键保护：state_version 防并发覆盖；input_hash 发现输入漂移；dependency snapshot 防止基于过期上游继续生产；Commit 表示验收后原子写入正式状态。&lt;/font&gt;&lt;/font&gt;" vertex="1">
+          <mxGeometry height="210" width="1640" x="1930" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="state" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#F1F5F9;strokeColor=#64748B;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;Harness-owned 正式状态&lt;/b&gt;&lt;br&gt;ProjectState{runtime_context, world_state, video_profile, video, dependency_graph, trajectory}&lt;br&gt;Artifact Store / media / run records&lt;br&gt;（Agent 只能读授权输入，不能直接 Commit）&lt;/font&gt;" vertex="1">
+          <mxGeometry height="155" width="1360" x="2070" y="510" as="geometry" />
+        </mxCell>
+        <mxCell id="phase-n" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;1　Narrative Harness 处理方法&lt;/b&gt;&lt;br&gt;resolve(production_mode) &lt;font color=&quot;#475569&quot;&gt;按视频类型加载 FormatPack 约束&lt;/font&gt; → create_task() 生成 TaskEnvelope&lt;br&gt;校验 project_id / state_version / input_hash / format_id → agent.run()&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;br&gt;校验 AgentResult、required_outputs 和 planning_schema &lt;font color=&quot;#475569&quot;&gt;（产物结构须匹配当前 Format）&lt;/font&gt; → NarrativeCritic.evaluate()&lt;br&gt;passed 后构造 NarrativeArtifact → commit_batch() → 更新 world_state / video_profile / statuses → resolve_production_route() &lt;font color=&quot;#475569&quot;&gt;选择后续生产链&lt;/font&gt;&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="165" width="1360" x="2070" y="725" as="geometry" />
+        </mxCell>
+        <mxCell id="route" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontColor=#9A3412;fontSize=13;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b style=&quot;&quot;&gt;Format Route&lt;/b&gt;&lt;br&gt;读取已提交 shots[].shot_kind + visual/audio contract&lt;br&gt;&lt;font color=&quot;#7C2D12&quot;&gt;它们决定素材来源与音频归属&lt;/font&gt;&lt;br&gt;explainer → Voice　|　drama/tutorial → Shot AI Video stages&lt;/font&gt;" vertex="1">
+          <mxGeometry height="165" width="1000" x="2250" y="920" as="geometry" />
+        </mxCell>
+        <mxCell id="phase-v" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;2　Voice Harness 处理方法（explainer）&lt;/b&gt;&lt;br&gt;create_task() 根据 Narrative 和当前版本生成 Voice TaskEnvelope&lt;br&gt;校验 voice_status / project_id / state_version / Narrative input_hash → agent.run()&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;br&gt;校验 AgentResult 与音频候选 → VoiceCritic.evaluate()&lt;br&gt;passed 后提交 VoiceArtifact → commit_batch() → voice_status=passed / editorial_status=ready → 记录 Transition &lt;font color=&quot;#475569&quot;&gt;（状态迁移）&lt;/font&gt;与 Trajectory &lt;font color=&quot;#475569&quot;&gt;（完整运行审计）&lt;/font&gt;&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="165" width="1360" x="2070" y="1105" as="geometry" />
+        </mxCell>
+        <mxCell id="phase-e" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;3　Editorial Harness 处理方法（explainer）&lt;/b&gt;&lt;br&gt;create_task() 汇总 Narrative / Voice 依赖并限定 Editorial tools 与 scope &lt;font color=&quot;#475569&quot;&gt;（限制工具和可改对象）&lt;/font&gt;&lt;br&gt;校验依赖 current、state_version 和组合 input_hash → 注入 feedback/current_artifact &lt;font color=&quot;#475569&quot;&gt;（返修意见与当前版本）&lt;/font&gt; → agent.run()&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;br&gt;校验 AgentResult、Claim 引用和 VisualRequirement 覆盖 → EditorialCritic.evaluate()&lt;br&gt;passed 后提交 EditorialArtifact → 更新 editorial_status / asset_status → commit_batch() 并记录执行轨迹&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="165" width="1360" x="2070" y="1330" as="geometry" />
+        </mxCell>
+        <mxCell id="phase-a" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;4　Asset Harness 处理方法（explainer）&lt;/b&gt;&lt;br&gt;create_task() / create_repair_task() 选择生成、修订或局部修复任务&lt;br&gt;校验 asset_status / state_version / Editorial+Voice input_hash / dependency snapshot → agent.run()&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;br&gt;校验 AgentResult、文件和 visual resolution &lt;font color=&quot;#475569&quot;&gt;（每个视觉需求都要落到可用媒体）&lt;/font&gt; → AssetCritic.evaluate()&lt;br&gt;repair 时 select_repair_commits() &lt;font color=&quot;#475569&quot;&gt;只挑选 scope 内可提交变化&lt;/font&gt;；passed 后 commit_batch() → asset_status=passed / timeline_status=ready&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="175" width="1360" x="2070" y="1555" as="geometry" />
+        </mxCell>
+        <mxCell id="phase-t" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;5　Timeline Harness 处理方法（explainer）&lt;/b&gt;&lt;br&gt;create_task() 汇总 Voice / Editorial / Asset 并生成 Timeline TaskEnvelope&lt;br&gt;校验 timeline_status / state_version / input_hash / 所有播放媒体存在 → agent.run()&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;br&gt;校验 AgentResult、clip 连续性和完整音频覆盖 &lt;font color=&quot;#475569&quot;&gt;（避免空帧、重叠和声音缺口）&lt;/font&gt; → TimelineCritic.evaluate()&lt;br&gt;passed 后提交 TimelineArtifact → commit_batch() → timeline_status=passed / render_status=ready → 记录 Transition&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="165" width="1360" x="2070" y="1790" as="geometry" />
+        </mxCell>
+        <mxCell id="phase-r" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#DBEAFE;strokeColor=#2563EB;fontColor=#1E3A8A;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;b&gt;6　Render Harness 处理方法（explainer）&lt;/b&gt;&lt;br&gt;create_task() 根据 Voice / Timeline 生成 Render TaskEnvelope&lt;br&gt;校验 render_status / state_version / input_hash / timeline media files → agent.run()&lt;/font&gt;&lt;div&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;&lt;br&gt;校验 AgentResult 与 RenderCandidate → RenderCritic.evaluate() 检查时长、分辨率、FPS 和音视频流&lt;br&gt;passed 后提交 RenderArtifact 与 MP4 → commit_batch() → render_status=passed → Transition 到 project_complete &lt;font color=&quot;#475569&quot;&gt;（终态，不再调度下游阶段）&lt;/font&gt;&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="165" width="1360" x="2070" y="2015" as="geometry" />
+        </mxCell>
+        <mxCell id="repair" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=13;fillColor=#FEE2E2;strokeColor=#DC2626;strokeWidth=2;fontColor=#991B1B;fontSize=14;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;Revision / Repair Controller&lt;/b&gt;&lt;br&gt;EvaluationResult.issues[] + target_ref → 查询 stale ancestors &lt;font color=&quot;#7F1D1D&quot;&gt;（受影响的过期上游）&lt;/font&gt; / produced_by &lt;font color=&quot;#7F1D1D&quot;&gt;（原产出阶段）&lt;/font&gt;&lt;br&gt;生成 TaskScope.target_refs + dependency_snapshot + repair_input_hash &lt;font color=&quot;#7F1D1D&quot;&gt;（锁定返修范围和输入基线）&lt;/font&gt;&lt;br&gt;新 TaskEnvelope 返回对应 Phase；scope 外 semantic hash 必须不变 &lt;font color=&quot;#7F1D1D&quot;&gt;（证明未越权修改）&lt;/font&gt;&lt;br&gt;返修仍重新经过 Result Validation → Critic → Commit&lt;/font&gt;" vertex="1">
+          <mxGeometry height="220" width="1360" x="2070" y="2255" as="geometry" />
+        </mxCell>
+        <mxCell id="shot" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=13;fillColor=#FFEDD5;strokeColor=#EA580C;strokeWidth=2;fontColor=#9A3412;fontSize=13;fontStyle=1;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;Drama / Tutorial 确定性生产路线（当前不是 Agent）&lt;/b&gt;&lt;br&gt;Shot Asset Harness Stage：NarrativeArtifact.shots[] → ShotAssetArtifact{format_id, assets: ShotVideoAsset[], quality} &lt;font color=&quot;#7C2D12&quot;&gt;（逐 Shot 生成 AI Video）&lt;/font&gt;&lt;br&gt;Shot Timeline Harness Stage：NarrativeArtifact + ShotAssetArtifact → ShotTimelineArtifact{duration_ms, clips[]} &lt;font color=&quot;#7C2D12&quot;&gt;（按叙事顺序拼接）&lt;/font&gt;&lt;br&gt;Shot Render Harness Stage：ShotTimelineArtifact → RenderArtifact{source_voice=null, composition, outputs, quality} &lt;font color=&quot;#7C2D12&quot;&gt;（保留视频自带音频）&lt;/font&gt;&lt;br&gt;Harness 仍负责 TaskEnvelope、状态校验、Action 记录和 state_version。&lt;/font&gt;" vertex="1">
+          <mxGeometry height="265" width="1360" x="2070" y="2520" as="geometry" />
+        </mxCell>
+        <mxCell id="complete" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DCFCE7;strokeColor=#15803D;strokeWidth=2;fontColor=#166534;fontSize=15;fontStyle=1;" value="&lt;b&gt;正式出口&lt;/b&gt;&lt;br&gt;RenderArtifact + final.mp4 + preview.mp4&lt;br&gt;ProjectState / DependencyGraph / Trajectory / run records 已提交" vertex="1">
+          <mxGeometry height="130" width="1180" x="2160" y="2850" as="geometry" />
+        </mxCell>
+        <mxCell id="n-agent" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#111827;strokeColor=#000000;fontColor=#FFFFFF;fontSize=20;fontStyle=1;" value="&lt;b&gt;Narrative Agent&lt;/b&gt;" vertex="1">
+          <mxGeometry height="95" width="350" x="1400" y="760" as="geometry" />
+        </mxCell>
+        <mxCell id="n-schema" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFF7ED;strokeColor=#D97706;fontSize=15;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;Narrative Agent I/O&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;Input：&lt;/font&gt;TaskEnvelope + CreativeBrief{project_id, project_name, topic, target, audience, communication, production_mode, video_profile, content_policy} + generation_context&lt;br&gt;&lt;font color=&quot;#166534&quot;&gt;Output：&lt;/font&gt;NarrativeCandidate{world_state?, planning, script?, shots} + AgentResult&lt;br&gt;&lt;b style=&quot;&quot;&gt;NarrativeArtifact：&lt;/b&gt;schema_version, generated_at, model, brief, planning: Explainer|Drama|Tutorial, script: Explainer|Tutorial, shots: ShotPlanArtifact, quality&lt;br&gt;&lt;b style=&quot;&quot;&gt;ProductionShot：&lt;/b&gt;shot_id, order, shot_kind, purpose, source_refs, world_state refs, visual, audio, timing, payload&lt;/font&gt;" vertex="1">
+          <mxGeometry height="280" width="1210" x="70" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="v-agent" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#111827;strokeColor=#000000;fontColor=#FFFFFF;fontSize=20;fontStyle=1;" value="&lt;b&gt;Voice Agent&lt;/b&gt;" vertex="1">
+          <mxGeometry height="95" width="350" x="3750" y="1140" as="geometry" />
+        </mxCell>
+        <mxCell id="v-schema" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFF7ED;strokeColor=#D97706;fontSize=15;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;Voice Agent I/O&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;Input：&lt;/font&gt;TaskEnvelope + NarrativeArtifact + project_dir + voice_id / TTS provider + ProjectState{state_version, voice_status}&lt;br&gt;&lt;font color=&quot;#166534&quot;&gt;Output：&lt;/font&gt;VoiceCandidate + AgentResult&lt;br&gt;&lt;b&gt;VoiceArtifact：&lt;/b&gt;schema_version, generated_at, project_id, source_narrative, voice_plan: VoicePlan, timed_audio: TimedAudio, word_alignment: WordAlignment, realized_beats: RealizedBeat[], quality: VoiceQuality{passed, audio_exists, audio_duration_ms, segment_coverage, word_alignment_coverage, realized_beat_coverage, issues[]}&lt;/font&gt;" vertex="1">
+          <mxGeometry height="280" width="1220" x="4210" y="1045" as="geometry" />
+        </mxCell>
+        <mxCell id="e-agent" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#111827;strokeColor=#000000;fontColor=#FFFFFF;fontSize=20;fontStyle=1;" value="&lt;b&gt;Editorial Agent&lt;/b&gt;" vertex="1">
+          <mxGeometry height="95" width="350" x="1400" y="1365" as="geometry" />
+        </mxCell>
+        <mxCell id="e-schema" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFF7ED;strokeColor=#D97706;fontSize=15;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b style=&quot;&quot;&gt;Editorial Agent I/O&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;Input：&lt;/font&gt;TaskEnvelope + NarrativeArtifact + VoiceArtifact + ProjectState{world_state, video_profile, state_version, editorial_status} + current_artifact + critic_problems/feedback&lt;br&gt;&lt;font color=&quot;#166534&quot;&gt;Output：&lt;/font&gt;EditorialCandidate + AgentResult&lt;br&gt;&lt;b style=&quot;&quot;&gt;EditorialArtifact：&lt;/b&gt;schema_version, generated_at, model, project_id, source_narrative, source_voice, editorial_plan: EditorialPlan{plan_version, project_id, video_profile, claims: ClaimRecord[], visual_requirements: VisualRequirement[]}, quality: EditorialQuality{passed, beat_visual_coverage, claim counts, speaker_presence_ratio, issues[]}&lt;/font&gt;" vertex="1">
+          <mxGeometry height="295" width="1210" x="70" y="1260" as="geometry" />
+        </mxCell>
+        <mxCell id="a-agent" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#111827;strokeColor=#000000;fontColor=#FFFFFF;fontSize=20;fontStyle=1;" value="&lt;b&gt;Asset Agent&lt;/b&gt;" vertex="1">
+          <mxGeometry height="95" width="350" x="3750" y="1595" as="geometry" />
+        </mxCell>
+        <mxCell id="a-schema" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFF7ED;strokeColor=#D97706;fontSize=15;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;Asset Agent I/O&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;Input：&lt;/font&gt;TaskEnvelope + EditorialArtifact + VoiceArtifact + project_dir + provider/analyzer + ProjectState{state_version, asset_status} + current_artifact&lt;br&gt;&lt;font color=&quot;#166534&quot;&gt;Output：&lt;/font&gt;AssetCandidate + AgentResult&lt;br&gt;&lt;b&gt;AssetArtifact：&lt;/b&gt;schema_version, generated_at, project_id, source_editorial, assets: AssetCard[], resolutions: VisualResolution[], inspections: AssetInspection[], prepared_images: PreparedImage[], quality: AssetQuality{passed, visual_request_count, resolved/unresolved_count, resolution_coverage, inspection/preparation counts, issues[]}&lt;/font&gt;" vertex="1">
+          <mxGeometry height="295" width="1220" x="4210" y="1495" as="geometry" />
+        </mxCell>
+        <mxCell id="t-agent" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#111827;strokeColor=#000000;fontColor=#FFFFFF;fontSize=20;fontStyle=1;" value="&lt;b&gt;Timeline Agent&lt;/b&gt;" vertex="1">
+          <mxGeometry height="95" width="350" x="1400" y="1825" as="geometry" />
+        </mxCell>
+        <mxCell id="t-schema" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFF7ED;strokeColor=#D97706;fontSize=15;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;Timeline Agent I/O&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;Input：&lt;/font&gt;TaskEnvelope + VoiceArtifact + EditorialArtifact + AssetArtifact + project_dir + ScreenAnimationProvider + ProjectState{state_version, timeline_status} + current_artifact&lt;br&gt;&lt;font color=&quot;#166534&quot;&gt;Output：&lt;/font&gt;TimelineCandidate + AgentResult&lt;br&gt;&lt;b&gt;TimelineArtifact：&lt;/b&gt;schema_version, generated_at, project_id, source_voice, source_editorial, source_assets, derivatives: DerivedAsset[], timeline: TimelinePlan{canvas_width, canvas_height, fps, audio_file, duration_ms, clips[]}, captions[], visual_transforms[], overlays[], quality: TimelineQuality&lt;/font&gt;" vertex="1">
+          <mxGeometry height="285" width="1210" x="70" y="1725" as="geometry" />
+        </mxCell>
+        <mxCell id="r-agent" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#111827;strokeColor=#000000;fontColor=#FFFFFF;fontSize=20;fontStyle=1;" value="&lt;b&gt;Render Agent&lt;/b&gt;" vertex="1">
+          <mxGeometry height="95" width="350" x="3750" y="2055" as="geometry" />
+        </mxCell>
+        <mxCell id="r-schema" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=12;fillColor=#FFF7ED;strokeColor=#D97706;fontSize=15;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;Render Agent I/O&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#92400E&quot;&gt;Input：&lt;/font&gt;TaskEnvelope + VoiceArtifact + TimelineArtifact + project_dir + RenderCapabilities + ProjectState{state_version, render_status} + timeline media files&lt;br&gt;&lt;font color=&quot;#166534&quot;&gt;Output：&lt;/font&gt;RenderCandidate + AgentResult&lt;br&gt;&lt;b&gt;RenderArtifact：&lt;/b&gt;schema_version, generated_at, project_id, source_voice?, source_timeline, composition: RenderComposition{renderer_version, duration_ms, duration_in_frames, audio_path, clips[], captions[], overlays[]}, outputs: RenderedMedia[], quality: RenderQuality{passed, duration metrics, resolution_correct, fps_correct, audio_present, video_present, coverage, missing_media_count, issues[]}&lt;/font&gt;" vertex="1">
+          <mxGeometry height="305" width="1220" x="4210" y="1955" as="geometry" />
+        </mxCell>
+        <mxCell id="field-guide" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=16;fillColor=#F8FAFC;strokeColor=#64748B;strokeWidth=2;fontSize=18;overflow=fill;" value="&lt;div&gt;&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;&lt;br&gt;&lt;/b&gt;&lt;/font&gt;&lt;/div&gt;&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;&lt;div&gt;&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;&lt;br&gt;&lt;/b&gt;&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;&lt;br&gt;&lt;/b&gt;&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font style=&quot;font-size: 24px;&quot;&gt;&lt;b&gt;&lt;br&gt;&lt;/b&gt;&lt;/font&gt;&lt;/div&gt;关键字段作用&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;br&gt;&lt;br&gt;&lt;table border=&quot;1&quot; cellpadding=&quot;7&quot; cellspacing=&quot;0&quot; style=&quot;border-collapse:collapse;width:100%;font-size:17px;border-color:#CBD5E1;&quot;&gt;&lt;tbody&gt;&lt;tr style=&quot;background-color:#E2E8F0;&quot;&gt;&lt;th style=&quot;width:29%;&quot;&gt;字段&lt;/th&gt;&lt;th style=&quot;width:20%;&quot;&gt;所属对象&lt;/th&gt;&lt;th&gt;功能&lt;/th&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;project_id / task_id&lt;/b&gt;&lt;/td&gt;&lt;td&gt;TaskEnvelope&lt;/td&gt;&lt;td&gt;确定项目边界与单次任务身份，防止结果串到其他项目或任务。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;format_id&lt;/b&gt;&lt;/td&gt;&lt;td&gt;TaskEnvelope&lt;/td&gt;&lt;td&gt;选择 FormatPack、Narrative Schema 以及 explainer / drama / tutorial 后续路线。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;scope.target_refs&lt;/b&gt;&lt;/td&gt;&lt;td&gt;TaskScope&lt;/td&gt;&lt;td&gt;声明本任务允许修改的正式对象；返修 Commit 的硬边界。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;based_on_state_version&lt;/b&gt;&lt;/td&gt;&lt;td&gt;TaskEnvelope&lt;/td&gt;&lt;td&gt;记录派发任务时看到的状态版本，用于提交前乐观并发检查。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;state_version_used&lt;/b&gt;&lt;/td&gt;&lt;td&gt;AgentResult&lt;/td&gt;&lt;td&gt;Agent 回报实际使用的版本；必须与任务基线一致。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;input_hash&lt;/b&gt;&lt;/td&gt;&lt;td&gt;Task / Result&lt;/td&gt;&lt;td&gt;绑定本次输入内容；发现 Agent 运行期间上游产物是否已变化。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;dependency_snapshot[]&lt;/b&gt;&lt;/td&gt;&lt;td&gt;TaskEnvelope&lt;/td&gt;&lt;td&gt;保存关键依赖的版本和哈希，阻止使用过期依赖提交结果。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;allowed_tools[]&lt;/b&gt;&lt;/td&gt;&lt;td&gt;TaskEnvelope&lt;/td&gt;&lt;td&gt;限定 Agent 本次可见、可调用的工具集合。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;required_outputs[]&lt;/b&gt;&lt;/td&gt;&lt;td&gt;TaskEnvelope&lt;/td&gt;&lt;td&gt;定义本任务必须交付的产物；缺失时 Harness 不进入 Commit。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;acceptance_criteria[]&lt;/b&gt;&lt;/td&gt;&lt;td&gt;TaskEnvelope&lt;/td&gt;&lt;td&gt;把业务验收要求传给 Agent，并作为 Critic 检查依据。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;budget&lt;/b&gt;&lt;/td&gt;&lt;td&gt;TaskEnvelope&lt;/td&gt;&lt;td&gt;限制工具步数、时长或成本，防止 Agent 无边界循环。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;actions[]&lt;/b&gt;&lt;/td&gt;&lt;td&gt;AgentResult&lt;/td&gt;&lt;td&gt;记录调用了什么工具、结果、原因、耗时和成本，用于审计与诊断。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;artifact_refs[]&lt;/b&gt;&lt;/td&gt;&lt;td&gt;AgentResult&lt;/td&gt;&lt;td&gt;定位候选产物或媒体文件；不是正式状态本身。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;state_patch&lt;/b&gt;&lt;/td&gt;&lt;td&gt;AgentResult&lt;/td&gt;&lt;td&gt;Agent 对状态更新和失效项的建议；Harness 验收后决定是否应用。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;world_state&lt;/b&gt;&lt;/td&gt;&lt;td&gt;ProjectState&lt;/td&gt;&lt;td&gt;维护角色、物品、地点和连续性事实，供后续阶段读取。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;dependency_graph&lt;/b&gt;&lt;/td&gt;&lt;td&gt;ProjectState&lt;/td&gt;&lt;td&gt;记录产物依赖及失效传播关系，支持定位需要返修的下游。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;trajectory / run records&lt;/b&gt;&lt;/td&gt;&lt;td&gt;ProjectState / Store&lt;/td&gt;&lt;td&gt;保存状态迁移、任务、动作、验收和提交记录，便于复盘。&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;b&gt;shot_kind + visual/audio&lt;/b&gt;&lt;/td&gt;&lt;td&gt;ProductionShot&lt;/td&gt;&lt;td&gt;决定 Shot 走何种素材生产方式，以及音频由 TTS 还是 AI Video 承担。&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;" vertex="1">
+          <mxGeometry height="935" width="1660" x="3770" y="2365" as="geometry" />
+        </mxCell>
+        <mxCell id="f1" edge="1" parent="1" source="state" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#64748B;strokeWidth=2;fontSize=14;" target="phase-n" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f2" edge="1" parent="1" source="phase-n" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="route" value="Narrative committed">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f3" edge="1" parent="1" source="route" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#EA580C;strokeWidth=3;fontSize=14;" target="phase-v" value="explainer">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f4" edge="1" parent="1" source="phase-v" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-e" value="Voice committed">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f5" edge="1" parent="1" source="phase-e" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-a" value="Editorial committed">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f6" edge="1" parent="1" source="phase-a" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-t" value="Asset committed">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f7" edge="1" parent="1" source="phase-t" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-r" value="Timeline committed">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f8" edge="1" parent="1" source="phase-r" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="complete" value="Render committed">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="3500" y="2200" />
+              <mxPoint x="3500" y="2915" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f9" edge="1" parent="1" source="route" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#EA580C;strokeWidth=3;fontSize=14;" target="shot" value="drama / tutorial">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="3500" y="1000" />
+              <mxPoint x="3500" y="2650" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f10" edge="1" parent="1" source="shot" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="complete" value="RenderArtifact + media">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" edge="1" parent="1" source="phase-n" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="n-agent" value="TaskEnvelope + CreativeBrief">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" edge="1" parent="1" source="n-agent" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-n" value="NarrativeCandidate + AgentResult">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1810" y="870" />
+              <mxPoint x="2000" y="870" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="v1" edge="1" parent="1" source="phase-v" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="v-agent" value="TaskEnvelope + NarrativeArtifact">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="v2" edge="1" parent="1" source="v-agent" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-v" value="VoiceCandidate + AgentResult">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="3700" y="1270" />
+              <mxPoint x="3500" y="1270" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="phase-e" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="e-agent" value="TaskEnvelope + Narrative + Voice">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="e-agent" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-e" value="EditorialCandidate + AgentResult">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1810" y="1490" />
+              <mxPoint x="2000" y="1490" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a1" edge="1" parent="1" source="phase-a" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="a-agent" value="TaskEnvelope + Editorial + Voice">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a2" edge="1" parent="1" source="a-agent" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-a" value="AssetCandidate + AgentResult">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="3700" y="1730" />
+              <mxPoint x="3500" y="1730" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="t1" edge="1" parent="1" source="phase-t" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="t-agent" value="TaskEnvelope + Voice + Editorial + Asset">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="t2" edge="1" parent="1" source="t-agent" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-t" value="TimelineCandidate + AgentResult">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1810" y="1970" />
+              <mxPoint x="2000" y="1970" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="r1" edge="1" parent="1" source="phase-r" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#2563EB;strokeWidth=3;fontSize=14;" target="r-agent" value="TaskEnvelope + Voice + Timeline">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r2" edge="1" parent="1" source="r-agent" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#16A34A;strokeWidth=3;fontSize=14;" target="phase-r" value="RenderCandidate + AgentResult">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="3700" y="2185" />
+              <mxPoint x="3500" y="2185" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rev1" edge="1" parent="1" source="phase-a" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#DC2626;strokeWidth=3;fontSize=14;" target="repair" value="passed=false / issues[]">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="3470" y="1750" />
+              <mxPoint x="3470" y="2350" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rev2" edge="1" parent="1" source="repair" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#DC2626;strokeWidth=3;fontSize=14;" target="phase-a" value="revision / repair TaskEnvelope">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2030" y="2350" />
+              <mxPoint x="2030" y="1640" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

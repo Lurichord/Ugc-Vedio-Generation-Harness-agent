@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..profiles.models import VideoProfileDecision
+from .description import VideoDescription
 
 
 class HarnessModel(BaseModel):
@@ -43,6 +43,7 @@ class DependencyGraphState(HarnessModel):
 
 class TaskScope(HarnessModel):
     project_id: str
+    shot_ids: list[str] = Field(default_factory=list)
     section_ids: list[str] = Field(default_factory=list)
     beat_ids: list[str] = Field(default_factory=list)
     script_segment_ids: list[str] = Field(default_factory=list)
@@ -65,7 +66,10 @@ class TaskEnvelope(HarnessModel):
     goal: str
     scope: TaskScope
     based_on_state_version: int = Field(ge=0)
+    format_id: str | None = None
+    agent_instructions: str | None = None
     allowed_tools: list[str] = Field(min_length=1)
+    required_outputs: list[str] = Field(default_factory=list)
     forbidden_actions: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     budget: TaskBudget = Field(default_factory=TaskBudget)
@@ -76,6 +80,8 @@ class TaskEnvelope(HarnessModel):
     def unique_tools(self) -> "TaskEnvelope":
         if len(self.allowed_tools) != len(set(self.allowed_tools)):
             raise ValueError("allowed_tools must not contain duplicates")
+        if len(self.required_outputs) != len(set(self.required_outputs)):
+            raise ValueError("required_outputs must not contain duplicates")
         return self
 
 
@@ -136,72 +142,6 @@ class EvaluationResult(HarnessModel):
     issues: list[CriticIssue] = Field(default_factory=list)
 
 
-class WorldEntity(HarnessModel):
-    entity_id: str
-    name: str
-    kind: Literal[
-        "person", "organization", "place", "product", "concept", "event", "other"
-    ]
-    narrative_role: str
-    description: str
-
-
-class WorldClaim(HarnessModel):
-    claim_id: str
-    statement: str
-    epistemic_status: Literal[
-        "given_by_brief", "to_verify", "interpretation", "hypothesis"
-    ]
-    evidence_required: bool
-
-    @model_validator(mode="after")
-    def require_evidence_for_unverified_fact(self) -> "WorldClaim":
-        if self.epistemic_status == "to_verify" and not self.evidence_required:
-            raise ValueError("to_verify claims must require evidence")
-        return self
-
-
-class CausalLink(HarnessModel):
-    cause: str
-    effect: str
-    explanation: str
-
-
-class ArollVoiceProfile(HarnessModel):
-    gender: Literal["male", "female", "neutral"]
-    age_style: Literal["young", "mature", "senior"]
-    tone: str
-    pace: Literal["slow", "natural", "fast"] = "natural"
-
-
-class ArollCharacter(HarnessModel):
-    character_id: str
-    visual_description: str
-    voice_profile: ArollVoiceProfile
-
-
-class VideoWorldState(HarnessModel):
-    """The content world that must remain coherent throughout this video."""
-
-    topic_frame: str
-    entities: list[WorldEntity] = Field(min_length=1)
-    claims: list[WorldClaim] = Field(min_length=1)
-    causal_links: list[CausalLink] = Field(default_factory=list)
-    open_questions: list[str] = Field(default_factory=list)
-    narrative_boundaries: list[str] = Field(default_factory=list)
-    aroll_character: ArollCharacter | None = None
-
-    @model_validator(mode="after")
-    def require_unique_ids(self) -> "VideoWorldState":
-        entity_ids = [item.entity_id for item in self.entities]
-        claim_ids = [item.claim_id for item in self.claims]
-        if len(entity_ids) != len(set(entity_ids)):
-            raise ValueError("world state entity_id values must be unique")
-        if len(claim_ids) != len(set(claim_ids)):
-            raise ValueError("world state claim_id values must be unique")
-        return self
-
-
 ArtifactStatus = Literal[
     "pending",
     "ready",
@@ -213,6 +153,7 @@ ArtifactStatus = Literal[
     "locked",
     "needs_user_input",
     "needs_revision",
+    "not_required",
 ]
 
 
@@ -289,11 +230,34 @@ class TrajectoryState(HarnessModel):
     phases: dict[str, PhaseTrajectory] = Field(default_factory=dict)
 
 
+class ElementStatus(HarnessModel):
+    """Execution tag for one description element, keyed by its ref."""
+
+    status: ArtifactStatus = "pending"
+    version: int = Field(default=1, ge=1)
+    attempts: int = Field(default=0, ge=0)
+    last_error: str | None = None
+    generation_job_id: str | None = None
+    cost_usd: float | None = Field(default=None, ge=0)
+
+
+class ExecutionState(HarnessModel):
+    """Execution plane: status tags hung on description elements by ref."""
+
+    elements: dict[str, ElementStatus] = Field(default_factory=dict)
+
+
 class ProjectState(HarnessModel):
+    # extra="ignore" tolerates fields written by older schema versions
+    # (world_state / video_profile lived here before the description
+    # document became the single source of truth).
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: str = "project-state.v2"
     runtime_context: RuntimeContext
-    world_state: VideoWorldState
-    video_profile: VideoProfileDecision
     video: VideoState
+    description: VideoDescription | None = None
+    execution: ExecutionState = Field(default_factory=ExecutionState)
     dependency_graph: DependencyGraphState = Field(
         default_factory=DependencyGraphState
     )

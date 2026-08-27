@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, model_validator
 
 from ...shared.models import StrictModel
 from ..editorial_agent.models import AssetModality
+
+VIDEO_FILE_SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv"})
 
 
 class SourceTrace(StrictModel):
@@ -66,6 +69,31 @@ class AssetCard(StrictModel):
             if not self.usability_review.usable:
                 raise ValueError("unusable web media cannot become an AssetCard")
         return self
+
+
+def is_talking_head_video(
+    asset: "AssetCard",
+    resolved_path: Path | None = None,
+) -> bool:
+    """Whether the asset that was actually produced is a talking-head video.
+
+    Editorial planning metadata may say "a_roll", but a failed talking-head
+    direction can fall back to a static image. Frame-continuity chaining must
+    only ever extract frames from a real talking-head video, so callers check
+    the produced asset itself instead of trusting the plan.
+    """
+    if asset.modality != "talking_head":
+        return False
+    looks_like_video = asset.mime_type.lower().startswith("video/") or (
+        Path(asset.local_path).suffix.lower() in VIDEO_FILE_SUFFIXES
+    )
+    if not looks_like_video:
+        return False
+    if resolved_path is not None and not (
+        resolved_path.is_file() and resolved_path.stat().st_size
+    ):
+        return False
+    return True
 
 
 class DirectionAttempt(StrictModel):
@@ -132,3 +160,12 @@ class AssetArtifact(StrictModel):
 from .image_models import AssetInspection, PreparedImage
 
 AssetArtifact.model_rebuild()
+
+
+class AssetCandidate(StrictModel):
+    """Uncommitted asset stage output submitted by the unified agent."""
+
+    assets: list[AssetCard]
+    resolutions: list[VisualResolution]
+    inspections: list[AssetInspection] = Field(default_factory=list)
+    prepared_images: list[PreparedImage] = Field(default_factory=list)

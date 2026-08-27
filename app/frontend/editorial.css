@@ -1,0 +1,64 @@
+.artifact-details {
+  margin: 12px 0;
+  padding: 11px;
+  background: #f7f7fa;
+  border-radius: 9px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+  font-size: 12px;
+}
+
+.detail-row span {
+  color: var(--muted);
+}
+
+.type-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.type-chip {
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: #e9ebf0;
+  color: #565d68;
+  font: 650 10px ui-monospace, monospace;
+}
+
+.type-chip.preferred {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.direction-list {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.direction-list summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.direction-item {
+  display: grid;
+  gap: 3px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+
+.direction-item span {
+  color: var(--muted);
+  line-height: 1.5;
+}

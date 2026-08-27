@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ..agents.narrative_agent.models import NarrativeArtifact
+from ..agents.narrative_agent.models import NarrativeArtifact, PlanningArtifact
 from ..harness.controller import NarrativeRunRecord
 from ..agents.asset_agent.models import AssetArtifact
 from ..harness.asset_controller import AssetRunRecord
@@ -20,6 +20,9 @@ from ..harness.editorial_controller import EditorialRunRecord
 from ..harness.voice_controller import VoiceRunRecord
 from ..harness.timeline_controller import TimelineRunRecord
 from ..harness.render_controller import RenderRunRecord
+from ..harness.shot_asset_controller import ShotAssetArtifact, ShotAssetRun
+from ..harness.shot_timeline_controller import ShotTimelineArtifact, ShotTimelineRun
+from ..harness.shot_render_controller import ShotRenderRun
 
 
 _INVALID_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -34,11 +37,18 @@ def safe_project_folder_name(name: str) -> str:
 
 
 def _json_text(value: BaseModel | dict[str, Any] | list[Any]) -> str:
-    if isinstance(value, BaseModel):
-        data = value.model_dump(mode="json")
-    else:
-        data = value
+    data = _jsonable(value)
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    return value
 
 
 class ArtifactWriter:
@@ -58,7 +68,10 @@ class ArtifactWriter:
 
         payloads: list[tuple[str, BaseModel | dict[str, Any] | list[Any]]] = [
             ("01_creative_brief.json", artifact.brief),
-            (
+        ]
+        if isinstance(artifact.planning, PlanningArtifact):
+            payloads.extend([
+                (
                 "02_section_plan.json",
                 {
                     "project_id": artifact.brief.project_id,
@@ -69,8 +82,8 @@ class ArtifactWriter:
                         for section in artifact.planning.sections
                     ],
                 },
-            ),
-            (
+                ),
+                (
                 "03_planned_beats.json",
                 {
                     "project_id": artifact.brief.project_id,
@@ -79,12 +92,22 @@ class ArtifactWriter:
                         for beat in artifact.planning.beats
                     ],
                 },
-            ),
-            ("04_content_plan.json", artifact.planning),
-            ("05_script.json", artifact.script),
+                ),
+                ("04_content_plan.json", artifact.planning),
+            ])
+        else:
+            payloads.extend([
+                ("02_world_state.json", artifact.planning.world_state),
+                ("03_planning.json", artifact.planning),
+            ])
+        if artifact.script is not None:
+            payloads.append(("05_script.json", artifact.script))
+        if artifact.shots is not None:
+            payloads.append(("05_shot_plan.json", artifact.shots))
+        payloads.extend([
             ("06_quality_report.json", artifact.quality),
             ("narrative_artifact.json", artifact),
-        ]
+        ])
 
         written: list[Path] = []
         for filename, payload in payloads:
@@ -466,6 +489,62 @@ class ArtifactWriter:
         written.append(manifest_path)
         return written
 
+    def write_shot_assets(
+        self,
+        project_dir: str | Path,
+        artifact: ShotAssetArtifact,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        written = [
+            _write_json(root / "shot_asset_artifact.json", artifact),
+        ]
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["stage"] = "shot_asset_complete"
+        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+        manifest["asset_quality_passed"] = artifact.quality.passed
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed["shot_asset_artifact.json"] = _manifest_entry(
+            written[0], root, "json"
+        )
+        for asset in artifact.assets:
+            indexed[asset.local_path] = _manifest_entry(
+                root / asset.local_path, root, "ai_video"
+            )
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        return [*written, manifest_path]
+
+    def write_shot_asset_run(
+        self,
+        project_dir: str | Path,
+        record: ShotAssetRun,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        harness_dir = root / "harness"
+        written = [
+            _write_json(harness_dir / "shot_asset_task.json", record.task),
+            _write_json(harness_dir / "shot_asset_actions.json", record.actions),
+            _write_json(harness_dir / "project_state.json", record.project_state),
+        ]
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed.update({
+            path.relative_to(root).as_posix(): _manifest_entry(path, root, "harness")
+            for path in written
+        })
+        manifest["state_version"] = record.committed_state_version
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        return [*written, manifest_path]
+
     def write_asset_run(
         self,
         project_dir: str | Path,
@@ -594,6 +673,54 @@ class ArtifactWriter:
     ) -> list[Path]:
         return self._write_agent_run(project_dir, "timeline", record)
 
+    def write_shot_timeline(
+        self,
+        project_dir: str | Path,
+        artifact: ShotTimelineArtifact,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        path = _write_json(root / "shot_timeline_artifact.json", artifact)
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed[path.name] = _manifest_entry(path, root, "json")
+        manifest["stage"] = "shot_timeline_complete"
+        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+        manifest["timeline_quality_passed"] = True
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        return [path, manifest_path]
+
+    def write_shot_timeline_run(
+        self,
+        project_dir: str | Path,
+        record: ShotTimelineRun,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        harness_dir = root / "harness"
+        written = [
+            _write_json(harness_dir / "shot_timeline_task.json", record.task),
+            _write_json(harness_dir / "shot_timeline_actions.json", record.actions),
+            _write_json(harness_dir / "project_state.json", record.project_state),
+        ]
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed.update({
+            path.relative_to(root).as_posix(): _manifest_entry(path, root, "harness")
+            for path in written
+        })
+        manifest["state_version"] = record.committed_state_version
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        return [*written, manifest_path]
+
     def write_render(
         self,
         project_dir: str | Path,
@@ -652,6 +779,33 @@ class ArtifactWriter:
         record: RenderRunRecord,
     ) -> list[Path]:
         return self._write_agent_run(project_dir, "render", record)
+
+    def write_shot_render_run(
+        self,
+        project_dir: str | Path,
+        record: ShotRenderRun,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        harness_dir = root / "harness"
+        written = [
+            _write_json(harness_dir / "shot_render_task.json", record.task),
+            _write_json(harness_dir / "shot_render_actions.json", record.actions),
+            _write_json(harness_dir / "project_state.json", record.project_state),
+        ]
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed.update({
+            path.relative_to(root).as_posix(): _manifest_entry(path, root, "harness")
+            for path in written
+        })
+        manifest["state_version"] = record.committed_state_version
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        return [*written, manifest_path]
 
     def _write_agent_run(
         self,

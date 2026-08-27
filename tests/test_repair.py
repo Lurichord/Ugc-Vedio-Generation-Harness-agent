@@ -2,12 +2,15 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.tool_models import CyclingToolModel
 from tests.test_editorial import FakeGenerator as EditorialGenerator
-from tests.test_editorial import _plan
-from tests.test_narrative_controller import FakeGenerator as NarrativeGenerator
-from tests.test_voice import FakeTTS
+from tests.test_editorial import _editorial_tool_model, _plan
+from tests.test_narrative_controller import (
+    FakeGenerator as NarrativeGenerator,
+    narrative_controller_from_generator,
+)
+from tests.test_voice import make_voice_controller
 from ugc_harness.agents.narrative_agent import make_brief
-from ugc_harness.harness.controller import NarrativeHarnessController
 from ugc_harness.harness.dependencies import DependencyGraph, NodeCommit
 from ugc_harness.harness.editorial_controller import EditorialHarnessController
 from ugc_harness.harness.repair import RepairScheduler, select_repair_commits
@@ -19,13 +22,13 @@ def _complete_state(tmp_path: Path):
 
 
 def _complete_context(tmp_path: Path):
-    narrative_run = NarrativeHarnessController.from_generator(
+    narrative_run = narrative_controller_from_generator(
         NarrativeGenerator(), "fake-model"
     ).run(make_brief(topic="局部修复测试", duration_seconds=90))
     narrative = narrative_run.artifact
-    voice_run = VoiceHarnessController.from_provider(
-        FakeTTS(), "test-voice"
-    ).run(narrative, tmp_path, narrative_run.record.project_state)
+    voice_run = make_voice_controller().run(
+        narrative, tmp_path, narrative_run.record.project_state
+    )
     voice = voice_run.artifact
     plan = _plan(
         [beat.beat_id for beat in voice.realized_beats],
@@ -37,29 +40,35 @@ def _complete_context(tmp_path: Path):
         ),
     )
     editorial_run = EditorialHarnessController.from_generator(
-        EditorialGenerator(plan), "fake-model"
+        EditorialGenerator(plan), "fake-model", tool_model=_editorial_tool_model()
     ).run(narrative, voice, voice_run.record.project_state)
     return editorial_run.record.project_state, narrative, voice, plan
+
+
+def _invalidate_narrative_boundary(state) -> DependencyGraph:
+    graph = DependencyGraph(state.dependency_graph)
+    node = state.dependency_graph.nodes["artifact:narrative"]
+    graph.commit_batch(
+        task_id="invalidate_narrative_boundary",
+        produced_by="narrative_agent",
+        commits=[
+            NodeCommit(
+                "artifact:narrative",
+                node.kind,
+                {"edited": True},
+                tuple(node.depends_on),
+            )
+        ],
+    )
+    state.dependency_graph.nodes["artifact:narrative"].status = "stale"
+    return graph
 
 
 def test_scheduler_creates_only_the_first_local_repair_frontier(
     tmp_path: Path,
 ) -> None:
     state = _complete_state(tmp_path)
-    graph = DependencyGraph(state.dependency_graph)
-    beat = state.dependency_graph.nodes["planned_beat:pb04"]
-    graph.commit_batch(
-        task_id="user_edit_pb04",
-        produced_by="narrative_agent",
-        commits=[
-            NodeCommit(
-                "planned_beat:pb04",
-                "planned_beat",
-                {"edited": True},
-                tuple(beat.depends_on),
-            )
-        ],
-    )
+    _invalidate_narrative_boundary(state)
 
     plan = RepairScheduler().plan(state, ["artifact:editorial"])
 
@@ -67,11 +76,9 @@ def test_scheduler_creates_only_the_first_local_repair_frontier(
     assert len(plan.tasks) == 1
     task = plan.tasks[0]
     assert task.agent == "narrative_agent"
-    assert "script_segment:ss04" in task.scope.target_refs
-    assert "artifact:narrative" in task.scope.target_refs
-    assert "script_segment:ss03" not in task.scope.target_refs
-    assert "ss04" in task.scope.script_segment_ids
-    assert "pb04" in task.scope.beat_ids
+    assert task.scope.target_refs == ["artifact:narrative"]
+    assert task.scope.script_segment_ids == []
+    assert task.scope.beat_ids == []
     assert task.dependency_snapshot
 
 
@@ -79,24 +86,11 @@ def test_scheduler_moves_to_voice_after_narrative_branch_is_repaired(
     tmp_path: Path,
 ) -> None:
     state = _complete_state(tmp_path)
-    graph = DependencyGraph(state.dependency_graph)
-    beat = state.dependency_graph.nodes["planned_beat:pb04"]
-    graph.commit_batch(
-        task_id="user_edit_pb04",
-        produced_by="narrative_agent",
-        commits=[
-            NodeCommit(
-                "planned_beat:pb04",
-                "planned_beat",
-                {"edited": True},
-                tuple(beat.depends_on),
-            )
-        ],
-    )
+    graph = _invalidate_narrative_boundary(state)
     first = RepairScheduler().plan(state, ["artifact:editorial"])
     targets = set(first.tasks[0].scope.target_refs)
     graph.commit_batch(
-        task_id="repair_narrative_pb04",
+        task_id="repair_narrative",
         produced_by="narrative_agent",
         commits=[
             NodeCommit(
@@ -117,31 +111,17 @@ def test_scheduler_moves_to_voice_after_narrative_branch_is_repaired(
         ref.startswith("voice_segment:")
         for ref in second.tasks[0].scope.target_refs
     )
-    assert "script_segment:ss03" not in second.tasks[0].scope.target_refs
 
 
 def test_scheduler_blocks_a_locked_stale_branch(tmp_path: Path) -> None:
     state = _complete_state(tmp_path)
-    graph = DependencyGraph(state.dependency_graph)
-    state.dependency_graph.nodes["script_segment:ss04"].locked = True
-    beat = state.dependency_graph.nodes["planned_beat:pb04"]
-    graph.commit_batch(
-        task_id="user_edit_pb04",
-        produced_by="narrative_agent",
-        commits=[
-            NodeCommit(
-                "planned_beat:pb04",
-                "planned_beat",
-                {"edited": True},
-                tuple(beat.depends_on),
-            )
-        ],
-    )
+    _invalidate_narrative_boundary(state)
+    state.dependency_graph.nodes["artifact:narrative"].locked = True
 
     plan = RepairScheduler().plan(state, ["artifact:editorial"])
 
     assert plan.tasks == []
-    assert plan.blockers[0].ref == "script_segment:ss04"
+    assert plan.blockers[0].ref == "artifact:narrative"
 
 
 def test_repair_commit_rejects_changes_outside_scope(tmp_path: Path) -> None:
@@ -150,19 +130,25 @@ def test_repair_commit_rejects_changes_outside_scope(tmp_path: Path) -> None:
     task = RepairScheduler().plan(state, ["artifact:editorial"])
     assert task.complete is True
 
-    existing = state.dependency_graph.nodes["script_segment:ss01"]
+    voice_refs = sorted(
+        ref
+        for ref in state.dependency_graph.nodes
+        if ref.startswith("voice_segment:")
+    )
+    target_ref, unauthorized_ref = voice_refs[:2]
+    existing = state.dependency_graph.nodes[target_ref]
     from ugc_harness.harness.models import TaskBudget, TaskEnvelope, TaskScope
 
     repair_task = TaskEnvelope(
         task_id="repair_scope_test",
-        agent="narrative_agent",
+        agent="voice_agent",
         goal="repair",
         scope=TaskScope(
             project_id=state.video.project_id,
-            target_refs=["script_segment:ss01"],
+            target_refs=[target_ref],
         ),
         based_on_state_version=state.video.state_version,
-        allowed_tools=["narrative.generate_plan"],
+        allowed_tools=["voice.create_plan"],
         budget=TaskBudget(),
         input_hash="test",
     )
@@ -171,20 +157,16 @@ def test_repair_commit_rejects_changes_outside_scope(tmp_path: Path) -> None:
             graph,
             [
                 NodeCommit(
-                    "script_segment:ss01",
+                    target_ref,
                     existing.kind,
                     "target change",
                     tuple(existing.depends_on),
                 ),
                 NodeCommit(
-                    "script_segment:ss02",
-                    "script_segment",
+                    unauthorized_ref,
+                    state.dependency_graph.nodes[unauthorized_ref].kind,
                     "unauthorized change",
-                    tuple(
-                        state.dependency_graph.nodes[
-                            "script_segment:ss02"
-                        ].depends_on
-                    ),
+                    tuple(state.dependency_graph.nodes[unauthorized_ref].depends_on),
                 ),
             ],
             repair_task,
@@ -202,7 +184,9 @@ def test_editorial_controller_executes_scoped_repair_task(
     task = repair_plan.tasks[0]
 
     run = EditorialHarnessController.from_generator(
-        EditorialGenerator(editorial_plan), "fake-model"
+        EditorialGenerator(editorial_plan),
+        "fake-model",
+        tool_model=_editorial_tool_model(),
     ).run(narrative, voice, state, task)
 
     updated = run.record.project_state

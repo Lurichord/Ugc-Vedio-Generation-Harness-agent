@@ -46,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="像朋友一样解释复杂话题的知识型创作者",
     )
     parser.add_argument(
+        "--production-mode",
+        choices=["auto", "explainer", "drama", "tutorial"],
+        default="auto",
+        help="Narrative Format Pack；当前已安装 explainer、drama、tutorial",
+    )
+    parser.add_argument(
         "--video-profile",
         choices=["auto", "a_roll", "b_roll", "ab_roll"],
         default="auto",
@@ -55,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--api-keys-file",
         type=Path,
-        help="包含 export OPENROUTER_API_KEY/OPENROUTER_BASE_URL 的配置文件",
+        help="包含 VOLCENGINE_ARK_API_KEY/VOLCENGINE_ARK_BASE_URL 的配置文件",
     )
     parser.add_argument(
         "--output-root",
@@ -86,9 +92,10 @@ def main(argv: list[str] | None = None) -> None:
             goal=args.goal,
             tone=args.tone,
             creator_persona=args.creator_persona,
+            production_mode=args.production_mode,
             video_profile=args.video_profile,
         )
-        controller = NarrativeHarnessController.from_generator(
+        controller = NarrativeHarnessController.from_mcp(
             StructuredLLM(settings), settings.model
         )
         run = controller.run(brief)
@@ -104,9 +111,14 @@ def main(argv: list[str] | None = None) -> None:
         "output_directory": str(project_dir.resolve()),
         "artifact_files": [path.name for path in written_files],
         "model": artifact.model,
-        "sections": len(artifact.planning.sections),
-        "beats": len(artifact.planning.beats),
-        "segments": len(artifact.script.segments),
+        "production_mode": artifact.brief.production_mode,
+        "planning_type": artifact.planning.planning_type,
+        "planning_units": (
+            len(getattr(artifact.planning, "beats", []))
+            or len(getattr(artifact.planning, "actions", []))
+        ),
+        "script_segments": len(artifact.script.segments) if artifact.script else 0,
+        "shots": len(artifact.shots.shots) if artifact.shots else 0,
         "video_profile": artifact.planning.video_profile.model_dump(mode="json"),
         "estimated_duration_seconds": round(
             artifact.quality.estimated_script_duration_ms / 1000, 1

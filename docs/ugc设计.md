@@ -1,1256 +1,626 @@
-# UGC Video Generation Harness：架构与实现说明
+# UGC Video Generation Harness 设计文档
 
-## 1. 项目目标
+> 文档状态：当前实现（2026-08-03）  
+> 适用项目：`ugc-video-harness 0.8.1`
 
-本项目是一个面向 1–2 分钟竖屏 UGC 解说视频的生成 Harness。用户输入一个主题后，系统依次完成：
+## 1. 设计目标
 
-1. 内容结构规划与口播剧本生成；
-2. TTS 配音、字级时间戳和真实音频时间轴；
-3. 主张识别与画面需求规划；
-4. 联网素材检索或 AI 素材生成；
-5. 音频驱动的剪辑、字幕、动画和 Overlay 规划；
-6. 静态图片分析与竖屏适配；
-7. 视频、配音、字幕和标签的最终合成与质量检查。
+本项目已经从固定 Stage Pipeline 改造为以状态、任务和审查结果驱动的 Harness。
 
-这里的目标是声音主导、信息密度较高、有明显创作者口吻的 UGC，而不是强调镜头语言和电影调度的 Film。
+系统的核心问题不再是“下一个 Stage 是什么”，而是：
 
-## 2. 核心设计原则
+- 当前项目状态是什么；
+- 当前 Agent 的输入是否仍然有效；
+- 本次任务只允许修改哪些对象；
+- 最终产物是否通过独立 Critic；
+- 某个 Beat 修改后，哪些下游节点需要失效；
+- 能否只修复局部对象并复用其余产物；
+- 达到重试预算后如何停止或采用最佳候选。
 
-### 2.1 音频是唯一主时钟
-
-规划阶段的时长只用于引导模型，不会强迫最终音频严格等于某个预设秒数。真实时长由 TTS 输出决定，后续 Beat、画面、字幕和最终渲染全部服从 `audio/narration.wav`。
-
-这样可以避免口吻要求“急促、有冲击力”，但程序为了满足固定时长又把语音强行拉慢的问题。
-
-### 2.2 Beat 是主要内容和剪辑单位
-
-`PlannedBeat` 表示规划中的语义节点；TTS 完成后，根据真实音频生成 `RealizedBeat`。之后每个 `RealizedBeat` 对应一个主要画面区间。
-
-当前系统不会把每句短口播继续拆成大量 claim 镜头，因此不会因为逐 claim 检索导致几秒内频繁切换画面。
-
-### 2.3 素材采用 first-success
-
-每个画面需求可以包含多个按顺序排列的探索方向。Stage 4 从第一个方向开始执行，找到一份合格素材后立即停止：
+当前核心公式为：
 
 ```text
-direction 1 失败 → direction 2 成功 → 停止
+ProjectState
++ TaskEnvelope
++ Domain Agent
++ Tool Registry
++ Independent Critic
++ DependencyGraph
++ TrajectoryState
++ Controller Commit
+= UGC Video Harness
 ```
 
-系统不保留 top-k 候选，也不会在已有合格素材后继续浪费请求。
+旧的 `stage_one` 至 `stage_seven` 已删除，不再作为运行架构或兼容层保留。
 
-### 2.4 事实、观点与素材分开管理
+## 2. 总体架构
 
-- `ClaimRecord` 用于理解口播属于事实、解释、观点还是修辞。
-- `interpretation` 会在画面中显示“观点 / 推断”标签。
-- Web 素材保留 URL、标题、发布者和获取时间。
-- 当前版本不执行自动事实核验，来源状态固定为 `not_evaluated`。
-- AI 图片和视频只能作为说明性画面，不能伪装成事实证据，并显示“AI 生成画面”。
-- 找不到真实画面时允许使用 AI 说明性素材，而不是直接删除整段主张。
+```mermaid
+flowchart TD
+    U["用户目标"] --> NC["Narrative Controller"]
+    NC --> NA["Narrative Agent"]
+    NA --> NCR["Narrative Critic"]
+    NCR -->|通过| VC["Voice Controller"]
+    NCR -->|不通过| NA
 
-### 2.5 所有阶段都输出结构化 Artifact
+    VC --> VA["Voice Agent"]
+    VA --> VCR["Voice Critic"]
+    VCR -->|通过| EC["Editorial Controller"]
+    VCR -->|不通过| VA
 
-每个阶段通过 Pydantic 严格模型输出 JSON。Artifact 既是阶段间接口，也是可调试、可复现和可审计的中间产物。
+    EC --> EA["Editorial Agent"]
+    EA --> ECR["Editorial Critic"]
+    ECR -->|通过| AC["Asset Controller"]
+    ECR -->|不通过且未超预算| EA
 
-## 3. 总体架构
+    AC --> AA["Asset Agent"]
+    AA --> ACR["Asset Critic"]
+    ACR -->|通过| TC["Timeline Controller"]
+    ACR -->|局部问题| AA
 
-实际执行顺序为：
+    TC --> TA["Timeline Agent"]
+    TA --> TCR["Timeline Critic"]
+    TCR -->|通过| RC["Render Controller"]
+    TCR -->|不通过| TA
 
-```text
-Stage 1
-内容规划与剧本
-    ↓
-Stage 2
-TTS、字级时间戳、RealizedBeat
-    ↓
-Stage 3
-Claim 与 VisualRequirement
-    ↓
-Stage 4
-Web 检索 / AI 素材生成
-    ↓
-Stage 5
-时间线、字幕、动画、Overlay
-    ↓
-Stage 7
-静态图片分析与渲染准备
-    ↓
-Stage 6
-Remotion 最终视频合成
+    RC --> RA["Render Agent"]
+    RA --> RCR["Render Critic"]
+    RCR -->|通过| DONE["project_complete"]
+    RCR -->|不通过| RA
+
+    PS["ProjectState"] <--> NC
+    PS <--> VC
+    PS <--> EC
+    PS <--> AC
+    PS <--> TC
+    PS <--> RC
+
+    DG["Beat-level DependencyGraph"] <--> PS
+    TS["Phase-partitioned TrajectoryState"] <--> PS
 ```
 
-Stage 7 的编号是按后续扩展时确定的，但它在 Stage 6 最终渲染之前运行。
+状态转换遵循统一规则：前一个 Agent 的最终产物只有在独立 Critic 审核通过后，Controller 才提交状态并开放下一个 Agent。
 
-### 3.1 主要技术栈
-
-| 模块 | 技术 |
-|---|---|
-| 结构化生成 | OpenAI 兼容接口、OpenRouter、Pydantic |
-| TTS | 火山引擎 TTS |
-| HTTP | httpx |
-| 图片分析 | 多模态 LLM |
-| 图片处理 | Pillow |
-| 网页检索 | OpenRouter Web Search |
-| 网页截图 | Microsoft Edge Headless |
-| AI 图片 | OpenRouter 图片生成接口 |
-| AI 视频 | OpenRouter 视频生成接口 |
-| 最终合成 | Remotion、React |
-| 编码与探测 | H.264、AAC、Remotion 内置 FFmpeg/FFprobe |
-| 测试 | pytest |
-
-### 3.2 代码结构
+## 3. 代码结构
 
 ```text
 src/ugc_harness/
-├── shared/                 # 设置、LLM、ArtifactWriter
-├── stage_one/              # 内容规划与剧本
-├── stage_two/              # TTS 与真实音频时间轴
-├── stage_three/            # Claim 与视觉方向
-├── stage_four/             # 素材检索和生成
-├── stage_five/             # 剪辑、字幕与动画时间线
-├── stage_seven/            # 静态图片处理
-└── stage_six/              # 最终渲染
-
-renderer/
-├── render.mjs              # Remotion Node 渲染入口
-└── src/
-    ├── index.jsx
-    ├── root.jsx
-    └── ugc-video.jsx       # 画面、字幕和 Overlay 组件
+├── agents/
+│   ├── base.py
+│   ├── narrative_agent/
+│   ├── voice_agent/
+│   ├── editorial_agent/
+│   ├── asset_agent/
+│   ├── timeline_agent/
+│   └── render_agent/
+├── evaluators/
+│   ├── narrative_critic.py
+│   ├── voice_critic.py
+│   ├── editorial_critic.py
+│   ├── asset_critic.py
+│   ├── timeline_critic.py
+│   └── render_critic.py
+├── harness/
+│   ├── models.py
+│   ├── controller.py
+│   ├── voice_controller.py
+│   ├── editorial_controller.py
+│   ├── asset_controller.py
+│   ├── timeline_controller.py
+│   ├── render_controller.py
+│   ├── dependencies.py
+│   ├── dependency_builders.py
+│   ├── repair.py
+│   ├── trajectory.py
+│   └── transitions.py
+├── profiles/
+├── tools/
+│   └── registry.py
+└── shared/
 ```
 
-## 4. 项目输出目录
+确定性能力继续由普通函数或受控工具执行，例如 TTS 请求、音频拼接、字级时间戳、图片裁切、末帧提取、Remotion 渲染和 FFprobe 检测。Agent 负责决策，工具负责执行，Controller 负责治理。
 
-每个项目拥有独立输出文件夹：
+当前使用进程内 `ToolRegistry` 提供白名单工具。未来可以增加 MCP 适配层，但 MCP 不是 Harness 状态治理的替代品。
 
-```text
-outputs/<项目名>/
-├── 01_creative_brief.json
-├── 02_content_plan.json
-├── 03_planned_beats.json
-├── 04_script.json
-├── 05_stage_one_quality_report.json
-├── 06_voice_plan.json
-├── 07_audio_segments.json
-├── 08_timed_audio.json
-├── 09_word_alignment.json
-├── 10_realized_beats.json
-├── 11_voice_quality_report.json
-├── 12_claim_map.json
-├── 13_visual_requirements.json
-├── 14_editorial_quality_report.json
-├── 15_asset_cards.json
-├── 16_visual_resolutions.json
-├── 17_asset_quality_report.json
-├── 18_timeline_plan.json
-├── 19_caption_plan.json
-├── 20_visual_transform_plan.json
-├── 21_overlay_plan.json
-├── 22_timeline_quality_report.json
-├── 23_image_analysis.json
-├── 24_processed_images.json
-├── 25_render_asset_map.json
-├── 26_image_quality_report.json
-├── 27_render_composition.json
-├── 28_render_quality_report.json
-├── stage_one_artifact.json
-├── stage_two_artifact.json
-├── stage_three_artifact.json
-├── stage_four_artifact.json
-├── stage_five_artifact.json
-├── stage_seven_artifact.json
-├── stage_six_artifact.json
-├── manifest.json
-├── audio/
-├── assets/
-└── video/
-    ├── final.mp4
-    └── preview.mp4
-```
+## 4. ProjectState
 
-`manifest.json` 登记 JSON、音频、素材和视频的相对路径、文件类型、大小及哈希。
+`ProjectState` 是所有 Controller 的共享事实源，由四部分组成。
 
-## 5. Stage 1：内容结构规划与剧本生成
+### 4.1 RuntimeContext
 
-### 5.1 输入
-
-用户主题会被封装为 `CreativeBrief`，包含平台、目标时长、受众、表达目标、tone 和创作者人设。
-
-### 5.2 实现方法
-
-`StageOnePipeline` 分两次调用 LLM：
-
-1. 先生成 `PlanningArtifact`；
-2. 再根据规划生成 `ScriptArtifact`。
-
-内容规划包括：
-
-- `narrative_pattern`：整体叙事模式；
-- `one_sentence_thesis`：一句话核心结论；
-- `sections`：固定为 Hook、Body、Close；
-- `beats`：具体语义推进节点。
-
-剧本按 Beat 生成 `ScriptSegment`，每段带有：
-
-- `speech_act`；
-- 重音词；
-- 前后停顿；
-- 能量级别。
-
-代码只用 60–120 秒的宽松窗口检查估算时长；提示词仍然保留原来的目标时长表达。若结构或脚本质量不合格，会调用修复提示词再生成一次。
-
-### 5.3 JSON 示例
+保存当前运行环境中可使用的模型、工具和约束。旧文档把这部分称为 World State；现在改名为 `RuntimeContext`，避免与视频自身的世界状态混淆。
 
 ```json
 {
-  "brief": {
-    "project_id": "ugc_ai_c64c834a",
-    "topic": "为什么AI公司开始争夺电力资源",
-    "target": {
-      "platform": "douyin",
-      "duration_target_ms": 90000,
-      "aspect_ratio": "9:16"
-    },
-    "communication": {
-      "tone": ["conversational", "information_dense", "slightly_surprising"]
-    }
+  "available_models": {
+    "llm": ["google/gemini-2.5-flash"],
+    "image": ["google/gemini-3.1-flash-lite-image"],
+    "video": ["google/veo-3.1-lite"],
+    "tts": ["volcengine"]
   },
-  "planning": {
-    "narrative_pattern": "Question→Evidence→Explanation→Implication",
-    "one_sentence_thesis": "AI算力需求正在转化为对电力资源的争夺。",
-    "beats": [
-      {
-        "planned_beat_id": "pb01",
-        "discourse_role": "question",
-        "semantic_goal": "提出反直觉现象",
-        "target_duration_ms": 6750
-      }
-    ]
-  },
-  "script": {
-    "segments": [
-      {
-        "script_segment_id": "ss01",
-        "planned_beat_id": "pb01",
-        "text": "你有没有想过，那些搞AI的科技巨头，现在最缺的竟然是电？",
-        "delivery_hint": {
-          "energy": "high",
-          "emphasis_words": ["最缺的", "是电"],
-          "pause_after_ms": 180
-        }
-      }
-    ]
+  "available_tools": [
+    "editorial.create_plan",
+    "asset.acquire_requirement",
+    "asset.prepare_image",
+    "timeline.compose",
+    "render.execute"
+  ],
+  "constraints": {
+    "aspect_ratio": "9:16",
+    "language": "zh-CN"
   }
 }
 ```
 
-## 6. Stage 2：TTS、字级对齐与 RealizedBeat
+### 4.2 VideoWorldState
 
-### 6.1 输入
+`VideoWorldState` 描述“这条视频所讲述的世界”，由 Narrative Agent 在规划阶段产生，而不是运行机器当前有哪些工具。
 
-- `stage_one_artifact.json`
-- TTS API 配置
+它包括：
 
-### 6.2 实现方法
+- `topic_frame`：视频采用的主题框架；
+- `entities`：人物、地点、事件和概念；
+- `claims`：需要在后续阶段验证或表达的主张；
+- `timeline_context`：内容中的时间背景；
+- `location_context`：内容中的空间背景；
+- `aroll_character`：A-roll/AB-roll 固定人物设定。
 
-`build_voice_plan()` 根据 tone、speech act、energy 和停顿生成每个语音段的实际朗读参数。
-
-`VolcengineTTS` 按 ScriptSegment 分段请求火山引擎：
-
-- 输出 WAV；
-- 采样率默认 24 kHz；
-- 单声道；
-- 使用 `speed_ratio` 控制语速；
-- 请求 `with_timestamp=1` 获取原生字级时间戳。
-
-所有分段 WAV 按 `pause_before_ms` 和 `pause_after_ms` 拼接为：
-
-```text
-audio/narration.wav
-```
-
-程序以实际 WAV 时长计算全局时间轴。如果 TTS 没有返回字级时间戳，则按照文本 token 和该段真实音频长度生成兜底对齐。
-
-之后，`PlannedBeat` 被实现为 `RealizedBeat`。这里的开始、结束和持续时间来自真实音频，不再使用规划阶段的估算秒数。
-
-### 6.3 JSON 示例
+人物设定示例：
 
 ```json
 {
-  "voice_plan": {
-    "segments": [
-      {
-        "voice_segment_id": "vs01",
-        "tone": "好奇、直接，句尾形成明确提问",
-        "speed_ratio": 1.12,
-        "energy": "high"
-      }
-    ]
-  },
-  "timed_audio": {
-    "audio_file": "audio/narration.wav",
-    "duration_ms": 65755,
-    "sample_rate": 24000,
-    "channels": 1
-  },
-  "word_alignment": {
-    "words": [
-      {
-        "word_id": "w0001",
-        "word": "你",
-        "start_ms": 125,
-        "end_ms": 295,
-        "confidence": 0.8932
-      }
-    ]
-  },
-  "realized_beats": [
-    {
-      "beat_id": "b01",
-      "planned_beat_id": "pb01",
-      "start_ms": 0,
-      "end_ms": 3955,
-      "duration_ms": 3955
-    }
-  ]
-}
-```
-
-## 7. Stage 3：Claim 与视觉需求规划
-
-### 7.1 Claim 的作用
-
-Claim 是对口播语义的标注，不等于一个独立镜头。它用于：
-
-- 区分事实、观点、推断和修辞；
-- 让视觉规划知道当前 Beat 在表达什么；
-- 给 interpretation 自动添加标签；
-- 约束 AI 素材不能被标记成事实证据。
-
-一个 Beat 可以包含 Claim，但最终仍然通常只生成一个 `VisualRequirement` 和一个主画面。
-
-### 7.2 VisualRequirement
-
-每个 RealizedBeat 对应一个 `VisualRequirement`，其中包含一个或多个探索方向：
-
-- `description`：想找或生成什么；
-- `visual_role`：画面的功能；
-- `asset_type`：素材类型；
-- `query`：检索词；
-- `grounding_requirement`：是否需要精确来源；
-- `must_not_imply`：画面不能暗示什么。
-
-选择策略固定为 `first_success`。
-
-### 7.3 JSON 示例
-
-```json
-{
-  "claims": [
-    {
-      "claim_id": "c01",
-      "beat_id": "b01",
-      "statement": "AI科技巨头目前最缺的是电。",
-      "claim_type": "factual",
-      "importance": 0.9,
-      "interpretation_label_required": false
-    }
-  ],
-  "visual_requirements": [
-    {
-      "visual_request_id": "vr01",
-      "beat_id": "b01",
-      "purpose": "提出反直觉现象",
-      "selection_policy": "first_success",
-      "directions": [
-        {
-          "direction_id": "vr01_d01",
-          "order": 1,
-          "description": "AI科技公司与电力设施的并置画面",
-          "visual_role": "context",
-          "asset_type": "motion_graphic",
-          "query": "AI tech companies and power grid",
-          "grounding_requirement": "contextual"
-        }
-      ]
-    }
-  ]
-}
-```
-
-## 8. Stage 4：素材检索与 AI 素材生成
-
-### 8.1 Provider 路由
-
-`RoutedAssetProvider` 根据 `asset_type` 路由：
-
-| 素材类型 | 获取方法 |
-|---|---|
-| source_screenshot | Web Search + Edge 网页截图 |
-| document_screenshot | Web Search + Edge 网页截图 |
-| chart | Web Search + Edge 网页截图 |
-| real_image | Web Search + 下载页面主图 |
-| meme | Web Search + 下载页面主图 |
-| kinetic_typography | AI 图片生成 |
-| motion_graphic | AI 图片生成 |
-| ai_image | AI 图片生成 |
-| screen_recording | 先生成概念 UI 图片 |
-| talking_head | AI 图片生成 |
-| ai_video | AI 视频生成 |
-
-系统已放弃自动检索真实视频。原因是搜索到的公开视频通常远长于一个 Beat，而当前通用视频模型不适合可靠地完成精确语义裁剪。
-
-### 8.2 Web 素材检索流程
-
-```text
-ExplorationDirection
-    ↓
-OpenRouter Web Search
-    ↓
-只返回一个公开来源
-    ↓
-URL 公网安全检查
-    ↓
-截图网页或下载 og:image
-    ↓
-视觉模型审查登录/认证遮挡
-    ↓
-合格：写入 AssetCard
-不合格：删除文件并尝试下一个方向
-```
-
-Web Search 请求明确要求只返回一个结果，不返回候选列表，也不负责事实核验。
-
-### 8.3 URL 和下载安全
-
-系统只允许 HTTP/HTTPS，拒绝：
-
-- localhost；
-- `.local`；
-- 私有 IP；
-- loopback；
-- link-local；
-- reserved 和 multicast 地址。
-
-图片最大 20 MB；如果响应不是图片、文件小于 1 KB 或找不到页面 `og:image`，该方向失败。
-
-### 8.4 登录和认证界面审查
-
-网页截图或下载图片完成后，会将图片发送给视觉模型，检查：
-
-- 登录弹窗；
-- 注册弹窗；
-- 验证码；
-- 年龄确认；
-- 访问认证；
-- 订阅登录墙。
-
-只有遮住主体、导致素材不可使用时才判失败。普通导航栏登录按钮和不遮挡主体的小 Cookie 提示不会误判。
-
-若 `usable=false`：
-
-1. 立即删除本地图片；
-2. 当前方向记录为 `not_found`；
-3. Pipeline 尝试下一个探索方向。
-
-### 8.5 AI 图片与视频
-
-AI 图片使用 9:16、1K 输出，并保存：
-
-- 生成模型；
-- 完整提示词；
-- 成本；
-- SHA-256；
-- AI 披露要求。
-
-AI 视频采用异步任务：
-
-1. 提交生成请求；
-2. 按间隔轮询；
-3. completed 后下载；
-4. failed、cancelled、expired 或超时则失败；
-5. 视频不生成音频，最终统一使用 TTS 旁白。
-
-### 8.6 JSON 示例
-
-```json
-{
-  "assets": [
-    {
-      "asset_id": "asset_vr01",
-      "visual_request_id": "vr01",
-      "direction_id": "vr01_d01",
-      "beat_id": "b01",
-      "modality": "ai_image",
-      "origin": "generated",
-      "local_path": "assets/generated_image/asset_vr01.jpg",
-      "mime_type": "image/jpeg",
-      "generated_media_disclosure_required": true,
-      "generator_model": "google/gemini-3.1-flash-lite-image",
-      "production_ready": true
-    }
-  ],
-  "resolutions": [
-    {
-      "visual_request_id": "vr01",
-      "status": "resolved",
-      "selected_direction_id": "vr01_d01",
-      "asset_id": "asset_vr01",
-      "attempts": [
-        {
-          "direction_id": "vr01_d01",
-          "order": 1,
-          "status": "success",
-          "reason": "已生成一份 AI 图片素材"
-        }
-      ]
-    }
-  ]
-}
-```
-
-一个 Web 素材的来源和审查字段类似：
-
-```json
-{
-  "origin": "captured",
-  "source": {
-    "source_url": "https://example.com/report",
-    "publisher": "Example",
-    "verification_status": "not_evaluated"
-  },
-  "usability_review": {
-    "reviewer_model": "google/gemini-2.5-flash",
-    "usable": true,
-    "login_or_auth_overlay": false,
-    "obstruction_level": "none",
-    "reason": "主体内容未被登录界面遮挡"
+  "character_id": "host_main",
+  "visual_description": "20-30岁、亲切有活力的年轻女性文化创作者",
+  "voice_profile": {
+    "gender": "female",
+    "age_style": "young",
+    "tone": "warm and energetic",
+    "pace": "natural"
   }
 }
 ```
 
-## 9. Stage 5：时间线、字幕和画面动画
+约束：
 
-### 9.1 音频驱动的 Clip
+- `a_roll` 和 `ab_roll` 必须定义 `aroll_character`；
+- `VideoProfile.character_id`、人物描述与 WorldState 必须一致；
+- `b_roll` 不允许定义 A-roll 人物；
+- Voice Agent 和 Asset Agent 都从同一个人物节点读取身份信息。
 
-Stage 5 以 `RealizedBeat` 为基础建立一个 Beat 一个主 Clip 的时间线：
+### 4.3 VideoState
 
-- 第一个 Clip 从 0 开始；
-- 当前 Clip 结束于下一个 Beat 的开始；
-- 最后一个 Clip 结束于完整音频时长；
-- 所有 Clip 必须无缝覆盖完整旁白。
-
-静态图片使用 `hold_to_audio`；视频使用 `trim_or_loop_to_audio`。
-
-### 9.2 概念屏幕动画
-
-如果方向是 `screen_recording`，Stage 4 生成的概念 UI 图片会交给图生视频 Provider，生成滚动、鼠标移动和点击等伪录屏动态。
-
-它是 AI 生成的概念动画，不会伪装成真实产品操作录像。
-
-### 9.3 视觉动画
-
-Stage 5 生成 `VisualTransform`：
-
-- 普通图片：`cover`；
-- context/emotion：`slow_pan`；
-- 其他图片：`subtle_push`；
-- 文档、网页和图表：`contain + document_focus`；
-- AI 视频：`native_video`；
-- 概念录屏动画：`ai_screen_motion`；
-- question、reveal、contrast Beat 可使用 `punch_cut`。
-
-### 9.4 字幕生成
-
-字幕不是 LLM 猜测时间，而是直接使用 Stage 2 的字级时间戳。
-
-`_build_captions()` 按以下条件合并文字：
-
-- 遇到标点且累计文本至少 6 个字符；
-- 累计文本达到 14 个字符；
-- 当前字幕持续时间达到 2200 ms。
-
-字幕生成 `CaptionCue`，保留 `start_ms`、`end_ms`、文字和关联 `word_ids`。
-
-### 9.5 Overlay
-
-系统生成三类标签：
-
-- `generated_media_disclosure`：AI 生成画面；
-- `source_attribution`：来源；
-- `interpretation_label`：观点 / 推断。
-
-这些标签拥有独立时间区间，不会写进字幕文本。
-
-### 9.6 JSON 示例
+`VideoState` 保存项目版本与各 Agent 状态：
 
 ```json
 {
-  "timeline": {
-    "audio_file": "audio/narration.wav",
-    "duration_ms": 65755,
-    "clips": [
-      {
-        "clip_id": "clip_01",
-        "beat_id": "b01",
-        "timeline_start_ms": 0,
-        "timeline_end_ms": 4135,
-        "playback_path": "assets/generated_image/asset_vr01.jpg",
-        "playback_modality": "image",
-        "playback_policy": "hold_to_audio",
-        "transition_in": "none"
-      }
-    ]
+  "project_id": "ugc_topic_a9aee945",
+  "state_version": 11,
+  "narrative_status": "passed",
+  "voice_status": "passed",
+  "editorial_status": "passed",
+  "asset_status": "passed",
+  "timeline_status": "passed",
+  "render_status": "passed",
+  "current_agent": "project_complete"
+}
+```
+
+常用状态包括：`pending`、`ready`、`passed`、`needs_revision`、`stale` 和 `blocked`。
+
+### 4.4 TrajectoryState
+
+Trajectory 按阶段划分，每个阶段保存所有生成任务、审核失败任务、revision Task 和 repair Task。
+
+```text
+trajectory.phases
+├── narrative.tasks[]
+├── voice.tasks[]
+├── editorial.tasks[]
+├── asset.tasks[]
+├── timeline.tasks[]
+└── render.tasks[]
+```
+
+每条任务记录包括：
+
+- TaskEnvelope；
+- AgentResult 与所有工具 Action；
+- EvaluationResult；
+- TransitionRecord；
+- GraphUpdateRecord；
+- 输入状态版本与提交版本；
+- 任务类型：generation、revision 或 repair。
+
+Trajectory 用于恢复、审计、定位失败、限制重试和解释自动决策。
+
+## 5. Agent 执行契约
+
+### 5.1 TaskEnvelope
+
+Controller 必须通过结构化任务约束 Agent：
+
+```json
+{
+  "task_id": "task_asset_revision_project_v6",
+  "agent": "asset_agent",
+  "goal": "只重新生成审核失败的视觉需求",
+  "scope": {
+    "project_id": "project",
+    "beat_ids": ["b04"],
+    "visual_request_ids": ["vr04"]
   },
-  "captions": [
-    {
-      "cue_id": "caption_001",
-      "start_ms": 125,
-      "end_ms": 875,
-      "text": "你有没有想过，"
-    }
+  "based_on_state_version": 6,
+  "allowed_tools": ["asset.acquire_requirement"],
+  "forbidden_actions": [
+    "modify_narrative",
+    "modify_voice",
+    "modify_editorial_plan"
   ],
-  "visual_transforms": [
-    {
-      "clip_id": "clip_01",
-      "fit_mode": "cover",
-      "motion_preset": "slow_pan",
-      "scale_start": 1.0,
-      "scale_end": 1.08
-    }
-  ],
-  "overlays": [
-    {
-      "overlay_type": "generated_media_disclosure",
-      "text": "AI 生成画面",
-      "start_ms": 0,
-      "end_ms": 2000,
-      "position": "top_right"
-    }
-  ]
-}
-```
-
-## 10. Stage 7：静态图片分析和竖屏处理
-
-### 10.1 处理范围
-
-Stage 7 只处理 Stage 5 时间线中 `playback_modality=image` 的素材。AI 视频和概念录屏视频不会重复处理。
-
-### 10.2 多模态图片分析
-
-视觉模型结合图片和当前 Beat 旁白输出：
-
-- 内容类型；
-- 归一化主体框 `focal_box`；
-- 主体定位置信度；
-- 是否需要保留完整画面；
-- 是否有登录遮挡；
-- 文字可读性；
-- 与旁白有关的关键文字；
-- 推荐处理策略。
-
-### 10.3 图片策略
-
-最终输出统一为 1080×1920 JPEG：
-
-| 策略 | 用途 |
-|---|---|
-| subject_cover | 围绕主体裁剪并铺满竖屏 |
-| portrait_normalize | 普通竖屏标准化 |
-| focus_crop | 聚焦图表、网页或文档中的重要区域 |
-| contained_background | 完整前景放在降低亮度的背景上 |
-
-当前特别规则：
-
-- AI 生成图片强制使用 `subject_cover`；
-- AI 图片可以裁剪并保留推拉动画；
-- AI 图片不会使用“暗色大背景 + 前景小图”的双层堆叠布局；
-- Web 图表、文档和截图仍可使用 `focus_crop` 或 `contained_background`；
-- 背景只降低亮度，不进行模糊，避免观众看不清信息来源；
-- 如果再次发现登录或认证遮挡，Stage 7 阻止该图进入渲染。
-
-Stage 7 不覆盖原图，而是生成 `assets/processed_image/`，并通过 `25_render_asset_map.json` 告诉最终渲染器应该使用哪个文件。
-
-### 10.4 JSON 示例
-
-```json
-{
-  "processed_images": [
-    {
-      "processed_id": "processed_asset_vr01",
-      "asset_id": "asset_vr01",
-      "source_path": "assets/generated_image/asset_vr01.jpg",
-      "output_path": "assets/processed_image/processed_asset_vr01.jpg",
-      "input_width": 768,
-      "input_height": 1376,
-      "output_width": 1080,
-      "output_height": 1920,
-      "strategy": "subject_cover",
-      "upscaled": true,
-      "analysis": {
-        "content_type": "illustration",
-        "focal_box": [0.0, 0.0, 1.0, 1.0],
-        "blocking_overlay": false,
-        "text_readability": "good"
-      }
-    }
-  ],
-  "render_asset_mappings": [
-    {
-      "clip_id": "clip_01",
-      "original_path": "assets/generated_image/asset_vr01.jpg",
-      "render_path": "assets/processed_image/processed_asset_vr01.jpg"
-    }
-  ]
-}
-```
-
-## 11. Stage 6：最终视频、配音与字幕合成
-
-Stage 6 是最终渲染阶段，也是整个系统最接近传统视频编辑器的部分。
-
-### 11.1 RenderComposition 构建
-
-Python 端读取：
-
-- Stage 2 的完整旁白；
-- Stage 5 的 Clip、字幕、动画和 Overlay；
-- Stage 7 的处理后图片映射。
-
-时间从毫秒转换为 30 FPS 帧：
-
-```text
-frame = round(milliseconds × 30 / 1000)
-```
-
-总帧数使用向上取整，确保画面不会短于音频：
-
-```text
-duration_in_frames = ceil(audio_duration_ms × 30 / 1000)
-```
-
-图片 Clip 优先使用 Stage 7 的 `render_path`，视频 Clip 使用 Stage 4 或 Stage 5 的视频文件。
-
-### 11.2 临时渲染任务
-
-每次渲染创建唯一 Job 目录：
-
-```text
-renderer/public/jobs/<project_id>_<random>/
-├── props.json
-├── audio/narration.wav
-└── media/
-```
-
-需要的媒体被复制到 Job 中，Remotion 通过 `staticFile()` 读取。渲染结束后删除临时 Job，项目正式产物保留在 `outputs/<项目名>/video/`。
-
-### 11.3 Remotion 组件结构
-
-`UGCVideo` 的层级为：
-
-```text
-AbsoluteFill
-├── Audio                        唯一主音轨
-├── Sequence[] + ClipMedia      图片或视频
-├── Sequence[] + Overlay        来源、AI、观点标签
-└── Sequence[] + Caption        烧录字幕
-```
-
-#### 图片与视频
-
-- 图片通过 Remotion `Img` 渲染；
-- 视频通过 `OffthreadVideo` 渲染；
-- 视频静音并按需要循环，因为声音统一来自旁白；
-- `objectFit` 使用 Stage 5 的 `cover` 或 `contain`；
-- `interpolate()` 根据 Clip 进度实现推近和平移；
-- `punch_cut` 在开头 4 帧实现轻微冲击缩放。
-
-#### 配音
-
-```jsx
-<Audio src={staticFile(props.audio_path)} />
-```
-
-`audio/narration.wav` 是唯一主声音。AI 视频自带声音不会进入最终成片。
-
-#### 字幕
-
-字幕使用 Remotion `Sequence`，按帧控制出现和消失：
-
-```jsx
-<Sequence
-  from={cue.start_frame}
-  durationInFrames={cue.duration_in_frames}
->
-  <Caption cue={cue} />
-</Sequence>
-```
-
-字幕样式：
-
-- 微软雅黑 / 苹方；
-- 白色粗体；
-- 62 px；
-- 黑色半透明圆角底；
-- 位于底部安全区；
-- 入场时淡入并从 0.97 缩放到 1。
-
-字幕最终被直接烧录进视频画面，不是外挂 SRT，因此任何播放器都能显示，但用户不能手动关闭。
-
-#### Overlay
-
-Overlay 颜色区分：
-
-- 来源：黑底白字；
-- AI 生成：黄色底深色字；
-- 观点 / 推断：蓝底白字。
-
-Overlay 在首尾执行短淡入淡出。
-
-### 11.4 编码
-
-Node 端调用 Remotion `renderMedia()`：
-
-```text
-codec: h264
-audioCodec: aac
-pixelFormat: yuv420p
-crf: 18
-x264Preset: medium
-concurrency: 2
-```
-
-正式输出：
-
-```text
-video/final.mp4
-```
-
-之后使用 FFmpeg 生成 540×960、CRF 28 的轻量预览：
-
-```text
-video/preview.mp4
-```
-
-### 11.5 媒体质量检查
-
-Remotion 自带的 FFprobe 检查：
-
-- 最终画面必须为 1080×1920；
-- 帧率必须为 30 FPS；
-- 必须同时存在视频流和音频流；
-- 视频编码为 H.264，音频编码为 AAC；
-- Stage 5 时间线必须完整覆盖旁白；
-- 所有渲染媒体必须存在；
-- 视频流时长与原始旁白时长的误差不能超过一帧，即约 34 ms。
-
-质量检查以视频流时长为准，而不是直接使用 MP4 容器时长。原因是 AAC 编码通常
-会在结尾产生少量填充；这部分不是画面真正变长。系统分别记录：
-
-- `video_duration_ms`：视频流时长；
-- `audio_duration_ms`：AAC 音频流时长；
-- `container_duration_ms`：MP4 容器时长。
-
-例如当前项目的原始 WAV 为 65,755 ms，视频流为 65,767 ms，两者只相差
-12 ms；AAC 和容器为 65,813 ms。质量检查通过。
-
-### 11.6 Stage 6 JSON 示例
-
-```json
-{
-  "schema_version": "render-stage.v1",
-  "project_id": "ugc_ai_c64c834a",
-  "composition": {
-    "renderer": "remotion",
-    "renderer_version": "4.0.499",
-    "width": 1080,
-    "height": 1920,
-    "fps": 30,
-    "duration_ms": 65755,
-    "duration_in_frames": 1973,
-    "audio_path": "audio/narration.wav",
-    "clips": [
-      {
-        "clip_id": "clip_01",
-        "beat_id": "b01",
-        "start_frame": 0,
-        "duration_in_frames": 124,
-        "media_type": "image",
-        "media_path": "assets/processed_image/processed_asset_vr01.jpg",
-        "source_path": "assets/generated_image/asset_vr01.jpg",
-        "fit_mode": "cover",
-        "motion_preset": "slow_pan",
-        "scale_start": 1.0,
-        "scale_end": 1.08,
-        "transition_in": "none"
-      }
-    ],
-    "captions": [
-      {
-        "cue_id": "caption_001",
-        "start_frame": 4,
-        "duration_in_frames": 22,
-        "text": "你有没有想过，"
-      }
-    ],
-    "overlays": [
-      {
-        "overlay_id": "overlay_b01_ai",
-        "overlay_type": "generated_media_disclosure",
-        "text": "AI 生成画面",
-        "start_frame": 0,
-        "duration_in_frames": 60,
-        "position": "top_right"
-      }
-    ]
+  "budget": {
+    "max_steps": 4,
+    "max_retries": 0,
+    "fallback_policy": "fail"
   },
-  "outputs": [
-    {
-      "kind": "final",
-      "local_path": "video/final.mp4",
-      "width": 1080,
-      "height": 1920,
-      "fps": 30.0,
-      "duration_ms": 65767,
-      "video_duration_ms": 65767,
-      "audio_duration_ms": 65813,
-      "container_duration_ms": 65813,
-      "video_codec": "h264",
-      "audio_codec": "aac",
-      "has_video": true,
-      "has_audio": true
-    }
-  ],
-  "quality": {
-    "passed": true,
-    "expected_duration_ms": 65755,
-    "actual_duration_ms": 65767,
-    "duration_delta_ms": 12,
-    "max_allowed_delta_ms": 34,
-    "resolution_correct": true,
-    "fps_correct": true,
-    "audio_present": true,
-    "video_present": true,
-    "full_timeline_coverage": true,
-    "missing_media_count": 0,
-    "issues": []
-  }
+  "input_hash": "...",
+  "dependency_snapshot": []
 }
 ```
 
-## 12. Artifact 与 Manifest 设计
+### 5.2 AgentResult
 
-每个 Stage 都输出一个完整 Artifact，同时把常用子结构拆成编号 JSON。这样既能
-让下一阶段只读取一个 Artifact，也方便人工单独查看某一类数据。
+Agent 不能直接决定项目状态，只能返回候选产物、工具轨迹和受限 `StatePatch`。Controller 会检查：
 
-`ArtifactWriter` 负责：
+- task_id 和 input_hash 是否匹配；
+- `state_version_used` 是否仍是最新版本；
+- 是否修改了禁止字段；
+- 依赖快照是否仍然有效；
+- Critic 是否批准最终 Artifact。
 
-1. 将 Pydantic 对象序列化为 UTF-8 JSON；
-2. 写入阶段完整 Artifact；
-3. 更新项目根目录的 `manifest.json`；
-4. 登记 JSON、音频、图片、视频及其相对路径；
-5. 记录阶段状态和质量检查结果。
+旧状态结果会以 `STALE_RESULT` 拒绝，不允许覆盖新版本。
 
-Manifest 示例：
+### 5.3 CriticIssue
+
+Critic 输出可执行问题，而不是只有布尔值：
 
 ```json
 {
-  "schema_version": "artifact-manifest.v1",
-  "project_id": "ugc_ai_c64c834a",
-  "project_name": "为什么AI公司开始争夺电力资源",
-  "stage": "render_complete",
-  "render_quality_passed": true,
-  "artifacts": [
-    {
-      "relative_path": "audio/narration.wav",
-      "kind": "audio"
-    },
-    {
-      "relative_path": "assets/generated_image/asset_vr01.jpg",
-      "kind": "generated_asset"
-    },
-    {
-      "relative_path": "video/final.mp4",
-      "kind": "final_video"
-    }
-  ]
+  "critic_id": "asset_critic",
+  "scope": "asset",
+  "target_ref": "asset:asset_vr04",
+  "severity": "error",
+  "code": "BLOCKING_OVERLAY",
+  "diagnosis": "登录弹窗遮挡主体",
+  "repair_options": ["retry_next_direction"]
 }
 ```
 
-所有路径都使用项目目录内的相对路径，项目移动或打包后依然可以读取。
+Critic 只读，不直接改 Artifact。修复由 Controller 创建新任务并交回对应 Agent。
 
-## 13. 完整运行方法
+## 6. DependencyGraph
 
-### 13.1 安装
+DependencyGraph 精确到 Beat 粒度，每个节点同时保存：
 
-```powershell
-cd D:\桌面\ugc-vedio-generation-agent
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-cd renderer
-npm install
-cd ..
+- `depends_on`：当前节点依赖谁；
+- `dependents`：谁依赖当前节点；
+- `semantic_hash`：内容语义哈希；
+- `version`：节点版本；
+- `status`：current、stale 等；
+- `produced_by` 与 `last_task_id`；
+- `locked`：是否禁止自动覆盖。
+
+每次任务完成后，Controller 都会提交或拒绝一次图更新，并把记录写入 Trajectory。
+
+典型 Beat 依赖：
+
+```mermaid
+flowchart LR
+    PB["planned_beat:pb04"] --> SS["script_segment:ss04"]
+    SS --> VS["voice_segment:vs04"]
+    VS --> RB["realized_beat:b04"]
+    RB --> VR["visual_requirement:vr04"]
+    VR --> AS["asset:asset_vr04"]
+    AS --> IN["asset_inspection:asset_vr04"]
+    IN --> PI["prepared_image:asset_vr04"]
+    PI --> CL["clip:clip_b04"]
+    CL --> TL["artifact:timeline"]
+    TL --> RE["render:final"]
 ```
 
-Python 负责规划、API 调用、Artifact 和渲染编排；Node.js 只负责 Remotion
-合成。
-
-### 13.2 配置
-
-密钥写入项目 `.env`，该文件已通过 `.gitignore` 排除。文档不记录真实密钥。
-
-```dotenv
-OPENROUTER_API_KEY="..."
-OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
-UGC_LLM_MODEL="google/gemini-2.5-flash"
-
-VOLCENGINE_TTS_API_KEY="..."
-VOLCENGINE_TTS_VOICE_ID="zh_male_qingshuangnanda_mars_bigtts"
-
-UGC_IMAGE_MODEL="google/gemini-3.1-flash-lite-image"
-UGC_VIDEO_MODEL="google/veo-3.1-lite"
-UGC_VIDEO_RESOLUTION="720p"
-```
-
-也可以通过 `--api-keys-file` 指定另一个配置文件。
-
-### 13.3 逐阶段执行
-
-实际执行顺序是：
+对于 A-roll，依赖图还包含：
 
 ```text
-Stage 1 → Stage 2 → Stage 3 → Stage 4 → Stage 5 → Stage 7 → Stage 6
+world:video
+└── character_reference:host_main
+    ├── asset:asset_vr01
+    ├── asset:asset_vr02 -> depends_on asset:asset_vr01
+    └── asset:asset_vr03 -> depends_on asset:asset_vr02
 ```
 
-Stage 7 编号在 Stage 6 后面，是开发过程中新增的图片准备模块；逻辑上它必须在
-最终渲染之前运行。
+只有相邻的同人物 A-roll 才依赖上一段人物视频。被 B-roll 隔开的下一段 A-roll 仍依赖同一人物参考，但不依赖上一动作片段。
 
-```powershell
-# Stage 1：内容结构和剧本
-.\.venv\Scripts\ugc-harness.exe `
-  "为什么AI公司开始争夺电力资源" `
-  --project-name "为什么AI公司开始争夺电力资源"
+## 7. 失效与局部 Repair
 
-# Stage 2：TTS 和真实时间
-.\.venv\Scripts\ugc-voice.exe `
-  "outputs\为什么AI公司开始争夺电力资源"
+输入节点变化时，只使其真正的下游失效。
 
-# Stage 3：Claim 和视觉方向
-.\.venv\Scripts\ugc-visual-plan.exe `
-  "outputs\为什么AI公司开始争夺电力资源" `
-  --fail-on-quality-error
+修改单个 Script Beat：
 
-# Stage 4：素材获取
-.\.venv\Scripts\ugc-assets.exe `
-  "outputs\为什么AI公司开始争夺电力资源"
-
-# Stage 5：时间线、字幕和动画
-.\.venv\Scripts\ugc-timeline.exe `
-  "outputs\为什么AI公司开始争夺电力资源" `
-  --fail-on-quality-error
-
-# Stage 7：图片处理
-.\.venv\Scripts\ugc-images.exe `
-  "outputs\为什么AI公司开始争夺电力资源" `
-  --fail-on-quality-error
-
-# Stage 6：最终合成
-.\.venv\Scripts\ugc-render.exe `
-  "outputs\为什么AI公司开始争夺电力资源" `
-  --fail-on-quality-error
+```text
+script_segment:ss04
+→ voice_segment:vs04
+→ alignment / realized_beat:b04
+→ visual_requirement:vr04
+→ asset / caption / clip
+→ timeline
+→ render:final
 ```
 
-`--fail-on-quality-error` 会在当前阶段质量未通过时返回非零退出码，适合自动化
-流水线。
+其他 Beat 的剧本、音频和素材保持 current。
 
-## 14. 阶段之间的数据关系
+下游失效后不能继续消费旧产物。`RepairScheduler` 会从 stale 子图的可执行前沿创建局部 Task；修复并通过 Critic 后，节点重新变为 current，下游再按依赖顺序重建。
+
+Asset Controller 还支持两类局部修复：
+
+1. revision：仅重新搜索或生成不可修复的失败 VisualRequirement；
+2. image repair：对低分辨率、主体过小、文字不可读或缺少竖屏成品的图片执行 `asset.prepare_image`。
+
+登录/认证遮挡不允许通过裁切掩盖，必须重新获取素材。
+
+当一次审核同时出现“重新获取素材”和“图片处理”两类问题时，Controller 先局部 revision，再自动执行 image repair，不会重生成已通过的 A-roll 视频或其他 Beat 素材。
+
+## 8. Agent 核心流程
+
+### 8.1 Narrative Agent
 
 ```text
 CreativeBrief
-  └─ PlanningArtifact
-      ├─ Section[]
-      └─ PlannedBeat[]
-          └─ ScriptSegment[]
-              └─ VoiceSegmentPlan[]
-                  ├─ AudioSegment[]
-                  ├─ WordTimestamp[]
-                  └─ RealizedBeat[]
-                      ├─ ClaimRecord[]
-                      └─ VisualRequirement[]
-                          └─ ExplorationDirection[]
-                              ├─ DirectionAttempt[]
-                              ├─ VisualResolution
-                              └─ AssetCard
-                                  ├─ TimelineClip[]
-                                  ├─ CaptionCue[]
-                                  ├─ VisualTransform[]
-                                  └─ OverlayCue[]
-                                      └─ ProcessedImage[]
-                                          └─ RenderAssetMapping[]
-                                              └─ RenderComposition
-                                                  └─ final.mp4
+→ VideoProfile
+→ VideoWorldState
+→ SectionPlan
+→ PlannedBeat
+→ ScriptSegment
+→ Narrative Critic
 ```
 
-关键引用关系：
+Narrative Agent 负责视频的内容世界、叙事结构和脚本。A-roll 人物必须在此阶段进入 WorldState，后续 Agent 不得各自创造一套人物定义。
 
-- `planned_beat_id`：Stage 1 的结构 Beat；
-- `beat_id`：Stage 2 根据真实音频生成的 Beat；
-- `visual_request_id`：每个 Beat 的画面需求；
-- `direction_id`：该画面需求的某个探索方向；
-- `asset_id`：Stage 4 最终选中的素材；
-- `clip_id`：Stage 5 时间线镜头；
-- `word_id`：字级时间戳和字幕之间的关联；
-- `processed_id`：Stage 7 处理图；
-- `RenderAssetMapping.clip_id`：让最终渲染器用处理图替换原图。
-
-## 15. 当前质量控制
-
-### Stage 1
-
-- JSON 必须满足 Pydantic 严格模型；
-- Beat 顺序连续；
-- Hook、Body、Close 三段齐全；
-- Close 至少包含 payoff 或 callback；
-- 脚本预估时长使用宽松的 60–120 秒窗口；
-- 重音词必须真实出现在文本中。
-
-### Stage 2
-
-- WAV 文件存在且能读取；
-- 所有脚本 Segment 均生成音频；
-- 字级时间戳覆盖率；
-- PlannedBeat 到 RealizedBeat 的覆盖率。
-
-### Stage 3
-
-- 每个 RealizedBeat 恰好有一个 VisualRequirement；
-- Claim 和 Beat 引用必须有效；
-- interpretation 必须要求显式标签；
-- AI 图片和 AI 视频不能标记为证据方向；
-- 探索方向顺序必须从 1 连续递增。
-
-### Stage 4
-
-- 每个 VisualRequirement 必须得到一份素材；
-- first-success 后不能继续请求；
-- 文件必须存在且不为空；
-- Web 素材必须通过登录和认证遮挡审查；
-- AI 素材必须记录模型和提示词并要求披露；
-- 下载 URL 禁止指向本机或内网。
-
-### Stage 5
-
-- Clip 数量必须与 RealizedBeat 数量一致；
-- Clip 必须从 0 连续覆盖完整音频；
-- 播放素材必须存在；
-- 字幕时间必须来自字级对齐；
-- 概念屏幕派生视频必须真实落盘。
-
-### Stage 7
-
-- 只处理静态图片 Clip；
-- 遮挡图片不能进入渲染；
-- 每张合格图片必须生成非空输出；
-- AI 图片禁止使用前景小卡片堆叠布局；
-- 保留输入尺寸、输出尺寸、策略和哈希。
-
-### Stage 6
-
-- 1080×1920、30 FPS；
-- H.264/AAC；
-- 音频和视频流都存在；
-- 时间线覆盖完整；
-- 文件引用全部有效；
-- 音画时长误差不超过一帧。
-
-## 16. 当前示例项目结果
-
-项目：
+### 8.2 Voice Agent
 
 ```text
-outputs/为什么AI公司开始争夺电力资源/
+Approved Narrative
+→ 读取 WorldState.aroll_character.voice_profile
+→ 选择 voice_id / tone / speed / pause
+→ TTS
+→ WordAlignment
+→ RealizedBeat
+→ Voice Critic
 ```
 
-实际结果：
+A-roll/AB-roll 下，Voice Critic 检查 `character_id`、gender 和 age_style 与 WorldState 一致。B-roll 没有固定人物，可使用默认旁白声线。
 
-| 指标 | 结果 |
-|---|---:|
-| 真实旁白时长 | 65,755 ms |
-| RealizedBeat | 12 |
-| 最终 Clip | 12 |
-| 字幕 Cue | 37 |
-| 已解决视觉需求 | 12 / 12 |
-| Stage 7 静态图片 | 10 |
-| 最终分辨率 | 1080×1920 |
-| 帧率 | 30 FPS |
-| 视频编码 | H.264 |
-| 音频编码 | AAC |
-| 视频流时长 | 65,767 ms |
-| 音画时长差 | 12 ms |
-| 最终质量 | 通过 |
-
-最终文件：
+### 8.3 Editorial Agent
 
 ```text
-outputs/为什么AI公司开始争夺电力资源/video/final.mp4
-outputs/为什么AI公司开始争夺电力资源/video/preview.mp4
+Narrative + RealizedBeat
+→ ClaimMap
+→ A-roll/B-roll 判断
+→ VisualRequirement per Beat
+→ Editorial Critic
 ```
 
-## 17. 当前边界与后续建议
+每个 Beat 只能有一个最终 VisualRequirement，但可以带多个按优先级排列的探索方向。
 
-### 17.1 当前明确不做的事情
+人物占比按真实 Beat 时长计算，不按 Beat 数量计算。Critic 不通过时：
 
-- 不自动检索长视频再尝试语义裁切；
-- 不把 AI 图片或 AI 视频当作事实证据；
-- 不执行完整自动事实核验；
-- 不把规划阶段的目标秒数强行套到真实口播；
-- 不使用 AI 视频自带音频；
-- 不输出可关闭的外挂字幕。
+1. 记录本次失败 Task；
+2. Controller 创建 revision Task；
+3. Prompt 带上实际比例、目标范围、Critic 诊断和上一版计划；
+4. Agent 修改后重新审核；
+5. 最多生成 3 个候选；
+6. 第三次仍不满足时，记录警告并采用第三版 `use_best_available`。
 
-### 17.2 素材数据库建议
-
-现阶段不必先建设大型数据库。项目已经通过 `AssetCard` 和 `manifest.json`
-记录了素材路径、来源、类型、哈希、生成模型和提示词。下一步可以增加一个跨项目
-Asset Library：
-
-- 用 SHA-256 去重；
-- 保存主题、实体、视觉角色和 modality 标签；
-- 保存来源、授权状态和生成信息；
-- 为图片生成视觉 embedding；
-- 检索时先查本地库，再执行 Web Search 或 AI 生成；
-- 复用前仍执行可用性和画幅检查。
-
-### 17.3 值得继续完善的方向
-
-1. 为用户提供全流程统一 CLI，自动按依赖顺序运行所有 Stage；
-2. 增加背景音乐和音效轨，同时确保旁白始终优先；
-3. 增加字幕主题、关键词高亮和逐词动画；
-4. 增加镜头重复检测，避免连续画面过于相似；
-5. 将 Web Search 抽象成可替换 MCP Provider；
-6. 增加素材库和跨项目复用；
-7. 增加最终视频抽帧视觉审查；
-8. 增加失败断点续跑，避免重新调用已经成功的昂贵模型；
-9. 为事实主张增加可选的 Research / Citation Stage，而不是强制阻断视觉生成；
-10. 将 Stage 7 重编号或在统一编排层隐藏内部编号差异。
-
-## 18. 总结
-
-这个 Harness 的本质不是“输入一句话直接让一个模型生成整条视频”，而是把 UGC
-生产拆成一组可以检查、替换和重跑的阶段：
+### 8.4 Asset Agent
 
 ```text
-主题
-→ 内容结构
-→ 口语剧本
-→ 真实配音时钟
-→ Claim 与画面需求
-→ Web 检索或 AI 素材
-→ 音频驱动时间线
-→ 字幕、标签和图片适配
-→ Remotion 最终合成
-→ FFprobe 媒体质量检查
+VisualRequirement
+→ 按顺序尝试 Direction
+→ Web Search / Page Capture / Image Generation / Video Generation
+→ first-success
+→ Asset Critic
+→ revision 或 image repair
 ```
 
-这种设计保留了 UGC 的口语节奏和信息密度，同时避免电影化分镜系统常见的固定
-镜头时长、复杂摄影语言和过度制作。每一步都有 JSON Artifact，因此既适合当前
-CLI 运行，也适合以后接入 Agent、MCP、任务队列、素材数据库或可视化编辑器。
+Asset Critic 已吸收旧图片处理阶段的职责，检查：
+
+- 登录或认证遮挡；
+- 主体/重点区域是否足够大；
+- 文字是否可读；
+- 分辨率与 9:16 适配；
+- 来源和生成披露；
+- A-roll 是否为动态视频；
+- 人物身份与动作连续链是否正确。
+
+### 8.5 Timeline Agent
+
+以真实 TTS 音频为唯一主时钟：
+
+```text
+TimedAudio + RealizedBeat + Approved Assets
+→ Clip
+→ CaptionCue
+→ Overlay
+→ VisualTransform
+→ Timeline Critic
+```
+
+静态图片可使用轻推、平移和聚焦；已有视频使用裁切或循环适配真实 Beat 时长。
+
+### 8.6 Render Agent
+
+```text
+Approved Timeline
+→ Remotion 1080x1920 / 30 FPS
+→ H.264 + AAC
+→ FFprobe
+→ Render Critic
+→ project_complete
+```
+
+Render Agent 不得自行改变内容和时间线，只负责确定性合成、媒体检测和有限故障恢复。
+
+## 9. Video Profile
+
+### 9.1 B-roll
+
+- `speaker_presence_ratio = 0`；
+- `world_state.aroll_character = null`；
+- 画外音为主；
+- 证据类优先 Web Search 和页面捕获；
+- 解释、氛围和注意力刷新可使用 AI 图片、AI 视频或动效；
+- 不生成 `talking_head`。
+
+### 9.2 A-roll
+
+- 人物口播为主；
+- 必须定义固定人物及匹配声线；
+- A-roll 必须输出动态 MP4，而不是静态人物图；
+- 同一人物始终复用一个 identity reference；
+- 相邻人物片段使用上一视频末帧作为下一视频首帧；
+- 允许自然眨眼、呼吸、头部和手部动作；
+- 当前不要求人物口型与 TTS 精确同步。
+
+### 9.3 AB-roll
+
+- 人物口播为主，证据或说明画面为辅；
+- 默认人物出镜目标范围由 VideoProfile 指定，当前常用为 55%–75%；
+- 相邻 A-roll 必须动作连续；
+- 中间出现 B-roll 后，后续 A-roll 保持人物身份、服装与环境一致，但重新开始自然动作，不继承上一动作组。
+
+```text
+A1 → A2 → A3 | B1 → B2 → B3 | A4 → A5
+└─ action group 01 ─┘         └ group 02 ┘
+└──────────── same character identity ────────────┘
+```
+
+## 10. A-roll 人物与语音一致性
+
+人物身份只有一个事实源：`VideoWorldState.aroll_character`。
+
+```mermaid
+flowchart LR
+    WS["WorldState.aroll_character"] --> VP["VideoProfile character"]
+    WS --> TTS["VoicePlan / TTS voice"]
+    WS --> ID["Character identity reference"]
+    ID --> A1["A-roll clip 1"]
+    A1 --> A2["A-roll clip 2"]
+    A2 --> A3["A-roll clip 3"]
+```
+
+默认 TTS 映射可通过环境变量覆盖：
+
+- `VOLCENGINE_TTS_MALE_VOICE_ID`；
+- `VOLCENGINE_TTS_FEMALE_VOICE_ID`；
+- `VOLCENGINE_TTS_NEUTRAL_VOICE_ID`。
+
+Voice CLI 只有在用户显式传入 `--voice-id` 时才覆盖自动人物声线选择。
+
+## 11. 状态转换与重试
+
+统一提交规则：
+
+```text
+Agent candidate
+→ Controller 校验 Task 和状态版本
+→ Independent Critic
+→ passed: commit graph + advance next agent
+→ failed: reject graph update + record trajectory + create revision/repair
+```
+
+关键性质：
+
+- Critic 不通过时不会开放下一个 Agent；
+- rejected candidate 不会污染 current DependencyGraph；
+- 每次失败和修改都保存在对应阶段 Trajectory；
+- 局部任务只能修改 scope 内对象；
+- 任务达到预算后按 `fallback_policy` 停止或采用最佳候选；
+- Controller 提交成功后 `state_version` 单调递增。
+
+## 12. Artifact 与项目目录
+
+每个项目目录包含领域 Artifact、Harness 记录和媒体文件：
+
+```text
+outputs/<project>/
+├── narrative_artifact.json
+├── voice_artifact.json
+├── editorial_artifact.json
+├── asset_artifact.json
+├── timeline_artifact.json
+├── render_artifact.json
+├── audio/
+├── assets/
+│   ├── character_reference/
+│   ├── generated_video/
+│   └── prepared/
+├── video/
+│   ├── preview.mp4
+│   └── final.mp4
+└── harness/
+    ├── project_state.json
+    ├── *_task.json
+    ├── *_agent_result.json
+    ├── *_evaluation.json
+    └── *_transition.json
+```
+
+Artifact 文件是领域产物；`harness/` 文件解释它为何产生、基于哪个版本、是否通过审核以及如何转换状态。
+
+## 13. 当前验收结果
+
+当前自动测试共 49 项，覆盖：
+
+- Narrative、Voice、Editorial、Asset、Timeline、Render Agent；
+- Critic 通过与拒绝状态转换；
+- Beat 级双向 DependencyGraph；
+- 单 Beat 修改后的下游失效；
+- 局部 Repair Task；
+- 图片登录遮挡与竖屏修复；
+- Editorial 三候选 revision 预算；
+- WorldState 人物与 TTS 声线一致性；
+- 动态 A-roll；
+- 相邻 A-roll 动作依赖；
+- B-roll 切断动作组但保持人物身份；
+- 音频主时钟和最终媒体规格。
+
+端午节主题已完成两种端到端样例：
+
+- `outputs/端午节文化短视频-动态Aroll`：AB-roll，动态固定人物与连续动作；
+- `outputs/端午节文化短视频-Broll`：纯 B-roll，无人物口播画面。
+
+## 14. 当前边界与后续方向
+
+当前暂未实现或不作为本轮要求：
+
+- A-roll 口型与 TTS 音频的精确同步；
+- 面向所有阶段的单一常驻 Director Agent；
+- 跨机器分布式 Scheduler；
+- 完整 GUI 与 Schema Studio；
+- MCP Server 化的远程工具层；
+- 全片语义级 Global Critic 自动回溯所有 Agent。
+
+这些能力可以在现有 TaskEnvelope、DependencyGraph、Trajectory 和 Controller 提交协议上继续扩展，不需要恢复旧 Stage Pipeline。
+
+## 15. 最终结论
+
+项目当前不是“在 Pipeline 外包一层 Agent”，而是由多个受约束领域 Agent、独立 Critic、版本化 ProjectState、Beat 级 DependencyGraph 和阶段化 Trajectory 共同构成的 Harness。
+
+其核心保证是：
+
+1. 只有审核通过的最终产物才能进入下一个 Agent；
+2. Agent 不能绕过 Controller 直接修改项目状态；
+3. 所有任务都携带 scope、预算、输入哈希和状态版本；
+4. 每个 Beat 的依赖和反向依赖都可追踪；
+5. 修改后只失效真正受影响的下游；
+6. Repair 完成前，任何 Agent 都不能消费 stale 产物；
+7. A-roll 人物外观、TTS 声线、身份参考和动作连续性来自同一条状态链；
+8. 达到 revision 预算后按照明确 fallback 规则终止，不允许无限循环。

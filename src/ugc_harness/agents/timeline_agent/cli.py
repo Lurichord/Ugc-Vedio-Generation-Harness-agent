@@ -12,7 +12,7 @@ from ...shared.settings import AssetGenerationSettings, LLMSettings
 from ..asset_agent.models import AssetArtifact
 from ..editorial_agent.models import EditorialArtifact
 from ..voice_agent.models import VoiceArtifact
-from .providers import OpenRouterScreenAnimationProvider
+from .providers import VolcengineScreenAnimationProvider
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> None:
         state = ProjectState.model_validate_json((project_dir / "harness" / "project_state.json").read_text(encoding="utf-8"))
         llm_settings = LLMSettings.from_environment(args.api_keys_file)
         generation_settings = AssetGenerationSettings.from_environment(args.api_keys_file, video_model=args.video_model)
-        with OpenRouterScreenAnimationProvider(llm_settings, generation_settings) as provider:
+        with VolcengineScreenAnimationProvider(llm_settings, generation_settings) as provider:
             run = TimelineHarnessController.from_provider(provider).run(voice, editorial, assets, project_dir, state)
         artifact = run.artifact
         writer = ArtifactWriter(project_dir.parent)

@@ -1,0 +1,201 @@
+<mxfile host="app.diagrams.net" agent="Cursor">
+  <diagram id="orch-task-loop" name="Orchestrator 与 Task Agent Loop">
+    <mxGraphModel dx="1600" dy="980" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2480" pageHeight="1760" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=20;fontColor=#0F172A;fontStyle=1;" value="当前项目总览：Orchestrator（意图层）与 Task Agent Loop（统一 GenericAgent）&lt;br&gt;&lt;font color=&quot;#64748B&quot; style=&quot;font-size:13px;&quot;&gt;对应架构图的上半部分。Cognitive Twin 尚未设计，本图省略。Harness / ProjectState / Stage 只列现行字段。&lt;/font&gt;" vertex="1">
+          <mxGeometry x="40" y="16" width="2400" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=14;fillColor=#F8FAFC;strokeColor=#94A3B8;fontSize=13;" value="&lt;b&gt;图例&lt;/b&gt;　玫红框＝核心设计　蓝框＝工作副本 / 注入视图　橙条＝账本字段　紫条＝阶段字段　实线＝控制流　虚线＝只读投影或回写　灰字＝未接线" vertex="1">
+          <mxGeometry x="40" y="76" width="2400" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="user" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#111827;strokeColor=#000000;fontColor=#FFFFFF;fontSize=14;fontStyle=1;" value="&lt;b&gt;User&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;CLI：python -m ugc_harness.intake&lt;br&gt;API：/api/intake/sessions&lt;br&gt;一拍回一句&lt;/font&gt;" vertex="1">
+          <mxGeometry x="40" y="360" width="180" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="orch" parent="1" style="swimlane;html=1;rounded=1;startSize=42;horizontal=1;fillColor=#FFF1F2;strokeColor=#E11D48;strokeWidth=2;fontColor=#9F1239;fontStyle=1;fontSize=16;" value="Orchestrator　意图解析层　intake/　不复用 GenericAgent.choose_tool" vertex="1">
+          <mxGeometry x="250" y="140" width="1040" height="700" as="geometry" />
+        </mxCell>
+        <mxCell id="orch-flow" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#FDF2F8;strokeColor=#DB2777;fontSize=12;" value="&lt;b&gt;每一拍（IntentHost.respond）&lt;/b&gt;&lt;br&gt;① inbound 入　② refresh progress（有项目则读 VideoState）　③ 拼 IntentView　④ IntentAgent.generate → IntakeTurn　⑤ Pydantic 合并工作副本　⑥ 按 address 分流，harness 回信再注一次（最多 6 hop）" vertex="1">
+          <mxGeometry x="270" y="196" width="1000" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="orch-sense" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#E11D48;fontSize=12;" value="&lt;b&gt;感知意图&lt;/b&gt;&lt;br&gt;Inbound&lt;br&gt;source: user | harness&lt;br&gt;text: 上一拍来信&lt;br&gt;不读 shot / beat / graph" vertex="1">
+          <mxGeometry x="270" y="282" width="230" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="orch-plan" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#E11D48;fontSize=12;" value="&lt;b&gt;规划解析&lt;/b&gt;&lt;br&gt;注入 agent.md + IntentView&lt;br&gt;StructuredLLM.generate&lt;br&gt;自己填 brief / intent&lt;br&gt;自己写 check.ok / issues" vertex="1">
+          <mxGeometry x="516" y="282" width="250" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="orch-reply" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#E11D48;fontSize=12;" value="&lt;b&gt;任务回复&lt;/b&gt;&lt;br&gt;address=user → 只问一件事&lt;br&gt;address=harness → 推字段&lt;br&gt;address=done → 收工&lt;br&gt;check.ok=false 不许开工" vertex="1">
+          <mxGeometry x="782" y="282" width="230" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="orch-gate" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#E11D48;fontSize=12;" value="&lt;b&gt;与 Harness 对打&lt;/b&gt;&lt;br&gt;start_project / inspect / run_stage&lt;br&gt;brief 过不了 Pydantic → 当 harness 来信打回&lt;br&gt;run_stage 第一刀：尚未接线&lt;br&gt;改问题＝重写 brief/intent，不碰镜头" vertex="1">
+          <mxGeometry x="1028" y="282" width="242" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="orch-view" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=12;" value="&lt;b&gt;IntentView　唯一注入文档（view.py 硬边界）&lt;/b&gt;&lt;br&gt;brief: BriefDraft　topic / production_mode / video_profile / target / audience / communication / content_policy&lt;br&gt;intent: IntentDraft　format_id / topic / one_sentence_thesis / promise / audience / communication / target / presentation?&lt;br&gt;progress: project_id, state_version, narrative, script, voice, editorial, asset, timeline, render&lt;br&gt;inbound: source, text&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;不给 world / structure / shots / timeline / voice.utterances / dependency_graph / trajectory&lt;/font&gt;" vertex="1">
+          <mxGeometry x="270" y="414" width="500" height="168" as="geometry" />
+        </mxCell>
+        <mxCell id="orch-turn" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=12;" value="&lt;b&gt;IntakeTurn　模型直接返回&lt;/b&gt;&lt;br&gt;brief / intent　本拍覆盖字段&lt;br&gt;check {ok, issues[]}&lt;br&gt;address: user | harness | done&lt;br&gt;message　给对端的一句话&lt;br&gt;harness_request?&lt;br&gt;　action: start_project | run_stage | inspect&lt;br&gt;　stage?: narrative…render" vertex="1">
+          <mxGeometry x="786" y="414" width="484" height="168" as="geometry" />
+        </mxCell>
+        <mxCell id="orch-mem" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#DBEAFE;strokeColor=#1D4ED8;fontSize=12;" value="&lt;b&gt;Orchestrator Working Mem　= IntakeSession&lt;/b&gt;&lt;br&gt;session_id / status: waiting_user | talking_to_harness | done / project_id / project_dir&lt;br&gt;working_brief: BriefDraft　　working_intent: IntentDraft　　progress: ProgressSnapshot&lt;br&gt;last_check / last_address / last_message / last_harness_request / inbound / messages[]&lt;br&gt;模型下一拍只看 IntentView，不看完整聊天记录；工作副本承载累计字段。" vertex="1">
+          <mxGeometry x="270" y="596" width="1000" height="124" as="geometry" />
+        </mxCell>
+
+        <mxCell id="loop" parent="1" style="swimlane;html=1;rounded=1;startSize=42;horizontal=1;fillColor=#FFF1F2;strokeColor=#E11D48;strokeWidth=2;fontColor=#9F1239;fontStyle=1;fontSize=16;" value="Task Agent Loop　GenericAgent　感知 / 规划 / 行动 / 反馈　每 task 重置 messages" vertex="1">
+          <mxGeometry x="1330" y="140" width="1110" height="700" as="geometry" />
+        </mxCell>
+        <mxCell id="loop-flow" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#FDF2F8;strokeColor=#DB2777;fontSize=12;" value="&lt;b&gt;统一循环（六个制作阶段共用，差异全是数据）&lt;/b&gt;&lt;br&gt;预算门禁 → choose_tool → 白名单 → transport.call → ActionRecord → 刷新 StateView 注入 messages → 直到 *.submit_candidate。Critic / Commit 在 Harness，不在 loop 内。" vertex="1">
+          <mxGeometry x="1350" y="196" width="1070" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="loop-sense" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#E11D48;fontSize=12;" value="&lt;b&gt;感知&lt;/b&gt;&lt;br&gt;system = agent_instructions&lt;br&gt;user = {TaskEnvelope, context}&lt;br&gt;之后看 StateView&lt;br&gt;不读整包 ProjectState" vertex="1">
+          <mxGeometry x="1350" y="282" width="250" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="loop-plan" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#E11D48;fontSize=12;" value="&lt;b&gt;规划&lt;/b&gt;&lt;br&gt;tool_model.choose_tool&lt;br&gt;只许选 allowed_tools&lt;br&gt;steps ≥ max_steps → 失败&lt;br&gt;不另开 Sub-Agent 类" vertex="1">
+          <mxGeometry x="1616" y="282" width="250" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="loop-act" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#E11D48;fontSize=12;" value="&lt;b&gt;行动　三种能力面&lt;/b&gt;&lt;br&gt;MCP：narrative stdio 子进程&lt;br&gt;Skill：instructions/*.md&lt;br&gt;Transport：Registry 过渡&lt;br&gt;通道对循环不可见" vertex="1">
+          <mxGeometry x="1882" y="282" width="250" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="loop-fb" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#E11D48;fontSize=12;" value="&lt;b&gt;反馈&lt;/b&gt;&lt;br&gt;成功：结果进 messages&lt;br&gt;失败：错误原样返回&lt;br&gt;board.apply_tool_result&lt;br&gt;submit → 解析 candidate" vertex="1">
+          <mxGeometry x="2148" y="282" width="272" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="loop-caps" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#E11D48;fontSize=12;" value="&lt;b&gt;阶段接线（壳不变，数据变）&lt;/b&gt;&lt;br&gt;narrative　McpToolTransport　+ narrative.md　+ NarrativeCandidate&lt;br&gt;voice / editorial / asset / timeline / render　RegistryToolTransport　+ 各自 .md　+ 各自 Candidate&lt;br&gt;drama/tutorial 的 shot 路径仍由 Harness controller 跑，同一套 TaskEnvelope / ActionRecord&lt;br&gt;allowed_tools 里必须有且仅有一个 *.submit_candidate" vertex="1">
+          <mxGeometry x="1350" y="414" width="520" height="168" as="geometry" />
+        </mxCell>
+        <mxCell id="loop-view" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=12;" value="&lt;b&gt;StateView　任务内只读快照&lt;/b&gt;&lt;br&gt;state_version / format_id&lt;br&gt;filled_layers{}　completed_outputs[]&lt;br&gt;pending_objectives[]&lt;br&gt;steps_used / steps_remaining&lt;br&gt;正式账本冻结，直到 Harness commit" vertex="1">
+          <mxGeometry x="1886" y="414" width="534" height="168" as="geometry" />
+        </mxCell>
+        <mxCell id="loop-mem" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#DBEAFE;strokeColor=#1D4ED8;fontSize=12;" value="&lt;b&gt;Task Working Mem　任务级，提交即丢&lt;/b&gt;&lt;br&gt;messages[]　system 指令 + TaskEnvelope + 每步 tool/result/StateView&lt;br&gt;actions: ActionRecord[]　{action_id, agent, task_id, tool, result, reason, duration_ms, cost_usd}&lt;br&gt;candidate　阶段 schema　→ GenericAgentExecution{candidate, result: AgentResult}&lt;br&gt;AgentResult：status / state_version_used / input_hash / artifact_refs[] / state_patch / evaluation_target / error" vertex="1">
+          <mxGeometry x="1350" y="596" width="1070" height="124" as="geometry" />
+        </mxCell>
+
+        <mxCell id="harness" parent="1" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#FFF7ED;strokeColor=#EA580C;strokeWidth=2;fontColor=#9A3412;fontStyle=1;fontSize=15;" value="Harness　StageRunner + *HarnessController　字段与职责（不展开每阶段内部）" vertex="1">
+          <mxGeometry x="250" y="868" width="2190" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="h-route" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#EA580C;fontSize=11;" value="&lt;b&gt;任务路由&lt;/b&gt;&lt;br&gt;ProductionRoute&lt;br&gt;format_id&lt;br&gt;asset_route&lt;br&gt;stages[]" vertex="1">
+          <mxGeometry x="268" y="918" width="160" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="h-ctx" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#EA580C;fontSize=11;" value="&lt;b&gt;上下文提取&lt;/b&gt;&lt;br&gt;context_builder&lt;br&gt;StateView&lt;br&gt;阶段产物路径&lt;br&gt;不整包塞账本" vertex="1">
+          <mxGeometry x="442" y="918" width="160" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="h-disp" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#EA580C;fontSize=11;" value="&lt;b&gt;任务分发&lt;/b&gt;&lt;br&gt;TaskEnvelope&lt;br&gt;GenericAgent.run&lt;br&gt;allowed_tools&#xa;agent_instructions" vertex="1">
+          <mxGeometry x="616" y="918" width="170" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="h-snap" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#EA580C;fontSize=11;" value="&lt;b&gt;状态快照&lt;/b&gt;&lt;br&gt;based_on_state_version&lt;br&gt;input_hash&lt;br&gt;dependency_snapshot[]&lt;br&gt;防并发 / 漂移" vertex="1">
+          <mxGeometry x="800" y="918" width="180" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="h-pipe" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#EA580C;fontSize=11;" value="&lt;b&gt;任务管线&lt;/b&gt;&lt;br&gt;Load → Envelope&lt;br&gt;Precheck → Agent&lt;br&gt;Validate → Critic&lt;br&gt;passed 才 Commit" vertex="1">
+          <mxGeometry x="994" y="918" width="170" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="h-write" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#EA580C;fontSize=11;" value="&lt;b&gt;回写 PS / 重做&lt;/b&gt;&lt;br&gt;commit artifact&lt;br&gt;description / execution&lt;br&gt;graph / trajectory&lt;br&gt;repair TaskEnvelope" vertex="1">
+          <mxGeometry x="1178" y="918" width="170" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="h-gate" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#EA580C;fontSize=11;" value="&lt;b&gt;阶段门控&lt;/b&gt;&lt;br&gt;VideoState.*_status&lt;br&gt;pending ready running&lt;br&gt;passed failed stale&lt;br&gt;needs_revision …" vertex="1">
+          <mxGeometry x="1362" y="918" width="170" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="h-env" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFEDD5;strokeColor=#C2410C;fontSize=11;" value="&lt;b&gt;TaskEnvelope&lt;/b&gt;&lt;br&gt;task_id / agent / goal / scope&lt;br&gt;format_id / agent_instructions&lt;br&gt;allowed_tools[] / required_outputs[]&lt;br&gt;forbidden_actions[] / acceptance_criteria[]&lt;br&gt;budget{max_steps, max_retries, max_cost_usd, deadline_seconds}&lt;br&gt;input_hash / dependency_snapshot[]&lt;br&gt;Scope：project_id / shot_ids / beat_ids / target_refs …" vertex="1">
+          <mxGeometry x="1548" y="918" width="370" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="h-orch" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFEDD5;strokeColor=#C2410C;fontSize=11;" value="&lt;b&gt;对 Orchestrator 的接口&lt;/b&gt;&lt;br&gt;start_project(CreativeBrief)&lt;br&gt;inspect → 刷新 progress&lt;br&gt;run_stage　尚未接线&lt;br&gt;只回进度枚举，不回剧本" vertex="1">
+          <mxGeometry x="1934" y="918" width="230" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="h-twin" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;dashed=1;dashPattern=8 8;fillColor=#F8FAFC;strokeColor=#94A3B8;fontColor=#64748B;fontSize=11;" value="&lt;b&gt;孪生评价&lt;/b&gt;&lt;br&gt;未设计&lt;br&gt;不画 Cognitive Twin" vertex="1">
+          <mxGeometry x="2180" y="918" width="240" height="150" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ps" parent="1" style="swimlane;html=1;rounded=1;startSize=36;horizontal=1;fillColor=#FFFBEB;strokeColor=#D97706;strokeWidth=2;fontColor=#92400E;fontStyle=1;fontSize=15;" value="Project State　project-state.v2　Harness 持有正式写权限；Orchestrator 只投影 intent + VideoState；Loop 只看 StateView" vertex="1">
+          <mxGeometry x="40" y="1120" width="2400" height="280" as="geometry" />
+        </mxCell>
+        <mxCell id="ps-rt" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#D97706;fontSize=11;" value="&lt;b&gt;runtime_context&lt;/b&gt;&lt;br&gt;available_models{}&lt;br&gt;available_tools[]&lt;br&gt;constraints{}" vertex="1">
+          <mxGeometry x="58" y="1170" width="200" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="ps-video" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#D97706;fontSize=11;" value="&lt;b&gt;video　VideoState&lt;/b&gt;&lt;br&gt;project_id&lt;br&gt;state_version&lt;br&gt;narrative_status&lt;br&gt;script_status&lt;br&gt;voice_status&lt;br&gt;editorial_status&lt;br&gt;asset_status&lt;br&gt;timeline_status&lt;br&gt;render_status" vertex="1">
+          <mxGeometry x="272" y="1170" width="180" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="ps-desc" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#D97706;fontSize=11;" value="&lt;b&gt;description　VideoDescription&lt;/b&gt;&lt;br&gt;intent　VideoIntent（Orchestrator 可见）&lt;br&gt;world　cast / entities / claims&lt;br&gt;visual_language / sound_design&lt;br&gt;structure　explainer | drama | tutorial&lt;br&gt;voice　utterances / 口播设计&lt;br&gt;shots[]　ShotDescription&lt;br&gt;timeline　clips[]&lt;br&gt;deliverable　成片元数据&lt;br&gt;&lt;font color=&quot;#64748B&quot;&gt;后七层不进 IntentView&lt;/font&gt;" vertex="1">
+          <mxGeometry x="466" y="1170" width="520" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="ps-exec" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#D97706;fontSize=11;" value="&lt;b&gt;execution&lt;/b&gt;&lt;br&gt;elements[ref] → ElementStatus&lt;br&gt;status / version / attempts&lt;br&gt;last_error&lt;br&gt;generation_job_id&lt;br&gt;cost_usd&lt;br&gt;ref 与 description 共用地址&lt;br&gt;section: / beat: / shot: / clip:" vertex="1">
+          <mxGeometry x="1000" y="1170" width="280" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="ps-graph" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#D97706;fontSize=11;" value="&lt;b&gt;dependency_graph&lt;/b&gt;&lt;br&gt;graph_version&lt;br&gt;nodes[ref]:&lt;br&gt;kind / version / content_hash&lt;br&gt;depends_on[] / dependents[]&lt;br&gt;dependency_versions{}&lt;br&gt;status: current | stale&lt;br&gt;produced_by / last_task_id&lt;br&gt;locked" vertex="1">
+          <mxGeometry x="1294" y="1170" width="280" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="ps-traj" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#D97706;fontSize=11;" value="&lt;b&gt;trajectory&lt;/b&gt;&lt;br&gt;phases[stage].tasks[]&lt;br&gt;TaskTrajectoryRecord:&lt;br&gt;task_kind: generation | revision | repair&lt;br&gt;task: TaskEnvelope&lt;br&gt;agent_result: AgentResult&lt;br&gt;evaluation: EvaluationResult&lt;br&gt;transition / graph_update&lt;br&gt;recorded_at" vertex="1">
+          <mxGeometry x="1588" y="1170" width="400" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="ps-note" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FEF3C7;strokeColor=#D97706;fontSize=11;" value="&lt;b&gt;投影规则&lt;/b&gt;&lt;br&gt;Orchestrator ← intent + video 七状态&lt;br&gt;Loop ← StateView + 任务上下文&lt;br&gt;Harness ← 整本读写&lt;br&gt;Agent 无正式写权限&lt;br&gt;只许提议 StatePatch" vertex="1">
+          <mxGeometry x="2002" y="1170" width="418" height="210" as="geometry" />
+        </mxCell>
+
+        <mxCell id="stage" parent="1" style="swimlane;html=1;rounded=1;startSize=36;horizontal=1;fillColor=#F5F3FF;strokeColor=#7C3AED;strokeWidth=2;fontColor=#5B21B6;fontStyle=1;fontSize=15;" value="Stage　制作阶段与路线　路线由已提交 shots 决定，不是 Orchestrator 选类型" vertex="1">
+          <mxGeometry x="40" y="1424" width="2400" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="st-n" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=11;" value="&lt;b&gt;narrative&lt;/b&gt;&lt;br&gt;创意 / 内容策划&lt;br&gt;CreativeBrief →&lt;br&gt;VideoDescription&lt;br&gt;落 intent + world&lt;br&gt;+ structure + shots" vertex="1">
+          <mxGeometry x="58" y="1474" width="190" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="st-v" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=11;" value="&lt;b&gt;voice&lt;/b&gt;&lt;br&gt;视听 · 口播&lt;br&gt;explainer 路线&lt;br&gt;VoicePlan&lt;br&gt;TimedAudio&lt;br&gt;字级对齐" vertex="1">
+          <mxGeometry x="262" y="1474" width="170" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="st-e" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=11;" value="&lt;b&gt;editorial&lt;/b&gt;&lt;br&gt;视听 · 画面需求&lt;br&gt;explainer 路线&lt;br&gt;claims[]&lt;br&gt;visual_requirements[]" vertex="1">
+          <mxGeometry x="446" y="1474" width="180" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="st-a" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=11;" value="&lt;b&gt;asset&lt;/b&gt;&lt;br&gt;素材准备&lt;br&gt;editorial_assets&lt;br&gt;或 shot_ai_video&lt;br&gt;AssetCard / ShotVideo" vertex="1">
+          <mxGeometry x="640" y="1474" width="180" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="st-t" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=11;" value="&lt;b&gt;timeline&lt;/b&gt;&lt;br&gt;后期组装&lt;br&gt;clips[] / captions&lt;br&gt;连续时间线&lt;br&gt;音频覆盖" vertex="1">
+          <mxGeometry x="834" y="1474" width="170" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="st-r" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=11;" value="&lt;b&gt;render&lt;/b&gt;&lt;br&gt;成片&lt;br&gt;final.mp4&lt;br&gt;preview.mp4&lt;br&gt;deliverable" vertex="1">
+          <mxGeometry x="1018" y="1474" width="160" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="st-route" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#EDE9FE;strokeColor=#6D28D9;fontSize=12;" value="&lt;b&gt;ProductionRoute.stages&lt;/b&gt;&lt;br&gt;&lt;b&gt;explainer&lt;/b&gt;　asset_route=editorial_assets&lt;br&gt;narrative → voice → editorial → asset → timeline → render&lt;br&gt;&lt;br&gt;&lt;b&gt;drama / tutorial&lt;/b&gt;　asset_route=shot_ai_video&lt;br&gt;narrative → asset → timeline → render&lt;br&gt;&lt;br&gt;StageName = narrative | voice | editorial | asset | timeline | render&lt;br&gt;对应架构图「创意阶段 / 内容策划 / 视听设计 / 素材准备 / 后期组装」" vertex="1">
+          <mxGeometry x="1194" y="1474" width="720" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="st-gate" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#EDE9FE;strokeColor=#6D28D9;fontSize=12;" value="&lt;b&gt;门控与 Orchestrator&lt;/b&gt;&lt;br&gt;Orchestrator 只看见各 status 枚举&lt;br&gt;决定问用户、inspect 或 start_project&lt;br&gt;不决定下一镜怎么拍&lt;br&gt;&lt;br&gt;Harness 按 status + route 分发&lt;br&gt;Loop 一次只做一个 TaskEnvelope" vertex="1">
+          <mxGeometry x="1930" y="1474" width="490" height="230" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-user-orch" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeWidth=2;strokeColor=#0F172A;" edge="1" source="user" target="orch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-orch-h" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeWidth=2;strokeColor=#E11D48;" edge="1" source="orch" target="harness">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-h-loop" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeWidth=2;strokeColor=#E11D48;" edge="1" source="harness" target="loop">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-orch-ps" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;dashed=1;dashPattern=8 8;strokeWidth=1;strokeColor=#94A3B8;" edge="1" source="orch" target="ps">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="230" y="490" />
+              <mxPoint x="230" y="1260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-h-ps" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;startArrow=open;dashed=1;dashPattern=8 8;strokeWidth=1;strokeColor=#D97706;" edge="1" source="harness" target="ps">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-loop-ps" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;dashed=1;dashPattern=8 8;strokeWidth=1;strokeColor=#94A3B8;" edge="1" source="loop" target="ps">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2448" y="490" />
+              <mxPoint x="2448" y="1260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-h-st" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;dashed=1;dashPattern=8 8;strokeWidth=1;strokeColor=#7C3AED;" edge="1" source="harness" target="stage">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="20" y="978" />
+              <mxPoint x="20" y="1574" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

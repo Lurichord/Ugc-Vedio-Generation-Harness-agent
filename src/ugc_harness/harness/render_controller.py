@@ -6,7 +6,17 @@ from typing import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..agents.render_agent import RenderAgent, RenderArtifact
+from typing import Any
+
+from ..agents.generic import (
+    CompletionSpec,
+    EnvironmentToolModel,
+    GenericAgent,
+    RegistryTool,
+    RegistryToolTransport,
+)
+from ..agents.instructions import load_instructions
+from ..agents.render_agent import RenderArtifact
 from ..agents.render_agent.models import RenderCandidate
 from ..agents.timeline_agent.models import TimelineArtifact
 from ..agents.voice_agent.models import VoiceArtifact
@@ -14,10 +24,15 @@ from ..evaluators.render_critic import RenderCritic
 from ..tools.registry import ToolRegistry
 from .dependencies import DependencyGraph
 from .dependency_builders import render_commits
-from .models import AgentResult, EvaluationResult, ProjectState, TaskBudget, TaskEnvelope, TaskScope, TransitionRecord
+from .description_realization import apply_render_realization
+from .models import AgentResult, ArtifactRef, EvaluationResult, ProjectState, StatePatch, TaskBudget, TaskEnvelope, TaskScope, TransitionRecord
 from .repair import repair_input_hash, select_repair_commits
 from .trajectory import record_task, task_kind_for
 from .transitions import transition_after_review
+
+
+RENDER_TOOL = "render.execute"
+SUBMIT_TOOL = "render.submit_candidate"
 
 
 class RenderRunRecord(BaseModel):
@@ -37,15 +52,77 @@ class RenderHarnessRun(BaseModel):
 
 
 class RenderHarnessController:
-    def __init__(self, agent: RenderAgent, critic: RenderCritic) -> None:
+    def __init__(self, agent: GenericAgent, critic: RenderCritic) -> None:
         self.agent = agent
         self.critic = critic
 
     @classmethod
-    def from_renderer(cls, renderer: Callable[..., RenderCandidate]) -> "RenderHarnessController":
+    def from_renderer(
+        cls,
+        renderer: Callable[..., RenderCandidate],
+        tool_model: object | None = None,
+    ) -> "RenderHarnessController":
         tools = ToolRegistry()
-        tools.register(RenderAgent.RENDER_TOOL, renderer)
-        return cls(RenderAgent(tools), RenderCritic())
+        for tool_name in (RENDER_TOOL, SUBMIT_TOOL):
+            tools.register(tool_name, lambda: None)
+
+        def transport_factory(
+            task: TaskEnvelope,
+            kwargs: dict[str, Any],
+        ) -> RegistryToolTransport:
+            voice = kwargs["voice"]
+            timeline = kwargs["timeline"]
+            project_dir = kwargs["project_dir"]
+            assert isinstance(voice, VoiceArtifact)
+            assert isinstance(timeline, TimelineArtifact)
+            session: dict[str, Any] = {}
+
+            def execute(problems: list[str] | None = None) -> RenderCandidate:
+                candidate = renderer(
+                    voice=voice,
+                    timeline_artifact=timeline,
+                    project_dir=project_dir,
+                )
+                if not isinstance(candidate, RenderCandidate):
+                    raise TypeError("render.execute returned an invalid artifact")
+                session["candidate"] = candidate
+                return candidate
+
+            def submit(problems: list[str] | None = None) -> RenderCandidate:
+                candidate = session.get("candidate")
+                if not isinstance(candidate, RenderCandidate):
+                    raise RuntimeError(
+                        "candidate is incomplete: nothing has been rendered yet"
+                    )
+                return candidate
+
+            return RegistryToolTransport(
+                [
+                    RegistryTool(
+                        name=RENDER_TOOL,
+                        description=(
+                            "把已批准的时间线渲染为最终与预览 MP4 并探测输出指标。"
+                        ),
+                        handler=execute,
+                    ),
+                    RegistryTool(
+                        name=SUBMIT_TOOL,
+                        description="渲染输出就绪后提交候选。",
+                        handler=submit,
+                    ),
+                ]
+            )
+
+        return cls(
+            GenericAgent(
+                tool_model=tool_model or EnvironmentToolModel(),  # type: ignore[arg-type]
+                transport_factory=transport_factory,
+                candidate_type=RenderCandidate,
+                completion_builder=_render_completion,
+                capability_tools=tools,
+            ),
+            RenderCritic(),
+        )
 
     def create_task(self, voice: VoiceArtifact, timeline: TimelineArtifact, state: ProjectState) -> TaskEnvelope:
         snapshots = DependencyGraph(state.dependency_graph).snapshot(["artifact:timeline"])
@@ -55,10 +132,12 @@ class RenderHarnessController:
             goal="Render the approved timeline into final and preview MP4 outputs.",
             scope=TaskScope(project_id=voice.project_id, beat_ids=[item.beat_id for item in timeline.timeline.clips]),
             based_on_state_version=state.video.state_version,
-            allowed_tools=[RenderAgent.RENDER_TOOL],
+            agent_instructions=load_instructions("render"),
+            allowed_tools=[RENDER_TOOL, SUBMIT_TOOL],
+            required_outputs=["render_candidate"],
             forbidden_actions=["modify_timeline", "modify_voice", "replace_assets"],
             acceptance_criteria=["Final output is 1080x1920 at 30fps.", "Final output contains audio and video streams.", "Duration differs from narration by no more than one frame.", "The Render Critic approves both outputs."],
-            budget=TaskBudget(max_steps=2, max_retries=0),
+            budget=TaskBudget(max_steps=4, max_retries=0),
             input_hash=self._input_hash(voice, timeline),
             dependency_snapshot=snapshots,
         )
@@ -80,15 +159,18 @@ class RenderHarnessController:
         graph = DependencyGraph(state.dependency_graph)
         graph.validate_snapshot(envelope.dependency_snapshot)
         execution = self.agent.run(envelope, voice=voice, timeline=timeline, project_dir=project_dir)
-        if execution.result.status != "completed" or execution.candidate is None:
+        candidate = execution.candidate
+        if execution.result.status != "completed" or not isinstance(
+            candidate, RenderCandidate
+        ):
             raise RuntimeError(execution.result.error or "render agent did not complete")
         self._validate_result(envelope, execution.result, state)
         graph.validate_snapshot(envelope.dependency_snapshot)
         target_ref = execution.result.evaluation_target
         assert target_ref is not None
-        quality, evaluation = self.critic.evaluate(project_dir, timeline, execution.candidate, target_ref)
+        quality, evaluation = self.critic.evaluate(project_dir, timeline, candidate, target_ref)
         artifact = RenderArtifact(
-            **execution.candidate.model_dump(),
+            **candidate.model_dump(),
             quality=quality,
         )
         committed_version = state.video.state_version + 1
@@ -96,6 +178,8 @@ class RenderHarnessController:
         next_state = state.model_copy(deep=True)
         next_state.video.state_version = committed_version
         next_state.video.render_status = "passed" if evaluation.passed else "needs_revision"
+        if evaluation.passed:
+            apply_render_realization(next_state, artifact)
         next_graph = DependencyGraph(next_state.dependency_graph)
         commits = select_repair_commits(next_graph, render_commits(artifact), envelope)
         graph_update = next_graph.commit_batch(task_id=envelope.task_id, produced_by="render_agent", commits=commits) if evaluation.passed else next_graph.reject_update(task_id=envelope.task_id, candidate_refs=[item.ref for item in commits], reason="Render Critic rejected the candidate artifact")
@@ -117,3 +201,18 @@ class RenderHarnessController:
             raise ValueError("render agent proposed forbidden state paths")
         if result.state_patch.invalidate:
             raise ValueError("render agent cannot invalidate upstream artifacts")
+
+
+def _render_completion(
+    task: TaskEnvelope,
+    kwargs: dict[str, Any],
+) -> CompletionSpec:
+    voice = kwargs["voice"]
+    assert isinstance(voice, VoiceArtifact)
+    return CompletionSpec(
+        artifact_refs=[ArtifactRef(kind="render_candidate", id=voice.project_id)],
+        state_patch=StatePatch(set={"video.render_status": "ready"}),
+        evaluation_target=(
+            f"render:{voice.project_id}@{task.based_on_state_version + 1}"
+        ),
+    )

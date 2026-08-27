@@ -1,6 +1,9 @@
-"""Editorial domain agent for claims and A/B-roll visual requirements."""
+"""Editorial domain contracts for claims and A/B-roll visual requirements.
 
-from .agent import EditorialAgent, EditorialAgentExecution
+Execution moved to the unified GenericAgent; this package keeps the
+editorial plan models and prompts used as its tools.
+"""
+
 from .models import (
     EditorialArtifact,
     EditorialPlan,
@@ -10,8 +13,6 @@ from .models import (
 )
 
 __all__ = [
-    "EditorialAgent",
-    "EditorialAgentExecution",
     "EditorialArtifact",
     "EditorialPlan",
     "EditorialQuality",

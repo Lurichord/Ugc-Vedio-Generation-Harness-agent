@@ -2,9 +2,14 @@ from pathlib import Path
 
 from PIL import Image
 
+from tests.fixtures.tool_models import CyclingToolModel
 from tests.test_editorial import _editorial_run, _plan
 from tests.test_assets import _asset_run
 from tests.test_voice import _narrative, _voice_run
+
+
+def _timeline_tool_model() -> CyclingToolModel:
+    return CyclingToolModel(["timeline.compose", "timeline.submit_candidate"])
 from ugc_harness.shared.artifacts import ArtifactWriter
 from ugc_harness.agents.timeline_agent.models import DerivedAsset
 from ugc_harness.harness.timeline_controller import TimelineHarnessController
@@ -113,7 +118,9 @@ def test_timeline_uses_audio_clock_and_ai_screen_derivative(
         editorial_run, voice_run, AllSuccessAssets(), tmp_path
     )
 
-    run = TimelineHarnessController.from_provider(FakeScreenAnimation()).run(
+    run = TimelineHarnessController.from_provider(
+        FakeScreenAnimation(), tool_model=_timeline_tool_model()
+    ).run(
         voice,
         editorial,
         assets_run.artifact,
@@ -152,7 +159,7 @@ def test_timeline_uses_audio_clock_and_ai_screen_derivative(
         state, ["artifact:timeline"]
     ).tasks[0]
     repaired = TimelineHarnessController.from_provider(
-        FakeScreenAnimation()
+        FakeScreenAnimation(), tool_model=_timeline_tool_model()
     ).run(
         voice,
         editorial,

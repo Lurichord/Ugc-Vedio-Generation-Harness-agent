@@ -15,10 +15,18 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from ...shared.image_generation import generate_seedream_image
 from ...shared.settings import AssetGenerationSettings, LLMSettings
+from ...shared.video_generation import generate_seedance_video
 from ..editorial_agent.models import ExplorationDirection
 from ..voice_agent.models import RealizedBeat
-from .models import AssetCard, AssetUsabilityReview, SourceTrace
+from .models import (
+    VIDEO_FILE_SUFFIXES,
+    AssetCard,
+    AssetUsabilityReview,
+    SourceTrace,
+    is_talking_head_video,
+)
 
 
 @dataclass(frozen=True)
@@ -55,7 +63,7 @@ class _MetadataParser(HTMLParser):
             self.title = (self.title or "") + data.strip()
 
 
-class OpenRouterWebAssetProvider:
+class VolcengineWebAssetProvider:
     """Acquire one web asset per direction; never returns a candidate list."""
 
     _WEB_TYPES = {
@@ -83,7 +91,7 @@ class OpenRouterWebAssetProvider:
     def close(self) -> None:
         self.client.close()
 
-    def __enter__(self) -> "OpenRouterWebAssetProvider":
+    def __enter__(self) -> "VolcengineWebAssetProvider":
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -223,7 +231,7 @@ class OpenRouterWebAssetProvider:
         beat: RealizedBeat,
     ) -> dict[str, str] | None:
         endpoint = (
-            self.settings.base_url.rstrip("/") + "/chat/completions"
+            self.settings.base_url.rstrip("/") + "/responses"
         )
         prompt = f"""为一个 UGC 视频视觉方向寻找一份公开网页来源。
 只选择一个最匹配且无需登录即可访问的来源，不要返回候选列表。
@@ -244,10 +252,8 @@ class OpenRouterWebAssetProvider:
             },
             json={
                 "model": self.settings.model,
-                "temperature": 0.1,
-                "response_format": {"type": "json_object"},
-                "tools": [{"type": "openrouter:web_search"}],
-                "messages": [
+                "tools": [{"type": "web_search"}],
+                "input": [
                     {
                         "role": "system",
                         "content": "只返回一个来源，不进行事实核验。",
@@ -258,7 +264,7 @@ class OpenRouterWebAssetProvider:
         )
         response.raise_for_status()
         payload = response.json()
-        text = payload["choices"][0]["message"].get("content") or ""
+        text = _responses_output_text(payload)
         value = _parse_json_object(text)
         url = str(value.get("url") or "").strip()
         if not url:
@@ -362,6 +368,19 @@ def _validate_public_url(url: str) -> None:
             raise ValueError("禁止访问本机或内网地址")
 
 
+def _responses_output_text(payload: dict[str, object]) -> str:
+    direct = payload.get("output_text")
+    if isinstance(direct, str):
+        return direct
+    for output in payload.get("output") or []:
+        if not isinstance(output, dict) or output.get("type") != "message":
+            continue
+        for content in output.get("content") or []:
+            if isinstance(content, dict) and content.get("type") == "output_text":
+                return str(content.get("text") or "")
+    return ""
+
+
 def _parse_json_object(text: str) -> dict:
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
@@ -398,7 +417,7 @@ def _image_suffix(mime: str) -> str:
     }.get(mime.lower(), ".img")
 
 
-class OpenRouterGeneratedAssetProvider:
+class VolcengineGeneratedAssetProvider:
     """Generate non-web visual directions as disclosed AI media."""
 
     _IMAGE_TYPES = {
@@ -484,6 +503,19 @@ class OpenRouterGeneratedAssetProvider:
         reference = self._character_reference(
             character_id, character_description, project_dir
         )
+        # Defensive re-check of the agent-level validation: only a real
+        # talking-head video file may feed the frame-continuity chain.
+        if previous_character_asset is not None and not is_talking_head_video(
+            previous_character_asset,
+            project_dir / previous_character_asset.local_path,
+        ):
+            print(
+                "previous character asset "
+                f"{previous_character_asset.asset_id} is not a usable "
+                "talking-head video; restarting from the identity reference",
+                flush=True,
+            )
+            previous_character_asset = None
         previous_asset_id = None
         if previous_character_asset is not None:
             first_frame = self._last_frame(
@@ -551,29 +583,32 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
         output = folder / f"{character_id}.png"
         if output.is_file() and output.stat().st_size:
             return output
-        response = self.client.post(
-            self.llm_settings.base_url.rstrip("/") + "/images",
-            headers=_auth_headers(self.llm_settings.api_key),
-            json={
-                "model": self.generation_settings.image_model,
-                "prompt": (
-                    "Vertical 9:16 identity reference portrait for a UGC creator. "
-                    f"{description}. Direct eye contact, neutral relaxed pose, phone "
-                    "camera realism, clear face and hands, no text or logos."
-                ),
-                "n": 1,
-                "aspect_ratio": "9:16",
-                "resolution": "1K",
-                "output_format": "png",
-            },
+        generated = generate_seedream_image(
+            self.client,
+            self.generation_settings,
+            (
+                "Vertical 9:16 identity reference portrait for a UGC creator. "
+                f"{description}. Direct eye contact, neutral relaxed pose, phone "
+                "camera realism, clear face and hands, no text or logos."
+            ),
         )
-        response.raise_for_status()
-        raw = base64.b64decode(response.json()["data"][0]["b64_json"], validate=True)
+        raw = generated.content
         output.write_bytes(raw)
         return output
 
     @staticmethod
     def _last_frame(video: Path, project_dir: Path, asset_id: str) -> Path:
+        if not video.is_file():
+            raise FileNotFoundError(
+                f"previous talking-head video does not exist: {video}"
+            )
+        if video.suffix.lower() not in VIDEO_FILE_SUFFIXES:
+            # ffmpeg happily "extracts a frame" from a still image, which
+            # silently breaks character continuity downstream.
+            raise ValueError(
+                f"refusing to extract a continuity frame from a non-video file: "
+                f"{video} (suffix {video.suffix or 'none'!r})"
+            )
         output = project_dir / "assets" / "character_reference" / f"{asset_id}_last.png"
         repository = Path(__file__).resolve().parents[4]
         ffmpeg = repository / "renderer" / "node_modules" / "@remotion" / "compositor-win32-x64-msvc" / "ffmpeg.exe"
@@ -584,7 +619,16 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if completed.returncode != 0 or not output.is_file():
-            raise RuntimeError("failed to extract previous talking-head last frame")
+            stderr = (
+                (completed.stderr or b"")
+                .decode("utf-8", errors="replace")
+                .strip()
+            )
+            raise RuntimeError(
+                f"failed to extract last frame from {video} "
+                f"(ffmpeg exit code {completed.returncode}): "
+                f"{stderr[-400:] or 'no stderr output'}"
+            )
         return output
 
     def _generate_image(
@@ -595,6 +639,34 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
         project_dir: Path,
         prompt: str,
     ) -> ProviderResult:
+        generated = generate_seedream_image(
+            self.client, self.generation_settings, prompt
+        )
+        raw = generated.content
+        mime = generated.mime_type
+        asset_id = f"asset_{visual_request_id}"
+        folder = project_dir / "assets" / "generated_image"
+        folder.mkdir(parents=True, exist_ok=True)
+        output = folder / f"{asset_id}{_image_suffix(mime)}"
+        output.write_bytes(raw)
+        card = AssetCard(
+            asset_id=asset_id,
+            visual_request_id=visual_request_id,
+            direction_id=direction.direction_id,
+            beat_id=beat.beat_id,
+            modality="ai_image",
+            origin="generated",
+            local_path=output.relative_to(project_dir).as_posix(),
+            mime_type=mime,
+            sha256=hashlib.sha256(raw).hexdigest(),
+            generated_media_disclosure_required=True,
+            generator_model=self.generation_settings.image_model,
+            generation_prompt=prompt,
+            generation_cost_usd=(generated.response.get("usage") or {}).get("cost"),
+        )
+        return ProviderResult(card, "success", "已生成一份 Seedream 图片素材")
+
+        # Legacy OpenRouter image protocol kept below for old serialized runs.
         response = self.client.post(
             self.llm_settings.base_url.rstrip("/") + "/images",
             headers=_auth_headers(self.llm_settings.api_key),
@@ -675,16 +747,67 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
         identity_reference_path: str | None = None,
         modality: str = "ai_video",
     ) -> ProviderResult:
+        payload.setdefault(
+            "duration",
+            min((4, 6, 8), key=lambda item: abs(item - beat.duration_ms / 1000)),
+        )
+        generated = generate_seedance_video(
+            self.client,
+            self.generation_settings,
+            payload,
+            progress_path=(
+                project_dir / "harness" / "seedance_jobs" / f"{visual_request_id}.json"
+            ),
+            # identity_reference_path marks a character-consistency request:
+            # dropping its reference frame would let the model reinvent the
+            # character, so it must fail loudly instead of degrading to text.
+            allow_text_fallback=identity_reference_path is None,
+        )
+        raw = generated.content
+        asset_id = f"asset_{visual_request_id}"
+        folder = project_dir / "assets" / "generated_video"
+        folder.mkdir(parents=True, exist_ok=True)
+        output = folder / f"{asset_id}.mp4"
+        output.write_bytes(raw)
+        card = AssetCard(
+            asset_id=asset_id,
+            visual_request_id=visual_request_id,
+            direction_id=direction.direction_id,
+            beat_id=beat.beat_id,
+            modality=modality,
+            origin="generated",
+            local_path=output.relative_to(project_dir).as_posix(),
+            mime_type=generated.mime_type,
+            sha256=hashlib.sha256(raw).hexdigest(),
+            generated_media_disclosure_required=True,
+            generator_model=self.generation_settings.video_model,
+            generation_prompt=prompt,
+            generation_job_id=generated.job_id,
+            generation_cost_usd=(generated.job.get("usage") or {}).get("cost"),
+            character_id=character_id,
+            continuity_group_id=continuity_group_id,
+            previous_asset_id=previous_asset_id,
+            identity_reference_path=identity_reference_path,
+        )
+        reason = "已生成一份动态视频素材"
+        if generated.degraded_to_text:
+            reason += "（注意：内联参考图被 Ark 拒绝，已降级为纯文本生视频）"
+        return ProviderResult(card, "success", reason)
+
+        # Legacy OpenAI-style video protocol kept below temporarily for old projects.
+        video_api_key, video_base_url = _video_api_config(
+            self.generation_settings
+        )
         response = self.client.post(
-            self.llm_settings.base_url.rstrip("/") + "/videos",
-            headers=_auth_headers(self.llm_settings.api_key),
+            video_base_url + "/videos",
+            headers=_auth_headers(video_api_key),
             json=payload,
         )
         response.raise_for_status()
         job = response.json()
         job_id = str(job["id"])
         polling_url = str(job.get("polling_url") or (
-            self.llm_settings.base_url.rstrip("/") + f"/videos/{job_id}"
+            video_base_url + f"/videos/{job_id}"
         ))
         deadline = time.monotonic() + self.generation_settings.video_timeout_seconds
         while True:
@@ -693,7 +816,7 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
             time.sleep(self.generation_settings.video_poll_seconds)
             status_response = self.client.get(
                 polling_url,
-                headers=_auth_headers(self.llm_settings.api_key),
+                headers=_auth_headers(video_api_key),
             )
             status_response.raise_for_status()
             job = status_response.json()
@@ -706,12 +829,11 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
                 )
         urls = job.get("unsigned_urls") or []
         content_url = urls[0] if urls else (
-            self.llm_settings.base_url.rstrip("/")
-            + f"/videos/{job_id}/content?index=0"
+            video_base_url + f"/videos/{job_id}/content?index=0"
         )
         content = self.client.get(
             content_url,
-            headers=_auth_headers(self.llm_settings.api_key),
+            headers=_auth_headers(video_api_key),
             timeout=120,
         )
         content.raise_for_status()
@@ -754,8 +876,8 @@ class RoutedAssetProvider:
         llm_settings: LLMSettings,
         generation_settings: AssetGenerationSettings,
     ) -> None:
-        self.web = OpenRouterWebAssetProvider(llm_settings)
-        self.generated = OpenRouterGeneratedAssetProvider(
+        self.web = VolcengineWebAssetProvider(llm_settings)
+        self.generated = VolcengineGeneratedAssetProvider(
             llm_settings, generation_settings
         )
 
@@ -770,7 +892,7 @@ class RoutedAssetProvider:
         direction = kwargs["direction"]
         if not isinstance(direction, ExplorationDirection):
             raise TypeError("direction must be ExplorationDirection")
-        if direction.asset_type in OpenRouterWebAssetProvider._WEB_TYPES:
+        if direction.asset_type in VolcengineWebAssetProvider._WEB_TYPES:
             return self.web.acquire(**kwargs)
         return self.generated.acquire(**kwargs)
 
@@ -780,6 +902,17 @@ def _auth_headers(api_key: str) -> dict[str, str]:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+
+
+def _video_api_config(
+    settings: AssetGenerationSettings,
+) -> tuple[str, str]:
+    if not settings.video_api_key or not settings.video_base_url:
+        raise ValueError(
+            "Missing Seedance video API configuration. Set "
+            "UGC_VIDEO_API_KEY and UGC_VIDEO_BASE_URL."
+        )
+    return settings.video_api_key, settings.video_base_url.rstrip("/")
 
 
 def _generation_prompt(

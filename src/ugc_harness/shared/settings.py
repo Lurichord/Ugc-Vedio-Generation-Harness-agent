@@ -28,9 +28,12 @@ def load_shell_env(path: str | Path) -> dict[str, str]:
 class LLMSettings(BaseModel):
     api_key: str = Field(min_length=8)
     base_url: str
-    model: str = "google/gemini-2.5-flash"
-    timeout_seconds: float = 120.0
+    model: str = "doubao-seed-2-0-lite-260215"
+    timeout_seconds: float = 300.0
     max_retries: int = 2
+    # 火山引擎默认输出上限偏小，深度思考 token 也计入其中，
+    # editorial/timeline 这类大 JSON 需要显式调大。
+    max_output_tokens: int = 16_384
 
     @classmethod
     def from_environment(
@@ -44,23 +47,31 @@ class LLMSettings(BaseModel):
         def get(name: str, fallback: str | None = None) -> str | None:
             return os.getenv(name) or file_values.get(name) or fallback
 
-        api_key = get("OPENROUTER_API_KEY") or get("OPENAI_API_KEY")
+        api_key = (
+            get("VOLCENGINE_ARK_API_KEY")
+            or get("ARK_API_KEY")
+            or get("UGC_VIDEO_API_KEY")
+        )
         base_url = get(
-            "OPENROUTER_BASE_URL",
-            get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"),
+            "VOLCENGINE_ARK_BASE_URL",
+            "https://ark.cn-beijing.volces.com/api/v3",
         )
         selected_model = model or get("UGC_LLM_MODEL", cls.model_fields["model"].default)
         if not api_key:
             raise ValueError(
-                "Missing API key. Set OPENROUTER_API_KEY/OPENAI_API_KEY "
+                "Missing API key. Set VOLCENGINE_ARK_API_KEY/ARK_API_KEY "
                 "or pass --api-keys-file."
             )
         return cls(api_key=api_key, base_url=base_url, model=selected_model)
 
 
 class AssetGenerationSettings(BaseModel):
-    image_model: str = "google/gemini-3.1-flash-lite-image"
-    video_model: str = "google/veo-3.1-lite"
+    image_model: str = "doubao-seedream-5-0-260128"
+    image_api_key: str | None = None
+    image_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    video_model: str = "doubao-seedance-2-0-260128"
+    video_api_key: str | None = None
+    video_base_url: str | None = None
     video_resolution: str = "720p"
     video_poll_seconds: float = 30.0
     video_timeout_seconds: float = 600.0
@@ -79,17 +90,32 @@ class AssetGenerationSettings(BaseModel):
         def get(name: str, fallback: str) -> str:
             return os.getenv(name) or file_values.get(name) or fallback
 
+        def get_optional(name: str) -> str | None:
+            return os.getenv(name) or file_values.get(name) or None
+
         return cls(
             image_model=image_model
             or get(
                 "UGC_IMAGE_MODEL",
                 cls.model_fields["image_model"].default,
             ),
+            image_api_key=(
+                get_optional("UGC_IMAGE_API_KEY")
+                or get_optional("VOLCENGINE_ARK_API_KEY")
+                or get_optional("ARK_API_KEY")
+                or get_optional("UGC_VIDEO_API_KEY")
+            ),
+            image_base_url=get(
+                "UGC_IMAGE_BASE_URL",
+                cls.model_fields["image_base_url"].default,
+            ),
             video_model=video_model
             or get(
                 "UGC_VIDEO_MODEL",
                 cls.model_fields["video_model"].default,
             ),
+            video_api_key=get_optional("UGC_VIDEO_API_KEY"),
+            video_base_url=get_optional("UGC_VIDEO_BASE_URL"),
             video_resolution=get(
                 "UGC_VIDEO_RESOLUTION",
                 cls.model_fields["video_resolution"].default,
@@ -100,7 +126,7 @@ class AssetGenerationSettings(BaseModel):
 class TTSSettings(BaseModel):
     api_key: str = Field(min_length=8)
     endpoint: str = "https://openspeech.bytedance.com/api/v1/tts"
-    resource_id: str = "volc.service_type.10029"
+    resource_id: str = "seed-tts-2.0"
     voice_id: str = "zh_male_qingshuangnanda_mars_bigtts"
     male_voice_id: str = "zh_male_qingshuangnanda_mars_bigtts"
     female_voice_id: str = "zh_female_shuangkuaisisi_moon_bigtts"

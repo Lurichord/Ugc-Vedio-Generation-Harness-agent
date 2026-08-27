@@ -2,13 +2,14 @@ from pathlib import Path
 
 from PIL import Image
 
+from tests.fixtures.tool_models import QueueToolModel
 from tests.test_editorial import _editorial_run, _plan
 from tests.test_voice import _narrative, _voice_run
 from ugc_harness.shared.artifacts import ArtifactWriter
 from ugc_harness.shared.settings import LLMSettings
 from ugc_harness.agents.asset_agent.models import AssetCard
 from ugc_harness.agents.asset_agent.models import AssetUsabilityReview
-from ugc_harness.agents.asset_agent.providers import OpenRouterWebAssetProvider
+from ugc_harness.agents.asset_agent.providers import VolcengineWebAssetProvider
 from ugc_harness.agents.asset_agent.providers import ProviderResult
 from ugc_harness.agents.asset_agent.providers import _parse_asset_review
 from ugc_harness.agents.asset_agent.providers import _validate_public_url
@@ -65,7 +66,9 @@ class FakeAssetProvider:
 
 
 def _asset_run(editorial_run, voice_run, provider, project_dir: Path):
-    return AssetHarnessController.from_provider(provider).run(
+    return AssetHarnessController.from_provider(
+        provider, tool_model=QueueToolModel()
+    ).run(
         editorial_run.artifact,
         voice_run.artifact,
         project_dir,
@@ -105,7 +108,9 @@ def test_asset_agent_stops_after_first_success(tmp_path: Path) -> None:
     editorial = editorial_run.artifact
     provider = FakeAssetProvider()
 
-    run = AssetHarnessController.from_provider(provider).run(
+    run = AssetHarnessController.from_provider(
+        provider, tool_model=QueueToolModel()
+    ).run(
         editorial,
         voice,
         tmp_path,
@@ -213,7 +218,9 @@ def test_asset_agent_repairs_only_one_visual_branch(tmp_path: Path) -> None:
     task = repair_plan.tasks[0]
     provider = FakeAssetProvider()
 
-    repaired = AssetHarnessController.from_provider(provider).run(
+    repaired = AssetHarnessController.from_provider(
+        provider, tool_model=QueueToolModel()
+    ).run(
         editorial_run.artifact,
         voice,
         tmp_path,
@@ -378,7 +385,9 @@ def test_adjacent_a_roll_generates_linked_dynamic_clips(tmp_path: Path) -> None:
             )
 
     provider = TalkingHeadProvider()
-    artifact = AssetHarnessController.from_provider(provider).run(
+    artifact = AssetHarnessController.from_provider(
+        provider, tool_model=QueueToolModel()
+    ).run(
         editorial,
         voice,
         tmp_path,
@@ -417,7 +426,7 @@ def test_asset_review_parser_records_login_obstruction() -> None:
 
 
 def test_web_provider_deletes_login_blocked_capture(tmp_path: Path) -> None:
-    class LoginBlockedProvider(OpenRouterWebAssetProvider):
+    class LoginBlockedProvider(VolcengineWebAssetProvider):
         def _search_one_source(self, direction, beat):
             return {
                 "url": "https://example.com/report",

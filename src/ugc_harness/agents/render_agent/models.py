@@ -21,6 +21,7 @@ class RenderClip(StrictModel):
     scale_start: float
     scale_end: float
     transition_in: str
+    muted: bool = True
 
 
 class RenderCaption(StrictModel):
@@ -47,7 +48,7 @@ class RenderComposition(StrictModel):
     fps: Literal[30] = 30
     duration_ms: int = Field(gt=0)
     duration_in_frames: int = Field(gt=0)
-    audio_path: str
+    audio_path: str | None = None
     clips: list[RenderClip] = Field(min_length=1)
     captions: list[RenderCaption]
     overlays: list[RenderOverlay]
@@ -99,7 +100,7 @@ class RenderArtifact(StrictModel):
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     project_id: str
-    source_voice: str = "voice_artifact.json"
+    source_voice: str | None = "voice_artifact.json"
     source_timeline: str = "timeline_artifact.json"
     composition: RenderComposition
     outputs: list[RenderedMedia]

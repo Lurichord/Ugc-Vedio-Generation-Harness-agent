@@ -3,6 +3,7 @@ from pathlib import Path
 from PIL import Image
 
 from tests.test_assets import _asset_run
+from tests.fixtures.tool_models import QueueToolModel
 from tests.test_editorial import _editorial_run, _plan
 from tests.test_timeline import AllSuccessAssets
 from tests.test_voice import _narrative, _voice_run
@@ -63,7 +64,8 @@ def test_asset_critic_creates_and_executes_image_repair_tasks(tmp_path: Path) ->
     assert history[-2].evaluation.passed is False
     assert history[-1].evaluation.passed is True
     assert all(
-        item.task.allowed_tools == ["asset.prepare_image"]
+        item.task.allowed_tools
+        == ["asset.prepare_image", "asset.submit_candidate"]
         for item in history[-1:]
     )
     assert "prepared_image:asset_vr01" in run.record.project_state.dependency_graph.nodes
@@ -116,7 +118,9 @@ def test_login_overlay_is_rejected_without_crop_repair(tmp_path: Path) -> None:
             ).model_copy(update={"blocking_overlay": True})
 
     run = AssetHarnessController.from_provider(
-        AllSuccessAssets(), BlockingAnalyzer()
+        AllSuccessAssets(),
+        BlockingAnalyzer(),
+        tool_model=QueueToolModel(),
     ).run(
         editorial_run.artifact,
         voice_run.artifact,

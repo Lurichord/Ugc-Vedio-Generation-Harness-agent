@@ -3,7 +3,13 @@ from __future__ import annotations
 import hashlib
 import re
 
-from .models import AudienceSpec, CommunicationSpec, CreativeBrief, TargetSpec
+from ...content import (
+    AudienceSpec,
+    CommunicationSpec,
+    ProductionMode,
+    TargetSpec,
+)
+from .models import CreativeBrief
 from ...profiles.models import VideoProfileRequest
 
 
@@ -23,6 +29,7 @@ def make_brief(
     goal: str | None = None,
     tone: list[str] | None = None,
     creator_persona: str = "像朋友一样解释复杂话题的知识型创作者",
+    production_mode: ProductionMode = "auto",
     video_profile: VideoProfileRequest = "auto",
 ) -> CreativeBrief:
     clean_topic = topic.strip()
@@ -43,5 +50,6 @@ def make_brief(
             or ["conversational", "information_dense", "slightly_surprising"],
             creator_persona=creator_persona,
         ),
+        production_mode=production_mode,
         video_profile=video_profile,
     )

@@ -1,17 +1,21 @@
-"""Constrained domain agents."""
+"""Agents: one unified execution shell plus per-domain contracts and tools."""
 
-from .narrative_agent import NarrativeAgent, NarrativeAgentExecution
-from .voice_agent import VoiceAgent, VoiceAgentExecution
-from .editorial_agent import EditorialAgent, EditorialAgentExecution
-from .asset_agent import AssetAgent, AssetAgentExecution
+from .generic import (
+    CompletionSpec,
+    EnvironmentToolModel,
+    GenericAgent,
+    GenericAgentExecution,
+    McpToolTransport,
+    RegistryTool,
+    RegistryToolTransport,
+)
 
 __all__ = [
-    "NarrativeAgent",
-    "NarrativeAgentExecution",
-    "VoiceAgent",
-    "VoiceAgentExecution",
-    "EditorialAgent",
-    "EditorialAgentExecution",
-    "AssetAgent",
-    "AssetAgentExecution",
+    "CompletionSpec",
+    "EnvironmentToolModel",
+    "GenericAgent",
+    "GenericAgentExecution",
+    "McpToolTransport",
+    "RegistryTool",
+    "RegistryToolTransport",
 ]

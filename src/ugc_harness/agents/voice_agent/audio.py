@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import io
+# import io  # only used by unused wav_info_from_bytes
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,14 +79,15 @@ def concatenate_wavs(
     )
 
 
-def wav_info_from_bytes(data: bytes) -> WavInfo:
-    with wave.open(io.BytesIO(data), "rb") as audio:
-        frame_count = audio.getnframes()
-        sample_rate = audio.getframerate()
-        return WavInfo(
-            sample_rate=sample_rate,
-            channels=audio.getnchannels(),
-            sample_width_bytes=audio.getsampwidth(),
-            frame_count=frame_count,
-            duration_ms=round(frame_count / sample_rate * 1000),
-        )
+# Unused after VoiceAgent was folded into GenericAgent / VoiceCapabilities.
+# def wav_info_from_bytes(data: bytes) -> WavInfo:
+#     with wave.open(io.BytesIO(data), "rb") as audio:
+#         frame_count = audio.getnframes()
+#         sample_rate = audio.getframerate()
+#         return WavInfo(
+#             sample_rate=sample_rate,
+#             channels=audio.getnchannels(),
+#             sample_width_bytes=audio.getsampwidth(),
+#             frame_count=frame_count,
+#             duration_ms=round(frame_count / sample_rate * 1000),
+#         )

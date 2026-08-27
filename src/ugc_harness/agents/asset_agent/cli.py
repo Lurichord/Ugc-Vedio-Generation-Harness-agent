@@ -11,7 +11,7 @@ from ...shared.artifacts import ArtifactWriter
 from ...shared.settings import AssetGenerationSettings, LLMSettings
 from ..editorial_agent.models import EditorialArtifact
 from ..voice_agent.models import VoiceArtifact
-from .image_analysis import OpenRouterImageAnalyzer
+from .image_analysis import VolcengineImageAnalyzer
 from .models import AssetArtifact
 from .providers import RoutedAssetProvider
 
@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         with (
             RoutedAssetProvider(settings, generation_settings) as provider,
-            OpenRouterImageAnalyzer(settings) as image_analyzer,
+            VolcengineImageAnalyzer(settings) as image_analyzer,
         ):
             controller = AssetHarnessController.from_provider(
                 provider, image_analyzer

@@ -4,10 +4,19 @@ from typing import TypeVar
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from tests.test_narrative_controller import FakeGenerator as NarrativeGenerator
-from tests.test_voice import FakeTTS, _narrative, _voice_run
+from tests.test_narrative_controller import (
+    FakeGenerator as NarrativeGenerator,
+    narrative_controller_from_generator,
+)
+from tests.fixtures.tool_models import CyclingToolModel
+from tests.test_voice import _narrative, _voice_run, make_voice_controller
+
+
+def _editorial_tool_model() -> CyclingToolModel:
+    return CyclingToolModel(
+        ["editorial.create_plan", "editorial.submit_candidate"]
+    )
 from ugc_harness.agents.narrative_agent import make_brief
-from ugc_harness.harness.controller import NarrativeHarnessController
 from ugc_harness.shared.artifacts import ArtifactWriter
 from ugc_harness.agents.editorial_agent.models import EditorialPlan, VisualRequirement
 from ugc_harness.harness.editorial_controller import EditorialHarnessController
@@ -139,7 +148,7 @@ class SequenceGenerator:
 
 def _editorial_run(narrative, voice_run, plan: EditorialPlan):
     return EditorialHarnessController.from_generator(
-        FakeGenerator(plan), "fake-model"
+        FakeGenerator(plan), "fake-model", tool_model=_editorial_tool_model()
     ).run(narrative, voice_run.artifact, voice_run.record.project_state)
 
 
@@ -211,13 +220,11 @@ def test_editorial_uses_third_candidate_after_revision_budget(
 def test_complete_agent_chain_records_beat_graph_and_phase_tasks(
     tmp_path: Path,
 ) -> None:
-    narrative_run = NarrativeHarnessController.from_generator(
+    narrative_run = narrative_controller_from_generator(
         NarrativeGenerator(), "fake-model"
     ).run(make_brief(topic="依赖图集成测试", duration_seconds=90))
     narrative = narrative_run.artifact
-    voice_run = VoiceHarnessController.from_provider(
-        FakeTTS(), "test-voice"
-    ).run(
+    voice_run = make_voice_controller().run(
         narrative,
         tmp_path,
         narrative_run.record.project_state,
@@ -280,7 +287,7 @@ def test_editorial_revision_appends_task_to_same_phase(
     rejected_plan.visual_requirements.pop()
     generator = SequenceGenerator([rejected_plan, good_plan])
     revised = EditorialHarnessController.from_generator(
-        generator, "fake-model"
+        generator, "fake-model", tool_model=_editorial_tool_model()
     ).run(
         narrative,
         voice,

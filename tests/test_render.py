@@ -1,8 +1,13 @@
 import math
 from pathlib import Path
 
+from tests.fixtures.tool_models import CyclingToolModel
 from tests.test_editorial import _editorial_run, _plan
-from tests.test_timeline import AllSuccessAssets, FakeScreenAnimation
+from tests.test_timeline import (
+    AllSuccessAssets,
+    FakeScreenAnimation,
+    _timeline_tool_model,
+)
 from tests.test_assets import _asset_run
 from tests.test_voice import _narrative, _voice_run
 from ugc_harness.harness.timeline_controller import TimelineHarnessController
@@ -36,7 +41,7 @@ def test_render_composition_uses_prepared_images_and_audio_clock(
         editorial_run, voice_run, AllSuccessAssets(), tmp_path
     )
     timeline_run = TimelineHarnessController.from_provider(
-        FakeScreenAnimation()
+        FakeScreenAnimation(), tool_model=_timeline_tool_model()
     ).run(
         voice,
         editorial,
@@ -95,7 +100,12 @@ def test_render_composition_uses_prepared_images_and_audio_clock(
             outputs=outputs,
         )
 
-    render_run = RenderHarnessController.from_renderer(fake_render).run(
+    render_run = RenderHarnessController.from_renderer(
+        fake_render,
+        tool_model=CyclingToolModel(
+            ["render.execute", "render.submit_candidate"]
+        ),
+    ).run(
         voice,
         timeline_run.artifact,
         tmp_path,

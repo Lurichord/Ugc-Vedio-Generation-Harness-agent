@@ -4,15 +4,32 @@ import hashlib
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..agents.editorial_agent import EditorialAgent, EditorialArtifact
+from typing import Any
+
+from ..agents.editorial_agent import EditorialArtifact
+from ..agents.editorial_agent.models import EditorialPlan
+from ..agents.editorial_agent.prompts import (
+    editorial_plan_prompt,
+    editorial_repair_prompt,
+)
+from ..agents.generic import (
+    CompletionSpec,
+    EnvironmentToolModel,
+    GenericAgent,
+    RegistryTool,
+    RegistryToolTransport,
+)
+from ..agents.instructions import load_instructions
 from ..agents.narrative_agent.models import NarrativeArtifact
 from ..agents.voice_agent.models import VoiceArtifact
 from ..evaluators.editorial_critic import EditorialCritic
 from ..tools.registry import ToolRegistry
 from .models import (
     AgentResult,
+    ArtifactRef,
     EvaluationResult,
     ProjectState,
+    StatePatch,
     TaskBudget,
     TaskEnvelope,
     TaskScope,
@@ -23,6 +40,10 @@ from .dependencies import DependencyGraph
 from .dependency_builders import editorial_commits
 from .trajectory import record_task, task_kind_for
 from .repair import repair_input_hash, select_repair_commits
+
+
+PLAN_TOOL = "editorial.create_plan"
+SUBMIT_TOOL = "editorial.submit_candidate"
 
 
 class EditorialRunRecord(BaseModel):
@@ -46,7 +67,7 @@ class EditorialHarnessRun(BaseModel):
 class EditorialHarnessController:
     def __init__(
         self,
-        agent: EditorialAgent,
+        agent: GenericAgent,
         critic: EditorialCritic,
         model_name: str,
     ) -> None:
@@ -59,13 +80,80 @@ class EditorialHarnessController:
         cls,
         generator: object,
         model_name: str,
+        tool_model: object | None = None,
     ) -> "EditorialHarnessController":
         generate = getattr(generator, "generate", None)
         if not callable(generate):
             raise TypeError("generator must provide generate(prompt, output_type)")
         tools = ToolRegistry()
-        tools.register(EditorialAgent.PLAN_TOOL, generate)
-        return cls(EditorialAgent(tools), EditorialCritic(), model_name)
+        for tool_name in (PLAN_TOOL, SUBMIT_TOOL):
+            tools.register(tool_name, lambda: None)
+
+        def transport_factory(
+            task: TaskEnvelope,
+            kwargs: dict[str, Any],
+        ) -> RegistryToolTransport:
+            narrative = kwargs["narrative"]
+            voice = kwargs["voice"]
+            current = kwargs.get("current_artifact")
+            critic_problems = kwargs.get("critic_problems")
+            assert isinstance(narrative, NarrativeArtifact)
+            assert isinstance(voice, VoiceArtifact)
+            session: dict[str, Any] = {}
+
+            def create_plan(problems: list[str] | None = None) -> EditorialPlan:
+                prompt = editorial_plan_prompt(narrative, voice)
+                if isinstance(current, EditorialArtifact) and critic_problems:
+                    prompt = editorial_repair_prompt(
+                        narrative,
+                        voice,
+                        current.editorial_plan.model_dump_json(indent=2),
+                        [str(item) for item in critic_problems],
+                    )
+                plan = generate(prompt, EditorialPlan)
+                if not isinstance(plan, EditorialPlan):
+                    raise TypeError("editorial.create_plan returned an invalid plan")
+                session["plan"] = plan
+                return plan
+
+            def submit(problems: list[str] | None = None) -> EditorialPlan:
+                plan = session.get("plan")
+                if not isinstance(plan, EditorialPlan):
+                    raise RuntimeError(
+                        "candidate is incomplete: editorial plan has not been "
+                        "created yet"
+                    )
+                return plan
+
+            return RegistryToolTransport(
+                [
+                    RegistryTool(
+                        name=PLAN_TOOL,
+                        description=(
+                            "生成主张映射和逐 Beat 的 A-roll/B-roll 视觉需求计划；"
+                            "任务带 critic 问题清单时自动以修复模式生成。"
+                        ),
+                        handler=create_plan,
+                    ),
+                    RegistryTool(
+                        name=SUBMIT_TOOL,
+                        description="编辑部计划完整后提交候选。",
+                        handler=submit,
+                    ),
+                ]
+            )
+
+        return cls(
+            GenericAgent(
+                tool_model=tool_model or EnvironmentToolModel(),  # type: ignore[arg-type]
+                transport_factory=transport_factory,
+                candidate_type=EditorialPlan,
+                completion_builder=_editorial_completion,
+                capability_tools=tools,
+            ),
+            EditorialCritic(),
+            model_name,
+        )
 
     def create_task(
         self,
@@ -86,7 +174,9 @@ class EditorialHarnessController:
             goal="生成主张映射和逐 Beat 的 A-roll/B-roll 视觉需求",
             scope=TaskScope(project_id=narrative.brief.project_id),
             based_on_state_version=state.video.state_version,
-            allowed_tools=[EditorialAgent.PLAN_TOOL],
+            agent_instructions=load_instructions("editorial"),
+            allowed_tools=[PLAN_TOOL, SUBMIT_TOOL],
+            required_outputs=["editorial_plan"],
             forbidden_actions=[
                 "modify_narrative",
                 "modify_voice",
@@ -102,7 +192,7 @@ class EditorialHarnessController:
                 "最终产物通过独立 Editorial Critic",
             ],
             budget=TaskBudget(
-                max_steps=2,
+                max_steps=4,
                 max_retries=2,
                 fallback_policy="use_best_available",
             ),
@@ -156,7 +246,10 @@ class EditorialHarnessController:
             current_artifact=current_artifact,
             critic_problems=critic_problems,
         )
-        if execution.result.status != "completed" or execution.plan is None:
+        plan = execution.candidate
+        if execution.result.status != "completed" or not isinstance(
+            plan, EditorialPlan
+        ):
             raise RuntimeError(
                 execution.result.error or "editorial agent did not complete"
             )
@@ -169,7 +262,7 @@ class EditorialHarnessController:
         quality, evaluation = self.critic.evaluate(
             narrative,
             voice,
-            execution.plan,
+            plan,
             target_ref,
         )
         use_best_available = not evaluation.passed and _attempt >= 3
@@ -203,7 +296,7 @@ class EditorialHarnessController:
         artifact = EditorialArtifact(
             model=self.model_name,
             project_id=project_id,
-            editorial_plan=execution.plan,
+            editorial_plan=plan,
             quality=quality,
         )
         committed_version = state.video.state_version + 1
@@ -320,3 +413,24 @@ class EditorialHarnessController:
         allowed = {"assets:all", "timeline:all", "render:final"}
         if set(result.state_patch.invalidate) - allowed:
             raise ValueError("editorial agent proposed invalid invalidations")
+
+
+def _editorial_completion(
+    task: TaskEnvelope,
+    kwargs: dict[str, Any],
+) -> CompletionSpec:
+    narrative = kwargs["narrative"]
+    assert isinstance(narrative, NarrativeArtifact)
+    return CompletionSpec(
+        artifact_refs=[
+            ArtifactRef(kind="editorial_plan", id=narrative.brief.project_id)
+        ],
+        state_patch=StatePatch(
+            set={"video.editorial_status": "ready"},
+            invalidate=["assets:all", "timeline:all", "render:final"],
+        ),
+        evaluation_target=(
+            f"editorial:{narrative.brief.project_id}@"
+            f"{task.based_on_state_version + 1}"
+        ),
+    )
