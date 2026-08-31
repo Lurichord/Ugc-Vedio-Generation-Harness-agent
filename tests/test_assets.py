@@ -16,7 +16,6 @@ from ugc_harness.agents.asset_agent.providers import _validate_public_url
 from ugc_harness.harness.asset_controller import AssetHarnessController
 from ugc_harness.harness.dependencies import DependencyGraph
 from ugc_harness.harness.dependency_builders import asset_commits, editorial_commits
-from ugc_harness.harness.repair import RepairScheduler
 from ugc_harness.agents.editorial_agent.models import (
     EditorialPlan,
     EditorialQuality,
@@ -134,16 +133,13 @@ def test_asset_agent_stops_after_first_success(tmp_path: Path) -> None:
     assert (tmp_path / "15_asset_cards.json").is_file()
     assert any(path.name == "asset_artifact.json" for path in written)
     assert run.record.transition.to_agent == "timeline_agent"
-    assert run.record.project_state.video.timeline_status == "ready"
-    assert "artifact:assets" in run.record.project_state.dependency_graph.nodes
+    assert run.record.project_state.evaluation.stages.timeline == "ready"
+    assert "artifact:assets" not in run.record.project_state.dependency_graph.nodes
     assert run.record.project_state.trajectory.phases["asset"].tasks
     graph_state = run.record.project_state.dependency_graph
     DependencyGraph(graph_state).validate_integrity()
-    asset_node = graph_state.nodes["asset:asset_vr01"]
-    assert "visual_requirement:vr01" in asset_node.depends_on
-    assert "asset:asset_vr01" in graph_state.nodes[
-        "visual_requirement:vr01"
-    ].dependents
+    assert not any(ref.startswith("asset:") for ref in graph_state.nodes)
+    assert not any(ref.startswith("visual_requirement:") for ref in graph_state.nodes)
     assert {"asset_task.json", "asset_evaluation.json"} <= {
         path.name for path in written
     }
@@ -183,8 +179,8 @@ def test_asset_review_failure_stays_with_asset_agent(tmp_path: Path) -> None:
     assert run.record.evaluation.passed is False
     assert run.record.transition.to_agent == "asset_agent"
     assert run.record.transition.outcome == "revise"
-    assert run.record.project_state.video.asset_status == "needs_revision"
-    assert run.record.project_state.video.timeline_status == "blocked"
+    assert run.record.project_state.evaluation.stages.asset == "needs_revision"
+    assert run.record.project_state.evaluation.stages.timeline == "blocked"
     history = run.record.project_state.trajectory.phases["asset"].tasks
     assert history[0].graph_update.committed is False
 
@@ -208,14 +204,13 @@ def test_asset_agent_repairs_only_one_visual_branch(tmp_path: Path) -> None:
         editorial_run, voice_run, FakeAssetProvider(), tmp_path
     )
     state = initial.record.project_state
-    for ref in {
-        "asset:asset_vr01",
-        "visual_resolution:vr01",
-        "artifact:assets",
-    }:
-        state.dependency_graph.nodes[ref].status = "stale"
-    repair_plan = RepairScheduler().plan(state, ["artifact:assets"])
-    task = repair_plan.tasks[0]
+    state.evaluation.stages.asset = "ready"
+    controller = AssetHarnessController.from_provider(
+        FakeAssetProvider(), tool_model=QueueToolModel()
+    )
+    task = controller.create_task(editorial_run.artifact, voice, state)
+    task.scope.visual_request_ids = ["vr01"]
+    task.scope.beat_ids = [editorial_run.artifact.editorial_plan.visual_requirements[0].beat_id]
     provider = FakeAssetProvider()
 
     repaired = AssetHarnessController.from_provider(
@@ -229,16 +224,9 @@ def test_asset_agent_repairs_only_one_visual_branch(tmp_path: Path) -> None:
         current_artifact=initial.artifact,
     )
 
-    assert task.agent == "asset_agent"
     assert task.scope.visual_request_ids == ["vr01"]
     assert provider.calls == ["vr01_d01", "vr01_d02"]
-    assert repaired.record.transition.to_agent == "repair_scheduler"
-    assert repaired.record.project_state.trajectory.phases["asset"].tasks[-1].task_kind == "repair"
-    assert all(
-        repaired.record.project_state.dependency_graph.nodes[ref].status
-        == "current"
-        for ref in task.scope.target_refs
-    )
+    assert repaired.record.evaluation.passed is True
 
 
 def test_adjacent_a_roll_generates_linked_dynamic_clips(tmp_path: Path) -> None:
@@ -333,8 +321,8 @@ def test_adjacent_a_roll_generates_linked_dynamic_clips(tmp_path: Path) -> None:
         ),
     )
     state = voice_run.record.project_state.model_copy(deep=True)
-    state.video.editorial_status = "passed"
-    state.video.asset_status = "ready"
+    state.evaluation.stages.editorial = "passed"
+    state.evaluation.stages.asset = "ready"
     DependencyGraph(state.dependency_graph).commit_batch(
         task_id="test_editorial_commit",
         produced_by="editorial_agent",
@@ -406,11 +394,7 @@ def test_adjacent_a_roll_generates_linked_dynamic_clips(tmp_path: Path) -> None:
     assert after_b_roll.previous_asset_id is None
     assert after_b_roll.continuity_group_id != second.continuity_group_id
     assert after_b_roll.identity_reference_path == first.identity_reference_path
-    graph = asset_commits(artifact)
-    graph_by_ref = {item.ref: item for item in graph}
-    assert "character_reference:host_main" in graph_by_ref
-    assert "asset:asset_vr01" in graph_by_ref["asset:asset_vr02"].depends_on
-    assert "asset:asset_vr02" not in graph_by_ref["asset:asset_vr04"].depends_on
+    assert asset_commits(artifact) == []
 
 
 def test_asset_review_parser_records_login_obstruction() -> None:

@@ -5,8 +5,8 @@ Layering contract (imports must only point downward):
     shared.models (StrictModel)
         <- profiles.models
         <- content (this module: world / structure / script / shot content)
-        <- harness.description (VideoDescription document built from content)
-        <- harness.models (ProjectState ledger, embeds VideoDescription)
+        <- harness.description (VideoDescription / identity books / brief record)
+        <- harness.models (ProjectState v3: context / creative / production / evaluation)
         <- agents.* (artifact contracts re-export content models)
 
 Models here describe the video itself and are shared by the description
@@ -155,6 +155,22 @@ class VideoWorldState(StrictModel):
         return self
 
 
+def identity_refs_for_world(world_state: VideoWorldState) -> set[str]:
+    """cast:/prop:/place: refs implied by the identity roster in world_state."""
+
+    refs: set[str] = set()
+    if world_state.aroll_character is not None:
+        refs.add(f"cast:{world_state.aroll_character.character_id}")
+    for entity in world_state.entities:
+        if entity.kind == "person":
+            refs.add(f"cast:{entity.entity_id}")
+        elif entity.kind == "place":
+            refs.add(f"place:{entity.entity_id}")
+        elif entity.kind == "product":
+            refs.add(f"prop:{entity.entity_id}")
+    return refs
+
+
 # ---------------------------------------------------------------------------
 # Structure layer: explainer
 # ---------------------------------------------------------------------------
@@ -200,6 +216,21 @@ class PlannedBeat(StrictModel):
     audience_delta: AudienceDelta
     evidence_need: EvidenceNeed
     visual_intent_hint: str
+    bind_refs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_bind_refs(self) -> "PlannedBeat":
+        seen: set[str] = set()
+        for ref in self.bind_refs:
+            prefix, _, ident = ref.partition(":")
+            if prefix not in {"cast", "prop", "place"} or not ident:
+                raise ValueError(
+                    f"beat bind_refs must be cast:/prop:/place: refs, got {ref}"
+                )
+            if ref in seen:
+                raise ValueError("beat bind_refs must be unique")
+            seen.add(ref)
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -408,8 +439,7 @@ class ProductionShot(StrictModel):
     shot_kind: Literal["explainer", "drama", "tutorial"]
     purpose: str
     source_refs: list[str] = Field(min_length=1)
-    world_state_before_ref: str | None = None
-    world_state_after_ref: str | None = None
+    binds: list[str] = Field(default_factory=list)
     visual: VisualRealizationSpec
     audio: AudioRealizationSpec
     timing: TimingSpec
@@ -428,4 +458,10 @@ class ProductionShot(StrictModel):
             raise ValueError("shot_kind does not match audio_mode")
         if self.payload.payload_type != expected[2]:
             raise ValueError("shot_kind does not match payload_type")
+        for ref in self.binds:
+            prefix, _, ident = ref.partition(":")
+            if prefix not in {"cast", "prop", "place"} or not ident:
+                raise ValueError(
+                    f"shot binds must be cast:/prop:/place: refs, got {ref}"
+                )
         return self

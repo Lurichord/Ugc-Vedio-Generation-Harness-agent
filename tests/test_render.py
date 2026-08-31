@@ -113,6 +113,10 @@ def test_render_composition_uses_prepared_images_and_audio_clock(
     )
     assert render_run.artifact.quality.passed is True
     assert render_run.record.transition.to_agent == "project_complete"
-    assert render_run.record.project_state.video.render_status == "passed"
-    assert "artifact:render" in render_run.record.project_state.dependency_graph.nodes
+    assert render_run.record.project_state.evaluation.stages.render == "passed"
+    assert "artifact:render" not in render_run.record.project_state.dependency_graph.nodes
+    assert not any(
+        ref.startswith("clip:")
+        for ref in render_run.record.project_state.dependency_graph.nodes
+    )
     assert render_run.record.project_state.trajectory.phases["render"].tasks

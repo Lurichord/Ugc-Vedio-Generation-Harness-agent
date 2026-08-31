@@ -1,5 +1,5 @@
 from ugc_harness.harness.dependencies import DependencyGraph, NodeCommit
-from ugc_harness.harness.models import DependencyGraphState
+from ugc_harness.harness.models import DependencyEdge, DependencyGraphState
 import pytest
 
 
@@ -11,22 +11,22 @@ def test_dependency_graph_keeps_bidirectional_beat_edges() -> None:
         task_id="task_narrative_1",
         produced_by="narrative_agent",
         commits=[
-            NodeCommit("planned_beat:pb01", "planned_beat", {"text": "beat"}),
+            NodeCommit("beat:pb01", "beat", {"text": "beat"}),
             NodeCommit(
-                "script_segment:ss01",
-                "script_segment",
+                "utterance:ss01",
+                "utterance",
                 {"text": "script"},
-                ("planned_beat:pb01",),
+                ("beat:pb01",),
             ),
         ],
     )
 
-    beat = state.nodes["planned_beat:pb01"]
-    script = state.nodes["script_segment:ss01"]
-    assert script.depends_on == ["planned_beat:pb01"]
-    assert beat.dependents == ["script_segment:ss01"]
-    assert script.dependency_versions["planned_beat:pb01"] == beat.version
-    assert script.dependency_hashes["planned_beat:pb01"] == beat.content_hash
+    beat = state.nodes["beat:pb01"]
+    script = state.nodes["utterance:ss01"]
+    assert script.depends_on == ["beat:pb01"]
+    assert beat.dependents == ["utterance:ss01"]
+    assert script.dependency_versions["beat:pb01"] == beat.version
+    assert script.dependency_hashes == {}
 
 
 def test_changed_beat_invalidates_only_its_descendants() -> None:
@@ -36,31 +36,31 @@ def test_changed_beat_invalidates_only_its_descendants() -> None:
         task_id="task_initial",
         produced_by="test",
         commits=[
-            NodeCommit("planned_beat:pb01", "planned_beat", "beat one"),
-            NodeCommit("planned_beat:pb02", "planned_beat", "beat two"),
+            NodeCommit("beat:pb01", "beat", "beat one"),
+            NodeCommit("beat:pb02", "beat", "beat two"),
             NodeCommit(
-                "script_segment:ss01",
-                "script_segment",
+                "utterance:ss01",
+                "utterance",
                 "script one",
-                ("planned_beat:pb01",),
+                ("beat:pb01",),
             ),
             NodeCommit(
-                "script_segment:ss02",
-                "script_segment",
+                "utterance:ss02",
+                "utterance",
                 "script two",
-                ("planned_beat:pb02",),
+                ("beat:pb02",),
             ),
             NodeCommit(
-                "audio_segment:as01",
-                "audio_segment",
+                "audio:ss01",
+                "audio",
                 "audio one",
-                ("script_segment:ss01",),
+                ("utterance:ss01",),
             ),
             NodeCommit(
-                "audio_segment:as02",
-                "audio_segment",
+                "audio:ss02",
+                "audio",
                 "audio two",
-                ("script_segment:ss02",),
+                ("utterance:ss02",),
             ),
         ],
     )
@@ -69,30 +69,30 @@ def test_changed_beat_invalidates_only_its_descendants() -> None:
         task_id="task_revise_pb01",
         produced_by="narrative_agent",
         commits=[
-            NodeCommit("planned_beat:pb01", "planned_beat", "changed beat one")
+            NodeCommit("beat:pb01", "beat", "changed beat one")
         ],
     )
 
     assert update.invalidated_refs == [
-        "audio_segment:as01",
-        "script_segment:ss01",
+        "audio:ss01",
+        "utterance:ss01",
     ]
-    assert state.nodes["audio_segment:as01"].status == "stale"
-    assert state.nodes["audio_segment:as02"].status == "current"
-    assert state.nodes["script_segment:ss02"].status == "current"
+    assert state.nodes["audio:ss01"].status == "stale"
+    assert state.nodes["audio:ss02"].status == "current"
+    assert state.nodes["utterance:ss02"].status == "current"
 
 
 def test_rejected_task_advances_graph_audit_without_committing_nodes() -> None:
     state = DependencyGraphState()
     update = DependencyGraph(state).reject_update(
         task_id="task_editorial_revision",
-        candidate_refs=["visual_requirement:vr04"],
+        candidate_refs=["shot:shot_pb04"],
         reason="critic rejected candidate",
     )
 
     assert state.graph_version == 1
     assert update.committed is False
-    assert update.rejected_refs == ["visual_requirement:vr04"]
+    assert update.rejected_refs == ["shot:shot_pb04"]
     assert state.nodes == {}
 
 
@@ -102,7 +102,7 @@ def test_invalid_graph_commit_is_atomic() -> None:
     graph.commit_batch(
         task_id="task_initial",
         produced_by="test",
-        commits=[NodeCommit("planned_beat:pb01", "planned_beat", "initial")],
+        commits=[NodeCommit("beat:pb01", "beat", "initial")],
     )
     before = state.model_copy(deep=True)
 
@@ -112,16 +112,16 @@ def test_invalid_graph_commit_is_atomic() -> None:
             produced_by="test",
             commits=[
                 NodeCommit(
-                    "planned_beat:pb01",
-                    "planned_beat",
+                    "beat:pb01",
+                    "beat",
                     "changed",
-                    ("script_segment:ss01",),
+                    ("utterance:ss01",),
                 ),
                 NodeCommit(
-                    "script_segment:ss01",
-                    "script_segment",
+                    "utterance:ss01",
+                    "utterance",
                     "script",
-                    ("planned_beat:pb01",),
+                    ("beat:pb01",),
                 ),
             ],
         )
@@ -135,13 +135,13 @@ def test_dependency_snapshot_rejects_result_after_input_changes() -> None:
     graph.commit_batch(
         task_id="task_initial",
         produced_by="narrative_agent",
-        commits=[NodeCommit("planned_beat:pb01", "planned_beat", "initial")],
+        commits=[NodeCommit("beat:pb01", "beat", "initial")],
     )
-    snapshot = graph.snapshot(["planned_beat:pb01"])
+    snapshot = graph.snapshot(["beat:pb01"])
     graph.commit_batch(
         task_id="task_revision",
         produced_by="narrative_agent",
-        commits=[NodeCommit("planned_beat:pb01", "planned_beat", "changed")],
+        commits=[NodeCommit("beat:pb01", "beat", "changed")],
     )
 
     with pytest.raises(ValueError, match="STALE_RESULT"):
@@ -154,9 +154,9 @@ def test_locked_node_cannot_be_overwritten_and_graph_rolls_back() -> None:
     graph.commit_batch(
         task_id="task_initial",
         produced_by="narrative_agent",
-        commits=[NodeCommit("script_segment:ss01", "script_segment", "locked")],
+        commits=[NodeCommit("utterance:ss01", "utterance", "locked")],
     )
-    state.nodes["script_segment:ss01"].locked = True
+    state.nodes["utterance:ss01"].locked = True
     before = state.model_copy(deep=True)
 
     with pytest.raises(ValueError, match="locked"):
@@ -164,8 +164,89 @@ def test_locked_node_cannot_be_overwritten_and_graph_rolls_back() -> None:
             task_id="task_overwrite",
             produced_by="narrative_agent",
             commits=[
-                NodeCommit("script_segment:ss01", "script_segment", "overwrite")
+                NodeCommit("utterance:ss01", "utterance", "overwrite")
             ],
         )
 
     assert state == before
+
+
+def test_identical_rewrite_still_invalidates_descendants() -> None:
+    state = DependencyGraphState()
+    graph = DependencyGraph(state)
+    graph.commit_batch(
+        task_id="task_initial",
+        produced_by="test",
+        commits=[
+            NodeCommit("beat:pb01", "beat", "same beat"),
+            NodeCommit(
+                "utterance:ss01",
+                "utterance",
+                "script",
+                ("beat:pb01",),
+            ),
+        ],
+    )
+    snapshot = graph.snapshot(["beat:pb01"])
+    assert state.nodes["beat:pb01"].version == 1
+
+    update = graph.commit_batch(
+        task_id="task_rewrite",
+        produced_by="test",
+        commits=[NodeCommit("beat:pb01", "beat", "same beat")],
+    )
+
+    assert update.changed_refs == ["beat:pb01"]
+    assert update.refreshed_refs == []
+    assert update.invalidated_refs == ["utterance:ss01"]
+    assert state.nodes["beat:pb01"].status == "current"
+    assert state.nodes["beat:pb01"].version == 2
+    assert state.nodes["utterance:ss01"].status == "stale"
+    with pytest.raises(ValueError, match="STALE_RESULT"):
+        graph.validate_snapshot(snapshot)
+
+
+def test_changing_cast_dirties_bound_shot_and_audio() -> None:
+    state = DependencyGraphState()
+    graph = DependencyGraph(state)
+    graph.commit_batch(
+        task_id="task_initial",
+        produced_by="test",
+        commits=[
+            NodeCommit("cast:host", "cast", "host"),
+            NodeCommit("beat:pb01", "beat", "beat"),
+            NodeCommit(
+                "utterance:ss01",
+                "utterance",
+                "line",
+                edges=(DependencyEdge(to="beat:pb01", family="plot"),),
+            ),
+            NodeCommit(
+                "audio:ss01",
+                "audio",
+                "wav",
+                edges=(
+                    DependencyEdge(to="utterance:ss01", family="element"),
+                    DependencyEdge(to="cast:host", family="element"),
+                ),
+            ),
+            NodeCommit(
+                "shot:shot_pb01",
+                "shot",
+                "shot",
+                edges=(
+                    DependencyEdge(to="beat:pb01", family="plot"),
+                    DependencyEdge(to="cast:host", family="identity"),
+                ),
+            ),
+        ],
+    )
+
+    update = graph.commit_batch(
+        task_id="task_change_cast",
+        produced_by="test",
+        commits=[NodeCommit("cast:host", "cast", "new host")],
+    )
+
+    assert set(update.invalidated_refs) == {"audio:ss01", "shot:shot_pb01"}
+    assert state.nodes["utterance:ss01"].status == "current"

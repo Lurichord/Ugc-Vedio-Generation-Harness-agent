@@ -1,0 +1,140 @@
+{
+  "schema_version": "intake-session.v2",
+  "session_id": "intake_2f3a56dc5fcf4651ab13658a681c1680",
+  "project_id": "ugc_topic_571c6316",
+  "project_dir": "D:\\桌面\\ugc-vedio-generation-agent\\test\\intent_cli_audience\\01_coffee\\project\\手冲咖啡",
+  "created_at": "2026-08-30T09:50:52.672307+00:00",
+  "updated_at": "2026-08-30T10:02:42.986448+00:00",
+  "status": "waiting_user",
+  "working_brief": {
+    "project_id": "ugc_topic_571c6316",
+    "project_name": "手冲咖啡",
+    "topic": "手冲咖啡",
+    "production_mode": "explainer",
+    "video_profile": "auto",
+    "target": {
+      "platform": "douyin",
+      "duration_target_ms": 90000,
+      "aspect_ratio": "9:16",
+      "language": "zh-CN"
+    },
+    "audience": {
+      "description": "对主题感兴趣、但没有专业背景的普通用户",
+      "knowledge_level": "beginner"
+    },
+    "communication": {
+      "goal": "让新手分清粉水比",
+      "tone": [
+        "conversational",
+        "clear",
+        "slightly_surprising"
+      ],
+      "creator_persona": "像朋友一样解释复杂话题的知识型创作者"
+    },
+    "content_policy": {
+      "factual_claims_require_sources": true,
+      "generated_media_cannot_be_evidence": true,
+      "avoid_fabricated_personal_experience": true
+    }
+  },
+  "working_intent": {
+    "format_id": "explainer",
+    "topic": "手冲咖啡",
+    "one_sentence_thesis": "帮无专业背景的手冲咖啡新手分清粉水比，破除「粉水比是固定值」的常见误区，给出适合不同需求的可直接套用的正确比例",
+    "promise": "帮无专业背景的手冲咖啡新手分清粉水比，破除「粉水比是固定值」的常见误区，给出适合不同需求的可直接套用的正确比例",
+    "audience": {
+      "description": "对主题感兴趣、但没有专业背景的普通用户",
+      "knowledge_level": "beginner"
+    },
+    "communication": {
+      "goal": "让新手分清粉水比",
+      "tone": [
+        "conversational",
+        "clear",
+        "slightly_surprising"
+      ],
+      "creator_persona": "像朋友一样解释复杂话题的知识型创作者"
+    },
+    "target": {
+      "platform": "douyin",
+      "duration_target_ms": 90000,
+      "aspect_ratio": "9:16",
+      "language": "zh-CN"
+    },
+    "content_policy": {
+      "factual_claims_require_sources": true,
+      "generated_media_cannot_be_evidence": true,
+      "avoid_fabricated_personal_experience": true
+    },
+    "presentation": {
+      "requested": "auto",
+      "resolved": "ab_roll",
+      "selection_source": "ai",
+      "rationale": "知识讲解类内容需要主持人出镜建立信任，同时穿插操作演示、比例示意图补充说明，符合抖音竖屏知识类内容的观看习惯，适配新手理解需求",
+      "speaker_presence_ratio_min": 0.6,
+      "speaker_presence_ratio_max": 0.7,
+      "character_consistency_required": true,
+      "character_id": "host_main",
+      "character_description": "年轻女性，齐肩短发，穿简约休闲衬衫，在干净的居家咖啡角拍摄，气质亲切自然"
+    }
+  },
+  "progress": {
+    "project_id": "ugc_topic_571c6316",
+    "state_version": 2,
+    "narrative": "passed",
+    "script": "passed",
+    "voice": "ready",
+    "editorial": "blocked",
+    "asset": "blocked",
+    "timeline": "blocked",
+    "render": "blocked"
+  },
+  "last_message": "已经按要求把讲粉水比定义的第三段修改完成，压缩成两句保留了粉水比定义的核心内容，可以继续推进后续制作了。",
+  "messages": [
+    {
+      "role": "agent",
+      "content": "你好，我是意图解析层。先告诉我你想做什么视频、给谁看、大概多长。",
+      "created_at": "2026-08-30T09:50:52.672307+00:00"
+    },
+    {
+      "role": "user",
+      "content": "我想做个视频",
+      "created_at": "2026-08-30T09:50:52.672307+00:00"
+    },
+    {
+      "role": "agent",
+      "content": "请问你这支视频具体是讲什么主题的呢？",
+      "created_at": "2026-08-30T09:51:17.809836+00:00"
+    },
+    {
+      "role": "user",
+      "content": "做一条讲手冲咖啡的抖音",
+      "created_at": "2026-08-30T09:51:17.811145+00:00"
+    },
+    {
+      "role": "agent",
+      "content": "这支手冲咖啡的视频，你希望观众看完之后能做成哪一件具体的事呢？",
+      "created_at": "2026-08-30T09:52:01.572082+00:00"
+    },
+    {
+      "role": "user",
+      "content": "目标是让新手分清粉水比。",
+      "created_at": "2026-08-30T09:52:01.574097+00:00"
+    },
+    {
+      "role": "agent",
+      "content": "已经按当前任务书做好了脚本和口播文案，请问可以继续推进后续的制作阶段吗？",
+      "created_at": "2026-08-30T09:57:18.896827+00:00"
+    },
+    {
+      "role": "user",
+      "content": "第三段太长，收成两句，粉水比那句留下",
+      "created_at": "2026-08-30T09:57:18.904334+00:00"
+    },
+    {
+      "role": "agent",
+      "content": "已经按要求把讲粉水比定义的第三段修改完成，压缩成两句保留了粉水比定义的核心内容，可以继续推进后续制作了。",
+      "created_at": "2026-08-30T10:02:42.986448+00:00"
+    }
+  ]
+}

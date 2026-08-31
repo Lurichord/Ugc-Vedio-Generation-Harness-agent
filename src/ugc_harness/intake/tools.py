@@ -1,4 +1,4 @@
-"""Intake tool names and host-local skill activate. MCP owns the rest."""
+"""Intake tool names and host-local skill activate / brief update. MCP owns the rest."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ HARNESS_INSPECT = "harness.inspect"
 HARNESS_LIST_GRAPH = "harness.list_graph"
 HARNESS_REPAIR = "harness.repair"
 SKILL_ACTIVATE = "skill.activate"
+BRIEF_UPDATE = "brief.update"
 CONFIGURE_SESSION = "intake.configure_session"
 
 INTAKE_MCP_TOOLS = (
@@ -56,7 +57,8 @@ def mcp_tool_specs() -> list[dict[str, Any]]:
         {
             "name": HARNESS_LIST_GRAPH,
             "description": (
-                "读取精简依赖图。无参只返回 artifact:* 阶段节点；"
+                "读取精简依赖图。无参只返回内容根节点"
+                "（cast/prop/place/beat/scene/step）；"
                 "around_ref 返回该节点及一跳邻居。不含 hash。"
             ),
             "parameters": {
@@ -67,7 +69,7 @@ def mcp_tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": HARNESS_REPAIR,
-            "description": "定位若干 ref，派给现有 harness repair，不直接改字。",
+            "description": "弄脏 target_refs 及其下游，并拉起制作 agent 按 instruction 修复。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -104,7 +106,59 @@ def host_tool_specs() -> list[dict[str, Any]]:
                 "required": ["name"],
                 "additionalProperties": False,
             },
-        }
+        },
+        {
+            "name": BRIEF_UPDATE,
+            "description": (
+                "部分更新 working_brief。只填要改的字段，没改的键不要带。"
+                "点头确认、选择题、改口时用。不等于开工。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "production_mode": {
+                        "type": "string",
+                        "enum": ["auto", "explainer", "drama", "tutorial"],
+                    },
+                    "video_profile": {"type": "string"},
+                    "target": {
+                        "type": "object",
+                        "properties": {
+                            "platform": {"type": "string"},
+                            "duration_target_ms": {"type": "integer"},
+                            "aspect_ratio": {"type": "string"},
+                            "language": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                    "audience": {
+                        "type": "object",
+                        "properties": {
+                            "description": {"type": "string"},
+                            "knowledge_level": {
+                                "type": "string",
+                                "enum": ["beginner", "general", "expert"],
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
+                    "communication": {
+                        "type": "object",
+                        "properties": {
+                            "goal": {"type": "string"},
+                            "tone": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "creator_persona": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
     ]
 
 

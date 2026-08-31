@@ -10,9 +10,7 @@ from ugc_harness.content import (
     PlannedBeat,
     Section,
     TargetSpec,
-    VideoWorldState,
     WorldClaim,
-    WorldEntity,
 )
 from ugc_harness.harness.dependencies import DependencyGraph, NodeCommit
 from ugc_harness.harness.description import (
@@ -22,6 +20,7 @@ from ugc_harness.harness.description import (
     VideoWorld,
 )
 from ugc_harness.harness.models import (
+    DependencyEdge,
     DependencyGraphState,
     ProjectState,
     RuntimeContext,
@@ -33,7 +32,7 @@ from ugc_harness.intake.brief_sync import HeuristicBriefSync, apply_brief_patch
 from ugc_harness.intake.cli import build_parser, format_status
 from ugc_harness.intake.description_view import get_element, list_outline
 from ugc_harness.intake.graph_view import list_graph
-from ugc_harness.intake.host import IntentHost, new_session
+from ugc_harness.intake.host import IntentHost, new_session, record_user_text
 from ugc_harness.intake.models import (
     AgentDecision,
     BriefDraft,
@@ -96,7 +95,7 @@ def _complete_brief(**updates: Any) -> BriefDraft:
     payload = {
         "topic": "为什么测试很重要",
         "production_mode": "explainer",
-        "target": TargetSpec(duration_target_ms=90_000),
+        "target": TargetPatch(duration_target_ms=90_000),
         "communication": CommunicationSpec(goal="让观众理解测试能降低返工成本"),
     }
     payload.update(updates)
@@ -127,26 +126,14 @@ def _tiny_description() -> VideoDescription:
         presentation=_presentation(),
     )
     world = VideoWorld(
-        state=VideoWorldState(
-            topic_frame="测试",
-            entities=[
-                WorldEntity(
-                    entity_id="e1",
-                    name="测试",
-                    kind="concept",
-                    narrative_role="主题",
-                    description="软件测试",
-                )
-            ],
-            claims=[
-                WorldClaim(
-                    claim_id="c1",
-                    statement="测试能降返工",
-                    epistemic_status="given_by_brief",
-                    evidence_required=False,
-                )
-            ],
-        )
+        claims=[
+            WorldClaim(
+                claim_id="c1",
+                statement="测试能降返工",
+                epistemic_status="given_by_brief",
+                evidence_required=False,
+            )
+        ]
     )
     sections = [
         Section(
@@ -201,18 +188,19 @@ def _tiny_graph() -> DependencyGraphState:
         task_id="t_narrative",
         produced_by="narrative_agent",
         commits=[
-            NodeCommit("input:brief", "brief", "brief"),
+            NodeCommit("cast:host", "cast", "host"),
+            NodeCommit("beat:b3", "beat", "beat three"),
             NodeCommit(
-                "artifact:narrative",
-                "narrative_artifact",
-                "narrative",
-                ("input:brief",),
+                "utterance:ss3",
+                "utterance",
+                "line three",
+                edges=(DependencyEdge(to="beat:b3", family="plot"),),
             ),
             NodeCommit(
-                "planned_beat:b3",
-                "planned_beat",
-                "beat three",
-                ("artifact:narrative",),
+                "shot:shot_b3",
+                "shot",
+                "shot three",
+                edges=(DependencyEdge(to="beat:b3", family="plot"),),
             ),
         ],
     )
@@ -221,34 +209,10 @@ def _tiny_graph() -> DependencyGraphState:
         produced_by="voice_agent",
         commits=[
             NodeCommit(
-                "artifact:voice",
-                "voice_artifact",
-                "voice",
-                ("artifact:narrative",),
-            ),
-            NodeCommit(
-                "realized_beat:b3",
-                "realized_beat",
-                "realized three",
-                ("artifact:voice", "planned_beat:b3"),
-            ),
-        ],
-    )
-    graph.commit_batch(
-        task_id="t_timeline",
-        produced_by="timeline_agent",
-        commits=[
-            NodeCommit(
-                "timeline_clip:b3",
-                "timeline_clip",
-                "clip",
-                ("realized_beat:b3",),
-            ),
-            NodeCommit(
-                "artifact:timeline",
-                "timeline_artifact",
-                "timeline",
-                ("timeline_clip:b3", "artifact:voice"),
+                "audio:ss3",
+                "audio",
+                "audio three",
+                edges=(DependencyEdge(to="utterance:ss3", family="element"),),
             ),
         ],
     )
@@ -303,6 +267,76 @@ def test_brief_patch_overlays_only_provided_fields() -> None:
     assert current.production_mode == "explainer"
 
 
+def test_platform_only_does_not_fill_duration() -> None:
+    host, _, _ = _host([AgentDecision(message="大概做多久？")])
+    result = host.respond(new_session(), Inbound(text="抖音吧"))
+    target = result.session.working_brief.target
+    assert target is not None
+    assert target.platform == "douyin"
+    assert target.duration_target_ms is None
+
+
+def test_agent_brief_update_writes_goal_from_confirmation() -> None:
+    host, _, runtime = _host(
+        [
+            AgentDecision(
+                tool="brief.update",
+                arguments={
+                    "communication": {
+                        "goal": "让第一次包粽子的新手看完，能跟着步骤在家包出不散的粽子"
+                    }
+                },
+            ),
+            AgentDecision(message="打算发哪个平台？"),
+        ]
+    )
+    session = new_session()
+    session = session.model_copy(update={"working_brief": BriefDraft(topic="端午节")})
+    result = host.respond(session, Inbound(text="可以的"))
+    assert result.session.working_brief.topic == "端午节"
+    assert result.session.working_brief.communication is not None
+    assert "包粽子" in result.session.working_brief.communication.goal
+    assert result.message == "打算发哪个平台？"
+    assert runtime.mcp_calls == []
+
+
+def test_brief_update_then_start_project_sees_new_goal() -> None:
+    runtime = _runtime(dry_run=True)
+    host, _, runtime = _host(
+        [
+            AgentDecision(
+                tool="brief.update",
+                arguments={
+                    "communication": {"goal": "让观众理解测试能降低返工成本"},
+                    "audience": {"description": "业务开发"},
+                    "target": {"platform": "douyin", "duration_target_ms": 90_000},
+                },
+            ),
+            AgentDecision(tool="harness.start_project"),
+            AgentDecision(message="已经按任务书开工。"),
+        ],
+        runtime,
+    )
+    result = host.respond(new_session(), Inbound(text="主题是为什么测试很重要"))
+    assert runtime.mcp_calls[0][0] == "harness.start_project"
+    assert result.session.project_id
+    assert result.session.working_brief.communication is not None
+    assert "降低返工" in result.session.working_brief.communication.goal
+    assert result.message == "已经按任务书开工。"
+
+
+def test_brief_update_rejects_invalid_arguments() -> None:
+    host, _, _ = _host(
+        [
+            AgentDecision(tool="brief.update", arguments={"communication": "不是对象"}),
+            AgentDecision(message="刚才没记下，再说一次目标？"),
+        ]
+    )
+    result = host.respond(new_session(), Inbound(text="可以的"))
+    assert result.session.working_brief.communication is None
+    assert result.message == "刚才没记下，再说一次目标？"
+
+
 def test_host_writes_brief_from_user_text_without_agent_tool() -> None:
     host, model, runtime = _host([AgentDecision(message="目标是什么？")])
     result = host.respond(
@@ -336,7 +370,17 @@ def test_agent_can_reply_with_zero_tools() -> None:
     assert model.calls[0]["tools"]
     assert "description.list_outline" in model.calls[0]["tools"]
     assert "skill.activate" in model.calls[0]["tools"]
+    assert "brief.update" in model.calls[0]["tools"]
     assert "narrative.explainer.plan_sections" not in model.calls[0]["tools"]
+
+
+def test_host_does_not_duplicate_already_recorded_user_text() -> None:
+    host, _, _ = _host([AgentDecision(message="主题是什么？")])
+    session = record_user_text(new_session(), "做个视频")
+    result = host.respond(session, Inbound(text="做个视频"))
+    users = [item.content for item in result.session.messages if item.role == "user"]
+    assert users == ["做个视频"]
+    assert result.message == "主题是什么？"
 
 
 def test_dialogue_is_kept_complete_across_turns() -> None:
@@ -487,6 +531,47 @@ def test_host_refreshes_progress_before_agent_sees_memory() -> None:
     assert '"narrative": "ready"' in memory
 
 
+def test_inspect_graph_then_repair() -> None:
+    project_dir = Path(".tmp") / "test_intake_inspect_graph"
+    _write_demo_project(project_dir)
+    session = new_session()
+    session.project_dir = str(project_dir)
+    runtime = _runtime()
+    host, _, runtime = _host(
+        [
+            AgentDecision(tool="skill.activate", arguments={"name": "inspect-graph"}),
+            AgentDecision(tool="harness.list_graph"),
+            AgentDecision(
+                tool="harness.list_graph",
+                arguments={"around_ref": "beat:b3"},
+            ),
+            AgentDecision(
+                tool="harness.repair",
+                arguments={
+                    "target_refs": ["beat:b3"],
+                    "instruction": "把开场口播收成两句，保留钩子问题",
+                },
+            ),
+            AgentDecision(message="已经按依赖图把开场那段派去改短。"),
+        ],
+        runtime,
+    )
+    before = (project_dir / "harness" / "project_state.json").read_text(encoding="utf-8")
+    result = host.respond(session, Inbound(text="开场这段不对，改短一点"))
+    assert (project_dir / "harness" / "project_state.json").read_text(
+        encoding="utf-8"
+    ) == before
+    assert [name for name, _ in runtime.mcp_calls] == [
+        "harness.list_graph",
+        "harness.list_graph",
+        "harness.repair",
+    ]
+    assert runtime.mcp_calls[0][1] == {}
+    assert runtime.mcp_calls[1][1]["around_ref"] == "beat:b3"
+    assert runtime.mcp_calls[-1][1]["target_refs"] == ["beat:b3"]
+    assert result.message == "已经按依赖图把开场那段派去改短。"
+
+
 def test_outline_list_graph_repair_then_reply() -> None:
     project_dir = Path(".tmp") / "test_intake_repair"
     _write_demo_project(project_dir)
@@ -539,21 +624,17 @@ def test_list_outline_and_get_element_do_not_dump_all_shots() -> None:
     assert get_element(description, "beat:missing") is None
 
 
-def test_list_graph_returns_artifact_overview_without_hashes() -> None:
+def test_list_graph_returns_content_roots_without_hashes() -> None:
     overview = list_graph(_tiny_graph())
     assert overview["ok"] is True
-    assert overview["scope"] == "artifacts"
+    assert overview["scope"] == "roots"
     refs = [item["ref"] for item in overview["nodes"]]
-    assert refs == [
-        "artifact:narrative",
-        "artifact:timeline",
-        "artifact:voice",
-    ]
+    assert refs == ["beat:b3", "cast:host"]
     for node in overview["nodes"]:
         assert "content_hash" not in node
         assert "version" not in node
         assert "dependency_hashes" not in node
-        assert set(node) == {
+        assert {
             "ref",
             "kind",
             "produced_by",
@@ -561,34 +642,30 @@ def test_list_graph_returns_artifact_overview_without_hashes() -> None:
             "locked",
             "depends_on",
             "dependents",
-        }
-        assert all(edge.startswith("artifact:") for edge in node["depends_on"])
-        assert all(edge.startswith("artifact:") for edge in node["dependents"])
-    narrative = next(
-        item for item in overview["nodes"] if item["ref"] == "artifact:narrative"
-    )
-    assert "planned_beat:b3" not in narrative["dependents"]
-    assert "timeline_clip:b3" not in refs
+        } <= set(node)
+    assert "section:sec_body" not in refs
+    assert "clip:clip_b3" not in refs
+    assert "shot:shot_b3" not in refs
 
 
 def test_list_graph_around_ref_is_one_hop_and_resolves_beat_alias() -> None:
     around = list_graph(_tiny_graph(), around_ref="beat:b3")
     assert around["ok"] is True
-    assert around["resolved_ref"] == "planned_beat:b3"
+    assert around["resolved_ref"] == "beat:b3"
     refs = {item["ref"] for item in around["nodes"]}
     assert refs == {
-        "planned_beat:b3",
-        "artifact:narrative",
-        "realized_beat:b3",
+        "beat:b3",
+        "utterance:ss3",
+        "shot:shot_b3",
     }
-    assert "timeline_clip:b3" not in refs
-    assert "artifact:timeline" not in refs
+    assert "section:sec_body" not in refs
+    assert "clip:clip_b3" not in refs
     missing = list_graph(_tiny_graph(), around_ref="beat:missing")
     assert missing["ok"] is False
-    artifact_around = list_graph(_tiny_graph(), around_ref="artifact:timeline")
-    around_refs = {item["ref"] for item in artifact_around["nodes"]}
-    assert "timeline_clip:b3" not in around_refs
-    assert artifact_around.get("omitted_edges", 0) >= 1
+    shot_around = list_graph(_tiny_graph(), around_ref="shot:shot_b3")
+    around_refs = {item["ref"] for item in shot_around["nodes"]}
+    assert around_refs == {"shot:shot_b3", "beat:b3"}
+    assert "clip:clip_b3" not in around_refs
 
 
 def test_list_graph_and_repair_require_a_project() -> None:
@@ -604,9 +681,52 @@ def test_repair_resolves_description_ref_to_graph_node() -> None:
     _write_demo_project(project_dir)
     session = new_session()
     session.project_dir = str(project_dir)
-    _, result = repair_description(session, ["beat:b3"], "收成两句")
-    assert result["target_refs"] == ["planned_beat:b3"]
-    assert result["error"] == "harness.repair 执行器未接线"
+    before = (project_dir / "harness" / "project_state.json").read_text(encoding="utf-8")
+    _, preview = repair_description(
+        session, ["planned_beat:b3"], "收成两句", dry_run=True
+    )
+    assert preview["ok"] is True
+    assert preview["dry_run"] is True
+    assert preview["target_refs"] == ["beat:b3"]
+    assert "beat:b3" in preview["invalidated"]
+    assert "audio:ss3" in preview["invalidated"]
+    assert preview["planned_tasks"] >= 1
+    assert (project_dir / "harness" / "project_state.json").read_text(
+        encoding="utf-8"
+    ) == before
+    _, unwired = repair_description(session, ["beat:b3"], "收成两句")
+    assert unwired["ok"] is False
+    assert unwired["error"] == "harness.repair 执行器未接线"
+    assert unwired["target_refs"] == ["beat:b3"]
+
+
+def test_repair_runs_injected_executor_until_current() -> None:
+    from tests.test_repair import commit_repair_targets
+
+    project_dir = Path(".tmp") / "test_intake_repair_run"
+    _write_demo_project(project_dir)
+    session = new_session()
+    session.project_dir = str(project_dir)
+    ran: list[str] = []
+
+    def run_task(task, instruction: str) -> None:
+        ran.append(task.agent)
+        assert instruction == "收成两句"
+        commit_repair_targets(project_dir, task)
+
+    _, result = repair_description(
+        session, ["beat:b3"], "收成两句", run_task=run_task
+    )
+    assert result["ok"] is True
+    assert result["complete"] is True
+    assert result["dry_run"] is False
+    assert ran[0] == "narrative_agent"
+    assert "voice_agent" in ran
+    from ugc_harness.harness.repair import load_project_state
+
+    state = load_project_state(project_dir)
+    for ref in result["invalidated"]:
+        assert state.dependency_graph.nodes[ref].status == "current"
 
 
 def test_skill_catalog_and_activate() -> None:
@@ -615,14 +735,20 @@ def test_skill_catalog_and_activate() -> None:
         "clarify-brief",
         "user-revises",
         "start-project",
+        "inspect-graph",
         "revise-segment",
         "inspect-progress",
     }
-    body = load_skill("revise-segment")
-    assert "harness.repair" in body
+    body = load_skill("inspect-graph")
     assert "harness.list_graph" in body
+    assert "harness.repair" in body
     assert "输出格式" in body
     assert '"target_refs"' in body
+    assert "cast" in body and "utterance" in body and "shot" in body
+    revise = load_skill("revise-segment")
+    assert "harness.repair" in revise
+    assert "harness.list_graph" in revise
+    assert "inspect-graph" in revise
     from ugc_harness.intake.skills import SKILLS_ROOT
 
     instructions = (SKILLS_ROOT.parent / "agent.md").read_text(encoding="utf-8")
@@ -630,6 +756,7 @@ def test_skill_catalog_and_activate() -> None:
     assert '"tool"' in instructions
     assert '"arguments"' in instructions
     assert '"done"' in instructions
+    assert "brief.update" in instructions
     for skill_name in names:
         assert "输出格式" in load_skill(skill_name)
     try:
@@ -710,3 +837,4 @@ def test_duration_patch_keeps_existing_topic() -> None:
     assert updated.topic == "咖啡"
     assert updated.target is not None
     assert updated.target.duration_target_ms == 90_000
+    assert updated.target.platform is None

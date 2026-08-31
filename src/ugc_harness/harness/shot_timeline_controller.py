@@ -68,7 +68,7 @@ class ShotTimelineHarnessController:
     ) -> tuple[ShotTimelineArtifact, ShotTimelineRun]:
         if narrative.shots is None:
             raise ValueError("shot timeline requires ProductionShots")
-        if state.video.asset_status != "passed" or state.video.timeline_status != "ready":
+        if state.evaluation.stages.asset != "passed" or state.evaluation.stages.timeline != "ready":
             raise ValueError("shot timeline stage is not ready")
         if assets.project_id != narrative.brief.project_id:
             raise ValueError("timeline inputs have different project_id values")
@@ -80,11 +80,11 @@ class ShotTimelineHarnessController:
             (narrative.model_dump_json() + "\n" + assets.model_dump_json()).encode()
         ).hexdigest()
         task = TaskEnvelope(
-            task_id=f"task_shot_timeline_{assets.project_id}_v{state.video.state_version}",
+            task_id=f"task_shot_timeline_{assets.project_id}_v{state.context.state_version}",
             agent="timeline_stage",
             goal="Sequence AI video Shot assets in Narrative order without replacing their audio.",
             scope=TaskScope(project_id=assets.project_id, shot_ids=expected),
-            based_on_state_version=state.video.state_version,
+            based_on_state_version=state.context.state_version,
             format_id=assets.format_id,
             allowed_tools=[self.TOOL],
             required_outputs=["shot_timeline_artifact"],
@@ -115,9 +115,9 @@ class ShotTimelineHarnessController:
             clips=clips,
         )
         next_state = state.model_copy(deep=True)
-        next_state.video.state_version += 1
-        next_state.video.timeline_status = "passed"
-        next_state.video.render_status = "ready"
+        next_state.context.state_version += 1
+        next_state.evaluation.stages.timeline = "passed"
+        next_state.evaluation.stages.render = "ready"
         apply_shot_timeline_realization(next_state, artifact)
         action = ActionRecord(
             action_id=f"action_{uuid.uuid4().hex[:12]}",
@@ -130,6 +130,6 @@ class ShotTimelineHarnessController:
         return artifact, ShotTimelineRun(
             task=task,
             actions=[action],
-            committed_state_version=next_state.video.state_version,
+            committed_state_version=next_state.context.state_version,
             project_state=next_state,
         )

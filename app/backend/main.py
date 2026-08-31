@@ -137,13 +137,13 @@ def create_project(request: CreateProjectRequest):
             directory.name,
             TaskEvent(
                 event_id=f"event_{uuid4().hex}",
-                project_id=state.video.project_id,
+                project_id=state.context.project_id,
                 stage="narrative",
                 event_type="awaiting_review",
                 message="Narrative 已生成，等待用户审核",
             ),
         )
-        return {"project_id": state.video.project_id, "project_key": directory.name}
+        return {"project_id": state.context.project_id, "project_key": directory.name}
 
     return jobs.submit("创建项目并生成 Narrative", operation)
 
@@ -166,7 +166,7 @@ def stage_view(project_key: str, stage: str):
 def run_stage(project_key: str, stage: str, request: RunStageRequest):
     stage_name = valid_stage(stage)
     directory = project_or_404(project_key)
-    project_id = projects.read_state(directory).video.project_id
+    project_id = projects.read_state(directory).context.project_id
     view = beats.stage_view(directory, stage_name)
     if not view.can_run:
         raise HTTPException(status_code=409, detail="上一阶段尚未获得用户批准")
@@ -201,10 +201,10 @@ def run_stage(project_key: str, stage: str, request: RunStageRequest):
 def approve_stage(project_key: str, stage: str, request: ApprovalRequest):
     stage_name = valid_stage(stage)
     directory = project_or_404(project_key)
-    project_id = projects.read_state(directory).video.project_id
+    project_id = projects.read_state(directory).context.project_id
     state = projects.read_state(directory)
     view = beats.stage_view(directory, stage_name)
-    if request.expected_state_version != state.video.state_version:
+    if request.expected_state_version != state.context.state_version:
         raise HTTPException(status_code=409, detail="项目状态已变化，请刷新后重试")
     expected_beats = {item.beat_id for item in view.beats if item.artifacts}
     if set(request.beat_ids) != expected_beats:
@@ -227,7 +227,7 @@ def approve_stage(project_key: str, stage: str, request: ApprovalRequest):
 def add_feedback(project_key: str, request: FeedbackRequest):
     directory = project_or_404(project_key)
     state = projects.read_state(directory)
-    project_id = state.video.project_id
+    project_id = state.context.project_id
     view = beats.stage_view(directory, request.stage)
     valid_target = any(
         beat.beat_id == request.beat_id
@@ -261,7 +261,7 @@ def list_feedback(project_key: str):
 @app.post("/api/projects/{project_key}/repairs/{feedback_id}", status_code=202)
 def run_repair(project_key: str, feedback_id: str):
     directory = project_or_404(project_key)
-    project_id = projects.read_state(directory).video.project_id
+    project_id = projects.read_state(directory).context.project_id
 
     def operation():
         started = time.monotonic()

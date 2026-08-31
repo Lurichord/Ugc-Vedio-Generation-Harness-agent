@@ -33,7 +33,12 @@ from .models import (
 )
 from .transitions import transition_after_review
 from .dependencies import DependencyGraph
-from .dependency_builders import narrative_commits, voice_commits
+from .dependency_builders import (
+    has_content_graph,
+    narrative_commits,
+    refs_with_prefix,
+    voice_commits,
+)
 from .description_realization import apply_voice_realization
 from .trajectory import record_task, task_kind_for
 from .repair import repair_input_hash, select_repair_commits
@@ -192,12 +197,12 @@ class VoiceHarnessController:
         return TaskEnvelope(
             task_id=(
                 f"task_voice_{narrative.brief.project_id}_v"
-                f"{state.video.state_version}"
+                f"{state.context.state_version}"
             ),
             agent="voice_agent",
             goal="生成完整配音、原生字级时间戳与 RealizedBeat",
             scope=TaskScope(project_id=narrative.brief.project_id),
-            based_on_state_version=state.video.state_version,
+            based_on_state_version=state.context.state_version,
             agent_instructions=load_instructions("voice"),
             allowed_tools=[PLAN_TOOL, SYNTHESIZE_TOOL, SUBMIT_TOOL],
             required_outputs=["voice_artifact"],
@@ -215,7 +220,7 @@ class VoiceHarnessController:
             ],
             budget=TaskBudget(max_steps=6, max_retries=1),
             input_hash=self._input_hash(narrative),
-            dependency_snapshot=graph.snapshot(["artifact:narrative"]),
+            dependency_snapshot=graph.snapshot(_voice_snapshot_refs(state)),
         )
 
     def run(
@@ -225,24 +230,24 @@ class VoiceHarnessController:
         state: ProjectState,
         task: TaskEnvelope | None = None,
     ) -> VoiceHarnessRun:
-        if state.video.project_id != narrative.brief.project_id:
+        if state.context.project_id != narrative.brief.project_id:
             raise ValueError("project state and narrative have different project_id")
-        if state.video.narrative_status != "passed":
+        if state.evaluation.stages.narrative != "passed":
             raise ValueError("voice_agent requires an approved narrative artifact")
         is_repair = bool(task and task.scope.target_refs)
-        if state.video.voice_status not in {"ready", "needs_revision", "stale"} and not (
-            is_repair and state.video.voice_status == "passed"
+        if state.evaluation.stages.voice not in {"ready", "needs_revision", "stale"} and not (
+            is_repair and state.evaluation.stages.voice == "passed"
         ):
             raise ValueError("voice_agent is not ready in project state")
         graph = DependencyGraph(state.dependency_graph)
-        if "artifact:narrative" not in state.dependency_graph.nodes:
+        if not has_content_graph(state.dependency_graph.nodes):
             graph.commit_batch(
                 task_id=f"bootstrap_narrative_{narrative.brief.project_id}",
                 produced_by="narrative_agent",
                 commits=narrative_commits(narrative),
             )
         envelope = task or self.create_task(narrative, state)
-        if envelope.based_on_state_version != state.video.state_version:
+        if envelope.based_on_state_version != state.context.state_version:
             raise ValueError("STALE_RESULT: voice task uses an obsolete state version")
         expected_input_hash = (
             repair_input_hash(
@@ -275,7 +280,7 @@ class VoiceHarnessController:
             project_dir,
             target_ref,
         )
-        committed_version = state.video.state_version + 1
+        committed_version = state.context.state_version + 1
         transition = transition_after_review(
             current_agent="voice_agent",
             evaluation=evaluation,
@@ -285,17 +290,17 @@ class VoiceHarnessController:
             ),
         )
         next_state = state.model_copy(deep=True)
-        next_state.video.state_version = committed_version
-        next_state.video.voice_status = (
+        next_state.context.state_version = committed_version
+        next_state.evaluation.stages.voice = (
             "passed" if evaluation.passed else "needs_revision"
         )
-        next_state.video.editorial_status = (
+        next_state.evaluation.stages.editorial = (
             "ready" if evaluation.passed else "blocked"
         )
         if evaluation.passed:
             apply_voice_realization(next_state, artifact)
         next_graph = DependencyGraph(next_state.dependency_graph)
-        commits = voice_commits(artifact)
+        commits = voice_commits(artifact, next_state.production.voice)
         commits = select_repair_commits(next_graph, commits, envelope)
         if evaluation.passed:
             graph_update = next_graph.commit_batch(
@@ -323,10 +328,10 @@ class VoiceHarnessController:
             transition=transition,
             graph_update=graph_update,
         )
-        next_state.runtime_context.available_tools = sorted(
-            set(next_state.runtime_context.available_tools) | self.agent.tools.names
+        next_state.context.available_tools = sorted(
+            set(next_state.context.available_tools) | self.agent.tools.names
         )
-        next_state.runtime_context.available_models["tts"] = [self.voice_id]
+        next_state.context.available_models["tts"] = [self.voice_id]
         return VoiceHarnessRun(
             artifact=artifact,
             record=VoiceRunRecord(
@@ -353,13 +358,21 @@ class VoiceHarnessController:
     ) -> None:
         if result.task_id != task.task_id or result.input_hash != task.input_hash:
             raise ValueError("voice agent result does not match task")
-        if result.state_version_used != state.video.state_version:
+        if result.state_version_used != state.context.state_version:
             raise ValueError("STALE_RESULT: voice agent used an obsolete state version")
         if set(result.state_patch.set) - {"video.voice_status"}:
             raise ValueError("voice agent proposed forbidden state paths")
         allowed = {"editorial:all", "timeline:all", "render:final"}
         if set(result.state_patch.invalidate) - allowed:
             raise ValueError("voice agent proposed invalid invalidations")
+
+
+def _voice_snapshot_refs(state: ProjectState) -> list[str]:
+    nodes = state.dependency_graph.nodes
+    utterances = refs_with_prefix(nodes, "utterance:")
+    if utterances:
+        return utterances
+    return refs_with_prefix(nodes, "beat:", "scene:", "step:")
 
 
 def _voice_completion(

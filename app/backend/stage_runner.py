@@ -172,28 +172,28 @@ class StageRunner:
             editable_beats = sorted(
                 ref.split(":", 1)[1]
                 for ref in scope.target_refs
-                if ref.startswith("planned_beat:")
+                if ref.startswith(("beat:", "planned_beat:", "scene:", "step:"))
             )
             editable_segments = sorted(
                 ref.split(":", 1)[1]
                 for ref in scope.target_refs
-                if ref.startswith("script_segment:")
+                if ref.startswith(("utterance:", "script_segment:"))
             )
             plan_rule = (
-                f"允许修改的 planned_beat 仅限 {editable_beats}，其余"
+                f"允许修改的 beat 仅限 {editable_beats}，其余"
                 if editable_beats
-                else "没有任何 planned_beat 或 section 允许修改，整个 PlanningArtifact"
+                else "没有任何 beat / scene / step 允许修改，整个 PlanningArtifact"
             )
             script_rule = (
-                f"只能改写 script_segment {editable_segments} 的 text 与 delivery_hint"
+                f"只能改写 utterance {editable_segments} 的 text 与 delivery_hint"
                 "（speech_act 必须保持基准原值），其余 segment 以及 script_version、"
                 "title_options 必须逐字保持基准原样。"
                 if editable_segments
                 else "整个 ScriptArtifact 必须逐字复现基准。"
             )
             scope_note = (
-                "本次修复只有以下节点允许发生变化："
-                f"{scope.target_refs}，其中 artifact:narrative 只是整体产物引用。"
+                "本次修复只有以下内容节点允许发生变化："
+                f"{scope.target_refs}。"
                 f"生成 PlanningArtifact 时：{plan_rule}必须逐字复现基准，"
                 "包括 semantic_goal、visual_intent_hint 在内的每个字段都不得改动。"
                 f"生成 ScriptArtifact 时：{script_rule}"
@@ -209,7 +209,7 @@ class StageRunner:
         run = NarrativeHarnessController.from_mcp(
             StructuredLLM(settings),
             settings.model,
-            state_version=state.video.state_version,
+            state_version=state.context.state_version,
             generation_context=generation_context,
         ).run(current.brief, task=task, state=state)
         writer = ArtifactWriter(project_dir.parent)

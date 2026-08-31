@@ -89,6 +89,8 @@ class ExplainerFormatPack:
             agent_instructions=(
                 "你正在运行 explainer workflow。目标是产出完整的世界状态、"
                 "Section 骨架、Planned Beats、外部口播 Script 和 ProductionShot。"
+                "建立 world_state 时先立薄身份册：跨镜要认出来的人/物/地写成 "
+                "kind=person/place/product，概念和举例品牌不要进册。"
                 "请根据消息历史自主规划、选择并重复调用任意允许的 MCP tool。"
                 "工具错误会直接返回给你，请自行判断修改哪里。确认候选产物完整后调用"
                 "narrative.submit_candidate；不要伪造工具结果。"
@@ -187,7 +189,10 @@ class DramaFormatPack:
             goal="生成角色驱动、可连续生成的剧情规划与 ProductionShot",
             instructions=(
                 "你正在运行 drama workflow。先建立角色、场景、物品和连续性约束，"
-                "规划故事、表演场景并编译生成式视频 Shot。你可以根据当前消息历史自主"
+                "规划故事、表演场景并编译生成式视频 Shot。"
+                "跨镜要认出来的人/地/物必须先写入 world_state.entities"
+                "（person/place/product）并给稳定 id，scene 和 action 只能引用册内 id。"
+                "你可以根据当前消息历史自主"
                 "选择、重复调用或修订任意工具，不存在 Harness 规定的调用顺序。剧情片段"
                 "的声音由视频模型随画面产生，不要生成外部口播。候选完整后主动调用"
                 "narrative.submit_candidate。"
@@ -268,7 +273,10 @@ class TutorialFormatPack:
             goal="生成以制作步骤为主、讲解按需穿插的教程规划与 ProductionShot",
             instructions=(
                 "你正在运行 tutorial workflow。请自主选择工具来定义目标成品、材料、"
-                "操作步骤、补充讲解和 Procedure Shot；工具可以重复调用，不存在 Harness"
+                "操作步骤、补充讲解和 Procedure Shot。"
+                "成品和反复上手的材料/工具写入 world_state.entities（kind=product），"
+                "与 materials 使用同一套 id；不要为每颗螺丝建条。"
+                "工具可以重复调用，不存在 Harness"
                 "规定的顺序。不要假设每一个步骤都需要口播。候选完整后主动调用"
                 "narrative.submit_candidate。"
             ),

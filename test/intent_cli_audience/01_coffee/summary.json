@@ -1,0 +1,59 @@
+{
+  "slug": "01_coffee",
+  "opening": "我想做个视频",
+  "revision": "第三段太长，收成两句，粉水比那句留下",
+  "project_dir": "D:\\桌面\\ugc-vedio-generation-agent\\test\\intent_cli_audience\\01_coffee\\project\\手冲咖啡",
+  "brief": {
+    "project_id": "ugc_topic_571c6316",
+    "project_name": "手冲咖啡",
+    "topic": "手冲咖啡",
+    "production_mode": "explainer",
+    "video_profile": "auto",
+    "target": {
+      "platform": "douyin",
+      "duration_target_ms": 90000,
+      "aspect_ratio": "9:16",
+      "language": "zh-CN"
+    },
+    "audience": {
+      "description": "对主题感兴趣、但没有专业背景的普通用户",
+      "knowledge_level": "beginner"
+    },
+    "communication": {
+      "goal": "让新手分清粉水比",
+      "tone": [
+        "conversational",
+        "clear",
+        "slightly_surprising"
+      ],
+      "creator_persona": "像朋友一样解释复杂话题的知识型创作者"
+    },
+    "content_policy": {
+      "factual_claims_require_sources": true,
+      "generated_media_cannot_be_evidence": true,
+      "avoid_fabricated_personal_experience": true
+    }
+  },
+  "progress": {
+    "project_id": "ugc_topic_571c6316",
+    "state_version": 2,
+    "narrative": "passed",
+    "script": "passed",
+    "voice": "ready",
+    "editorial": "blocked",
+    "asset": "blocked",
+    "timeline": "blocked",
+    "render": "blocked"
+  },
+  "tool_names": [
+    "skill.activate",
+    "skill.activate",
+    "skill.activate",
+    "harness.start_project",
+    "skill.activate",
+    "description.list_outline",
+    "harness.list_graph",
+    "harness.repair"
+  ],
+  "returncode": 0
+}

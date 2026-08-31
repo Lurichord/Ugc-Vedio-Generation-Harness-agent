@@ -10,7 +10,7 @@ from uuid import uuid4
 from ..shared.llm import StructuredLLM
 from ..shared.settings import LLMSettings
 from .agent import IntentAgent
-from .brief_sync import ChainedBriefSync, HeuristicBriefSync, LlmBriefSync
+from .brief_sync import HeuristicBriefSync
 from .host import OPENING_REPLY, IntentHost, new_session
 from .mcp_runtime import IntakeMcpRuntime
 from .models import Inbound, IntakeSession
@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="start_project 只收成 CreativeBrief，不真正启动 narrative",
+        help="start_project / repair 只预览，不真正拉起制作 agent",
     )
     return parser
 
@@ -57,7 +57,7 @@ def format_reply(session: IntakeSession, message: str) -> str:
         fields.append(f"topic={brief.topic}")
     if brief.production_mode:
         fields.append(f"mode={brief.production_mode}")
-    if brief.target is not None:
+    if brief.target is not None and brief.target.duration_target_ms:
         fields.append(f"duration={brief.target.duration_target_ms // 1000}s")
     if brief.communication is not None and brief.communication.goal:
         fields.append(f"goal={brief.communication.goal}")
@@ -83,14 +83,14 @@ def main(argv: list[str] | None = None) -> None:
                 dry_run=args.dry_run,
                 output_root=None if args.dry_run else args.output_root,
             ),
-            brief_sync=ChainedBriefSync(HeuristicBriefSync(), LlmBriefSync(llm)),
+            brief_sync=HeuristicBriefSync(),
         )
     except Exception as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    print(session.last_message or OPENING_REPLY)
-    print(format_status(session))
+    print(session.last_message or OPENING_REPLY, flush=True)
+    print(format_status(session), flush=True)
     print("输入内容回车即可；exit / quit / 退出 结束。", flush=True)
 
     while True:
@@ -106,14 +106,14 @@ def main(argv: list[str] | None = None) -> None:
         try:
             result = host.respond(session, Inbound(text=text))
         except Exception as exc:
-            print(f"本轮失败：{exc}", file=sys.stderr)
+            print(f"本轮失败：{exc}", file=sys.stderr, flush=True)
             continue
         session = result.session
         _save_session(session_path, session)
         if session.project_dir:
-            print(f"harness：项目目录 {session.project_dir}")
-        print(format_reply(session, result.message))
-        print(format_status(session))
+            print(f"harness：项目目录 {session.project_dir}", flush=True)
+        print(format_reply(session, result.message), flush=True)
+        print(format_status(session), flush=True)
         if result.done:
             break
 

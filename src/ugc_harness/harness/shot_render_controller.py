@@ -45,9 +45,9 @@ class ShotRenderHarnessController:
         project_dir: str | Path,
         state: ProjectState,
     ) -> tuple[RenderArtifact, "ShotRenderRun"]:
-        if state.video.timeline_status != "passed" or state.video.render_status != "ready":
+        if state.evaluation.stages.timeline != "passed" or state.evaluation.stages.render != "ready":
             raise ValueError("shot render stage is not ready")
-        if state.video.project_id != timeline.project_id:
+        if state.context.project_id != timeline.project_id:
             raise ValueError("render inputs have different project_id values")
         root = Path(project_dir).resolve()
         renderer_dir = self.capabilities.renderer_dir
@@ -156,11 +156,11 @@ class ShotRenderHarnessController:
             quality=quality,
         )
         task = TaskEnvelope(
-            task_id=f"task_shot_render_{timeline.project_id}_v{state.video.state_version}",
+            task_id=f"task_shot_render_{timeline.project_id}_v{state.context.state_version}",
             agent="render_stage",
             goal="Render the Shot timeline while preserving each AI video's native audio.",
             scope=TaskScope(project_id=timeline.project_id, shot_ids=[c.shot_id for c in timeline.clips]),
-            based_on_state_version=state.video.state_version,
+            based_on_state_version=state.context.state_version,
             format_id=timeline.format_id,
             allowed_tools=[self.TOOL],
             required_outputs=["render_artifact"],
@@ -175,14 +175,14 @@ class ShotRenderHarnessController:
             reason="rendered native-audio AI video timeline",
         )
         next_state = state.model_copy(deep=True)
-        next_state.video.state_version += 1
-        next_state.video.render_status = "passed" if quality.passed else "needs_revision"
+        next_state.context.state_version += 1
+        next_state.evaluation.stages.render = "passed" if quality.passed else "needs_revision"
         if quality.passed:
             apply_render_realization(next_state, artifact)
         return artifact, ShotRenderRun(
             task=task,
             actions=[action],
-            committed_state_version=next_state.video.state_version,
+            committed_state_version=next_state.context.state_version,
             project_state=next_state,
         )
 

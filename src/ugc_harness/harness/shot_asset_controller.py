@@ -86,14 +86,14 @@ class ShotAssetHarnessController:
         if route.asset_route != "shot_ai_video" or narrative.shots is None:
             raise ValueError("Shot Asset route only supports drama/tutorial AI video")
         return TaskEnvelope(
-            task_id=f"task_shot_asset_{narrative.brief.project_id}_v{state.video.state_version}",
+            task_id=f"task_shot_asset_{narrative.brief.project_id}_v{state.context.state_version}",
             agent="asset_stage",
             goal="Generate exactly one AI video asset for every ProductionShot.",
             scope=TaskScope(
                 project_id=narrative.brief.project_id,
                 shot_ids=[shot.shot_id for shot in narrative.shots.shots],
             ),
-            based_on_state_version=state.video.state_version,
+            based_on_state_version=state.context.state_version,
             format_id=route.format_id,
             allowed_tools=[self.TOOL],
             required_outputs=["shot_asset_artifact"],
@@ -125,12 +125,12 @@ class ShotAssetHarnessController:
         route = resolve_production_route(narrative)
         if route.asset_route != "shot_ai_video" or narrative.shots is None:
             raise ValueError("Shot Asset route only supports drama/tutorial AI video")
-        if state.video.project_id != narrative.brief.project_id:
+        if state.context.project_id != narrative.brief.project_id:
             raise ValueError("asset inputs have different project_id values")
-        if state.video.asset_status not in {"ready", "needs_revision", "stale"}:
+        if state.evaluation.stages.asset not in {"ready", "needs_revision", "stale"}:
             raise ValueError("shot asset stage is not ready in project state")
         envelope = task or self.create_task(narrative, state)
-        if envelope.based_on_state_version != state.video.state_version:
+        if envelope.based_on_state_version != state.context.state_version:
             raise ValueError("STALE_RESULT: shot asset task uses an obsolete state")
         expected_hash = hashlib.sha256(narrative.model_dump_json().encode()).hexdigest()
         if envelope.input_hash != expected_hash:
@@ -187,14 +187,14 @@ class ShotAssetHarnessController:
             quality=quality,
         )
         next_state = state.model_copy(deep=True)
-        next_state.video.state_version += 1
-        next_state.video.asset_status = "passed"
-        next_state.video.timeline_status = "ready"
+        next_state.context.state_version += 1
+        next_state.evaluation.stages.asset = "passed"
+        next_state.evaluation.stages.timeline = "ready"
         apply_shot_media(next_state, artifact)
         run = ShotAssetRun(
             task=envelope,
             actions=actions,
-            committed_state_version=next_state.video.state_version,
+            committed_state_version=next_state.context.state_version,
             project_state=next_state,
         )
         return artifact, run

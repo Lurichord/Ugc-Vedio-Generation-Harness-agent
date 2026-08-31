@@ -1,0 +1,19 @@
+{
+  "critic_id": "narrative_critic",
+  "target_ref": "narrative:ugc_topic_571c6316@2",
+  "passed": true,
+  "issues": [
+    {
+      "issue_id": "narrative_critic:001",
+      "critic_id": "narrative_critic",
+      "scope": "narrative",
+      "target_ref": "narrative:ugc_topic_571c6316@2",
+      "severity": "warning",
+      "code": "EMPHASIS_NOT_IN_TEXT",
+      "diagnosis": "重音词未出现在正文：['不需要追求精度']",
+      "repair_options": [
+        "revise_narrative"
+      ]
+    }
+  ]
+}

@@ -109,7 +109,7 @@ def test_asset_media_is_projected_before_timeline_stage_runs() -> None:
             item
             for beat in asset_stage["beats"]
             for item in beat["artifacts"]
-            if item["kind"] == "asset"
+            if item["kind"] in {"asset", "shot"} and item.get("media_url")
         ]
         if not assets:
             continue

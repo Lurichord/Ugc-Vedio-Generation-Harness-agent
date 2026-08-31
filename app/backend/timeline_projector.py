@@ -38,19 +38,19 @@ class TimelineProjector:
             bid = beat["planned_beat_id"]
             start, end = beat["start_ms"], beat["end_ms"]
             tracks["beats"].append(self._item(
-                f"beat-{bid}", f"realized_beat:{beat['beat_id']}", "beats", bid,
+                f"beat-{bid}", f"beat:{bid}", "beats", bid,
                 start, end, beat.get("proposition") or bid, beat,
             ))
             script = scripts.get(bid, {})
             if script:
                 tracks["text"].append(self._item(
-                    f"text-{bid}", f"script_segment:{script['script_segment_id']}", "text", bid,
+                    f"text-{bid}", f"utterance:{script['script_segment_id']}", "text", bid,
                     start, end, script.get("text", "口播"), script,
                 ))
         for audio in voice.get("timed_audio", {}).get("segments", []):
             bid = audio["planned_beat_id"]
             tracks["audio"].append(self._item(
-                audio["audio_segment_id"], f"audio_segment:{audio['audio_segment_id']}", "audio", bid,
+                audio["audio_segment_id"], f"audio:{audio['script_segment_id']}", "audio", bid,
                 audio["start_ms"], audio["end_ms"], "配音", audio,
                 f"/api/projects/{project_key}/media/{audio['file']}",
             ))
@@ -62,7 +62,7 @@ class TimelineProjector:
             bid = planned_beat_id(raw_bid)
             clip_beat_ids.add(bid)
             tracks["visuals"].append(self._item(
-                clip["clip_id"], f"timeline_clip:{raw_bid}", "visuals", bid,
+                clip["clip_id"], f"clip:{clip['clip_id']}", "visuals", bid,
                 clip["timeline_start_ms"], clip["timeline_end_ms"],
                 clip.get("playback_modality", "画面"), clip,
                 f"/api/projects/{project_key}/media/{clip['playback_path']}",

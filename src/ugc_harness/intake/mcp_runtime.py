@@ -1,4 +1,4 @@
-"""Talk to ugc-intake over MCP. skill.activate stays on the host."""
+"""Talk to ugc-intake over MCP. skill.activate and brief.update stay on the host."""
 
 from __future__ import annotations
 
@@ -9,8 +9,10 @@ from typing import Any, AsyncIterator
 
 from ..agents.generic import McpToolTransport
 from ..tools.mcp import intake_stdio_server_config
+from .brief_sync import apply_brief_update
 from .models import IntakeSession
 from .tools import (
+    BRIEF_UPDATE,
     CONFIGURE_SESSION,
     INTAKE_MCP_TOOLS,
     SKILL_ACTIVATE,
@@ -82,6 +84,12 @@ class IntakeMcpRuntime:
         args = arguments or {}
         if name == SKILL_ACTIVATE:
             return activate_skill(str(args.get("name") or ""))
+        if name == BRIEF_UPDATE:
+            if self.session is None:
+                return {"ok": False, "error": "没有 session，无法更新 brief"}
+            session, result = apply_brief_update(self.session, args)
+            self.write_session(session)
+            return result
         if name not in INTAKE_MCP_TOOLS:
             return {"ok": False, "error": f"未知工具：{name}"}
         if self._channel is None:

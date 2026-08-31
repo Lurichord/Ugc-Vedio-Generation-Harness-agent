@@ -3,7 +3,7 @@ name: start-project
 description: 用户明确要开做。确认 working_brief 够制作使用后派 harness.start_project。
 ---
 
-看 memory 里的 `working_brief` JSON，不要只看对白。对白里刚说过但 JSON 仍是 null，视为还没写上，禁止开工。
+看 memory 里的 `working_brief` JSON，不要只看对白。用户已经答应但 JSON 仍是 null，本拍先 `brief.update`，禁止开工。
 
 ## 什么时候可以调
 

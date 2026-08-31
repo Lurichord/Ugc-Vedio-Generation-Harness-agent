@@ -185,7 +185,7 @@ def test_voice_agent_creates_audio_alignment_and_realized_beats(
     assert (project_dir / "07_voice_plan.json").is_file()
     assert (project_dir / "voice_artifact.json").is_file()
     assert run.record.transition.to_agent == "editorial_agent"
-    assert run.record.project_state.video.editorial_status == "ready"
+    assert run.record.project_state.evaluation.stages.editorial == "ready"
     assert [item.tool for item in run.record.agent_result.actions] == [
         "voice.create_plan",
         "audio.synthesize_narration",
@@ -239,8 +239,8 @@ def test_voice_review_failure_does_not_open_editorial_agent(
 
     assert run.record.transition.outcome == "revise"
     assert run.record.transition.to_agent == "voice_agent"
-    assert run.record.project_state.video.voice_status == "needs_revision"
-    assert run.record.project_state.video.editorial_status == "blocked"
+    assert run.record.project_state.evaluation.stages.voice == "needs_revision"
+    assert run.record.project_state.evaluation.stages.editorial == "blocked"
 
 
 def test_parse_volcengine_native_word_timestamps() -> None:

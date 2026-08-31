@@ -6,8 +6,8 @@ from typing import Any
 from uuid import uuid4
 
 from ugc_harness.intake.agent import IntentAgent
-from ugc_harness.intake.brief_sync import ChainedBriefSync, HeuristicBriefSync, LlmBriefSync
-from ugc_harness.intake.host import IntentHost, new_session
+from ugc_harness.intake.brief_sync import HeuristicBriefSync
+from ugc_harness.intake.host import IntentHost, append_message, new_session, record_user_text
 from ugc_harness.intake.mcp_runtime import IntakeMcpRuntime
 from ugc_harness.intake.models import Inbound, IntakeSession
 from ugc_harness.intake.view import refresh_session_from_disk
@@ -15,7 +15,7 @@ from ugc_harness.shared.llm import StructuredLLM
 from ugc_harness.shared.settings import LLMSettings
 
 from .beat_projector import BeatProjector, stage_refs
-from .intake_store import IntakeStore
+from .intake_store import IntakeStore, ProjectSessionIndex
 from .intake_workspace import IntakeWorkspaceStore, set_gate
 from .jobs import JobManager
 from .production_view import (
@@ -68,14 +68,21 @@ class IntakeService:
         self.production = production
         self.jobs = jobs
         self.repository = repository
+        self.project_sessions = ProjectSessionIndex(
+            store.root / "project_sessions.json"
+        )
         self._agent = agent
         self._llm: StructuredLLM | None = None
 
     def create_session(self) -> CreateIntakeSessionResponse:
+        session = self._spawn_session()
+        return self.session_payload(session.session_id)
+
+    def _spawn_session(self) -> IntakeSession:
         session = new_session()
         self.store.save(session)
         self.workspace.save(IntakeWorkspaceState(session_id=session.session_id))
-        return self.session_payload(session.session_id)
+        return session
 
     def get_session(self, session_id: str) -> IntakeSession:
         return self.store.load(session_id)
@@ -99,9 +106,13 @@ class IntakeService:
             return self._turn_payload(session, state, state.notices[-1].content, job_id=gate.job_id)
         if gate and gate.kind == "review" and _wants_continue(text):
             return self.continue_production(session_id, user_text=text)
+        session = record_user_text(session, text)
+        self.store.save(session)
         result = self._host(session_id).respond(session, Inbound(text=text))
         self.store.save(result.session)
         state = self._sync_workspace(result.session)
+        if state.project_key:
+            self.project_sessions.bind(state.project_key, result.session.session_id)
         reply = result.message
         if state.pending_gate and state.pending_gate.kind == "review":
             if not any(item.content == state.pending_gate.question for item in state.notices):
@@ -162,7 +173,7 @@ class IntakeService:
                 state.project_key,
                 TaskEvent(
                     event_id=f"event_{uuid4().hex}",
-                    project_id=project_state.video.project_id,
+                    project_id=project_state.context.project_id,
                     stage=stage,
                     event_type="user_approved",
                     beat_ids=beat_ids,
@@ -182,25 +193,128 @@ class IntakeService:
         return self._start_stage_job(session, state, directory, nxt)
 
     def attach_project(self, session_id: str, project_key: str) -> CreateIntakeSessionResponse:
-        session = self.store.load(session_id)
         directory = self.projects.project_dir(project_key)
+        current = self.store.load(session_id)
+        current_state = self.workspace.load(session_id)
+        if self._session_project_key(current, current_state) == project_key:
+            self.project_sessions.bind(project_key, current.session_id)
+            return self.session_payload(current.session_id)
+        existing = self._session_id_for_project(project_key)
+        if existing:
+            return self.session_payload(existing)
+        session = (
+            current
+            if self._is_fresh_chat(current, current_state)
+            else self._spawn_session()
+        )
+        return self._bind_session_to_project(session, project_key, directory)
+
+    def _bind_session_to_project(
+        self,
+        session: IntakeSession,
+        project_key: str,
+        directory: Path,
+    ) -> CreateIntakeSessionResponse:
         project_state = self.projects.read_state(directory)
         session = session.model_copy(
             update={
                 "project_dir": str(directory),
-                "project_id": project_state.video.project_id,
+                "project_id": project_state.context.project_id,
             }
         )
         session = refresh_session_from_disk(session)
+        note = (
+            f"已打开「{self._project_label(project_key)}」。"
+            "右侧是这个项目已经做完的内容，可以直接说要改哪一段。"
+        )
+        if not any(item.content == note for item in session.messages):
+            session = append_message(session, "agent", note)
+            session = session.model_copy(update={"last_message": note})
         self.store.save(session)
-        state = self.workspace.load(session_id)
-        state = state.model_copy(update={"project_key": project_key})
+        state = self.workspace.load(session.session_id)
+        state = state.model_copy(
+            update={"project_key": project_key, "session_id": session.session_id}
+        )
         state = self._apply_gate_from_project(state, directory)
         self.workspace.save(state)
         if state.pending_gate and state.pending_gate.kind == "review":
-            if not any(item.content == state.pending_gate.question for item in state.notices):
+            if not any(
+                item.content == state.pending_gate.question for item in state.notices
+            ):
                 state = self.workspace.add_notice(state, state.pending_gate.question)
+        self.project_sessions.bind(project_key, session.session_id)
         return CreateIntakeSessionResponse(**self._payload(session, state))
+
+    def _session_project_key(
+        self,
+        session: IntakeSession,
+        state: IntakeWorkspaceState,
+    ) -> str | None:
+        if state.project_key:
+            return state.project_key
+        if session.project_dir:
+            return Path(session.project_dir).name
+        return None
+
+    def _is_fresh_chat(
+        self,
+        session: IntakeSession,
+        state: IntakeWorkspaceState,
+    ) -> bool:
+        if self._session_project_key(session, state):
+            return False
+        return all(item.role != "user" for item in session.messages)
+
+    def _session_id_for_project(self, project_key: str) -> str | None:
+        bound = self.project_sessions.session_id(project_key)
+        if bound and self.store.path_for(bound).is_file():
+            return bound
+        if bound:
+            self.project_sessions.unbind(project_key)
+        found: list[tuple[str, str]] = []
+        if self.workspace.root.is_dir():
+            for path in self.workspace.root.glob("*.workspace.json"):
+                try:
+                    state = IntakeWorkspaceState.model_validate_json(
+                        path.read_text(encoding="utf-8")
+                    )
+                except (OSError, ValueError):
+                    continue
+                if state.project_key != project_key:
+                    continue
+                try:
+                    session = self.store.load(state.session_id)
+                except FileNotFoundError:
+                    continue
+                found.append((session.updated_at, session.session_id))
+        if self.store.root.is_dir():
+            for path in self.store.root.glob("intake_*.json"):
+                try:
+                    session = IntakeSession.model_validate_json(
+                        path.read_text(encoding="utf-8")
+                    )
+                except (OSError, ValueError):
+                    continue
+                if not session.project_dir:
+                    continue
+                if Path(session.project_dir).name != project_key:
+                    continue
+                found.append((session.updated_at, session.session_id))
+        if not found:
+            return None
+        found.sort()
+        session_id = found[-1][1]
+        self.project_sessions.bind(project_key, session_id)
+        return session_id
+
+    def _project_label(self, project_key: str) -> str:
+        try:
+            directory = self.projects.project_dir(project_key)
+            manifest = self.projects.read_json(directory, "manifest.json")
+        except (FileNotFoundError, OSError, ValueError):
+            return project_key
+        name = manifest.get("project_name")
+        return str(name) if name else project_key
 
     def _start_stage_job(
         self,
@@ -209,7 +323,7 @@ class IntakeService:
         directory: Path,
         stage: StageName,
     ) -> IntakeMessageResponse:
-        project_id = self.projects.read_state(directory).video.project_id
+        project_id = self.projects.read_state(directory).context.project_id
         label = STAGE_LABELS[stage]
         started = self.workspace.add_notice(state, f"开始做{label}，完成后会停下来问你。")
         job = self.jobs.submit(
@@ -449,14 +563,13 @@ class IntakeService:
         )
 
     def _host(self, session_id: str) -> IntentHost:
-        llm = self._get_llm()
         return IntentHost(
             self._get_agent(),
             IntakeMcpRuntime(
                 self.store.path_for(session_id),
                 output_root=self.runner.output_root,
             ),
-            brief_sync=ChainedBriefSync(HeuristicBriefSync(), LlmBriefSync(llm)),
+            brief_sync=HeuristicBriefSync(),
         )
 
     def _get_agent(self) -> IntentAgent:
@@ -481,7 +594,7 @@ def _wants_continue(text: str) -> bool:
 
 def _statuses(project_state) -> dict[StageName, str]:
     return {
-        stage: str(getattr(project_state.video, f"{stage}_status"))
+        stage: str(getattr(project_state.evaluation.stages, stage))
         for stage in STAGES
     }
 

@@ -1,0 +1,18 @@
+你好，我是意图解析层。先告诉我你想做什么视频、给谁看、大概多长。
+[waiting_user] topic=无
+输入内容回车即可；exit / quit / 退出 结束。
+你：[fields] （尚未填写）
+意图：请问你这支视频具体是讲什么主题的呢？
+[waiting_user] topic=无
+你：[fields] topic=手冲咖啡  mode=explainer  duration=90s
+意图：这支手冲咖啡的视频，你希望观众看完之后能做成哪一件具体的事呢？
+[waiting_user] topic=手冲咖啡
+你：harness：项目目录 D:\桌面\ugc-vedio-generation-agent\test\intent_cli_audience\01_coffee\project\手冲咖啡
+[fields] topic=手冲咖啡  mode=explainer  duration=90s  goal=让新手分清粉水比
+意图：已经按当前任务书做好了脚本和口播文案，请问可以继续推进后续的制作阶段吗？
+[waiting_user] topic=手冲咖啡
+你：harness：项目目录 D:\桌面\ugc-vedio-generation-agent\test\intent_cli_audience\01_coffee\project\手冲咖啡
+[fields] topic=手冲咖啡  mode=explainer  duration=90s  goal=让新手分清粉水比
+意图：已经按要求把讲粉水比定义的第三段修改完成，压缩成两句保留了粉水比定义的核心内容，可以继续推进后续制作了。
+[waiting_user] topic=手冲咖啡
+你：

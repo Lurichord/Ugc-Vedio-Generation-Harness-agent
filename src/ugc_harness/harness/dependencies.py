@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from .models import (
+    DependencyEdge,
     DependencyGraphState,
     DependencyNode,
     DependencySnapshot,
@@ -35,6 +36,7 @@ class NodeCommit:
     kind: str
     value: BaseModel | dict[str, Any] | list[Any] | str
     depends_on: tuple[str, ...] = ()
+    edges: tuple[DependencyEdge, ...] = ()
 
 
 class DependencyGraph:
@@ -53,7 +55,6 @@ class DependencyGraph:
                 DependencySnapshot(
                     ref=ref,
                     version=node.version,
-                    content_hash=node.content_hash,
                 )
             )
         return result
@@ -65,7 +66,6 @@ class DependencyGraph:
                 node is None
                 or node.status != "current"
                 or node.version != snapshot.version
-                or node.content_hash != snapshot.content_hash
             ):
                 raise ValueError(
                     f"STALE_RESULT: dependency changed: {snapshot.ref}"
@@ -108,27 +108,22 @@ class DependencyGraph:
             raise ValueError("dependency commit refs must be unique")
         available = set(self.state.nodes) | commit_refs
         for item in commits:
-            missing = set(item.depends_on) - available
+            parents = set(item.depends_on) | {edge.to for edge in item.edges}
+            missing = parents - available
             if missing:
                 raise ValueError(
                     f"dependency node {item.ref} has missing inputs: {sorted(missing)}"
                 )
 
         changed: set[str] = set()
-        refreshed: set[str] = set()
         for item in commits:
-            content_hash = semantic_hash(item.value)
             previous = self.state.nodes.get(item.ref)
-            content_changed = previous is None or previous.content_hash != content_hash
-            if previous and previous.locked and content_changed:
+            if previous and previous.locked:
                 raise ValueError(f"dependency node is locked: {item.ref}")
-            if content_changed:
-                changed.add(item.ref)
-            else:
-                refreshed.add(item.ref)
+            changed.add(item.ref)
 
             old_parents = set(previous.depends_on) if previous else set()
-            new_parents = set(item.depends_on)
+            new_parents = set(item.depends_on) | {edge.to for edge in item.edges}
             for parent_ref in old_parents - new_parents:
                 parent = self.state.nodes.get(parent_ref)
                 if parent:
@@ -141,16 +136,16 @@ class DependencyGraph:
                 for ref in item.depends_on
                 if ref in self.state.nodes
             ]
-            version = 1 if previous is None else previous.version + int(content_changed)
+            version = 1 if previous is None else previous.version + 1
             node = DependencyNode(
                 ref=item.ref,
                 kind=item.kind,
                 version=version,
-                content_hash=content_hash,
+                content_hash=semantic_hash(item.value),
                 depends_on=sorted(new_parents),
                 dependents=sorted(previous.dependents) if previous else [],
+                edges=list(item.edges),
                 dependency_versions={dep.ref: dep.version for dep in dependencies},
-                dependency_hashes={dep.ref: dep.content_hash for dep in dependencies},
                 status="current",
                 produced_by=produced_by,
                 last_task_id=task_id,
@@ -168,9 +163,6 @@ class DependencyGraph:
             node.dependency_versions = {
                 ref: self.state.nodes[ref].version for ref in node.depends_on
             }
-            node.dependency_hashes = {
-                ref: self.state.nodes[ref].content_hash for ref in node.depends_on
-            }
             for parent_ref in node.depends_on:
                 parent = self.state.nodes[parent_ref]
                 parent.dependents = sorted(set(parent.dependents) | {node.ref})
@@ -186,7 +178,6 @@ class DependencyGraph:
             graph_version_after=self.state.graph_version,
             committed=True,
             changed_refs=sorted(changed),
-            refreshed_refs=sorted(refreshed),
             invalidated_refs=sorted(invalidated),
             reason="critic approved task outputs and dependency graph was committed",
         )
@@ -260,8 +251,6 @@ class DependencyGraph:
                 raise ValueError(f"duplicate dependents on node: {node.ref}")
             if set(node.dependency_versions) != set(node.depends_on):
                 raise ValueError(f"dependency version snapshot mismatch: {node.ref}")
-            if set(node.dependency_hashes) != set(node.depends_on):
-                raise ValueError(f"dependency hash snapshot mismatch: {node.ref}")
             for parent_ref in node.depends_on:
                 parent = self.state.nodes.get(parent_ref)
                 if parent is None or node.ref not in parent.dependents:
@@ -273,10 +262,7 @@ class DependencyGraph:
                         raise ValueError(
                             f"current node depends on stale node: {node.ref}"
                         )
-                    if (
-                        node.dependency_versions[parent_ref] != parent.version
-                        or node.dependency_hashes[parent_ref] != parent.content_hash
-                    ):
+                    if node.dependency_versions[parent_ref] != parent.version:
                         raise ValueError(
                             f"current dependency snapshot is stale: {node.ref}"
                         )

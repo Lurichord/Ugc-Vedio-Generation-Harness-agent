@@ -1,0 +1,70 @@
+{
+  "task_id": "task_repair_narrative_agent_7ace1c80d1_s1_g1",
+  "agent": "narrative_agent",
+  "goal": "局部重建失效的 narrative 节点，并保持修复范围之外的内容不变",
+  "scope": {
+    "project_id": "ugc_topic_571c6316",
+    "shot_ids": [
+      "shot_pb03"
+    ],
+    "section_ids": [],
+    "beat_ids": [
+      "pb03"
+    ],
+    "script_segment_ids": [
+      "ss03"
+    ],
+    "visual_request_ids": [],
+    "asset_ids": [],
+    "target_refs": [
+      "beat:pb03",
+      "shot:shot_pb03",
+      "utterance:ss03"
+    ]
+  },
+  "based_on_state_version": 1,
+  "format_id": "explainer",
+  "agent_instructions": "你正在运行 explainer workflow。目标是产出完整的世界状态、Section 骨架、Planned Beats、外部口播 Script 和 ProductionShot。建立 world_state 时先立薄身份册：跨镜要认出来的人/物/地写成 kind=person/place/product，概念和举例品牌不要进册。请根据消息历史自主规划、选择并重复调用任意允许的 MCP tool。工具错误会直接返回给你，请自行判断修改哪里。确认候选产物完整后调用narrative.submit_candidate；不要伪造工具结果。",
+  "allowed_tools": [
+    "narrative.explainer.plan_sections",
+    "narrative.explainer.expand_beats",
+    "narrative.explainer.write_script",
+    "narrative.explainer.compile_shots",
+    "narrative.submit_candidate"
+  ],
+  "required_outputs": [
+    "planning",
+    "script",
+    "shots"
+  ],
+  "forbidden_actions": [
+    "modify_voice",
+    "modify_visuals",
+    "modify_assets",
+    "modify_timeline",
+    "render_video",
+    "modify_outside_repair_scope",
+    "consume_stale_dependency",
+    "overwrite_locked_node"
+  ],
+  "acceptance_criteria": [
+    "所有 target_refs 重新变为 current",
+    "scope 外节点的语义 hash 不变",
+    "输出通过对应格式的 Narrative Critic"
+  ],
+  "budget": {
+    "max_steps": 8,
+    "max_retries": 1,
+    "max_cost_usd": null,
+    "deadline_seconds": 300,
+    "fallback_policy": "use_best_available"
+  },
+  "input_hash": "74cb9bf654f3a1144e6e959570215fc248dc22d33a85a0ab1fb19b891145b0a2",
+  "dependency_snapshot": [
+    {
+      "ref": "cast:host_main",
+      "version": 1,
+      "content_hash": ""
+    }
+  ]
+}

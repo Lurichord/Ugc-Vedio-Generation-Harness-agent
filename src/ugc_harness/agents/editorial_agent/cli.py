@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> None:
         critic_problems: list[str] = []
         artifact_path = project_dir / "editorial_artifact.json"
         evaluation_path = project_dir / "harness" / "editorial_evaluation.json"
-        if state.video.editorial_status == "needs_revision" and artifact_path.is_file():
+        if state.evaluation.stages.editorial == "needs_revision" and artifact_path.is_file():
             current_artifact = EditorialArtifact.model_validate_json(
                 artifact_path.read_text(encoding="utf-8")
             )

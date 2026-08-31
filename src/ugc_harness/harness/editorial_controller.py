@@ -37,7 +37,7 @@ from .models import (
 )
 from .transitions import transition_after_review
 from .dependencies import DependencyGraph
-from .dependency_builders import editorial_commits
+from .dependency_builders import editorial_commits, refs_with_prefix
 from .trajectory import record_task, task_kind_for
 from .repair import repair_input_hash, select_repair_commits
 
@@ -162,18 +162,22 @@ class EditorialHarnessController:
         state: ProjectState,
     ) -> TaskEnvelope:
         graph = DependencyGraph(state.dependency_graph)
-        dependency_refs = ["profile:video"] + [
-            f"realized_beat:{beat.beat_id}" for beat in voice.realized_beats
-        ]
+        dependency_refs = refs_with_prefix(
+            state.dependency_graph.nodes,
+            "beat:",
+            "scene:",
+            "step:",
+            "audio:",
+        )
         return TaskEnvelope(
             task_id=(
                 f"task_editorial_{narrative.brief.project_id}_v"
-                f"{state.video.state_version}"
+                f"{state.context.state_version}"
             ),
             agent="editorial_agent",
             goal="生成主张映射和逐 Beat 的 A-roll/B-roll 视觉需求",
             scope=TaskScope(project_id=narrative.brief.project_id),
-            based_on_state_version=state.video.state_version,
+            based_on_state_version=state.context.state_version,
             agent_instructions=load_instructions("editorial"),
             allowed_tools=[PLAN_TOOL, SUBMIT_TOOL],
             required_outputs=["editorial_plan"],
@@ -211,19 +215,19 @@ class EditorialHarnessController:
         _attempt: int = 1,
     ) -> EditorialHarnessRun:
         project_id = narrative.brief.project_id
-        if voice.project_id != project_id or state.video.project_id != project_id:
+        if voice.project_id != project_id or state.context.project_id != project_id:
             raise ValueError("editorial inputs have different project_id values")
-        if state.video.voice_status != "passed":
+        if state.evaluation.stages.voice != "passed":
             raise ValueError("editorial_agent requires an approved voice artifact")
         is_repair = bool(task and task.scope.target_refs)
-        if state.video.editorial_status not in {
+        if state.evaluation.stages.editorial not in {
             "ready",
             "needs_revision",
             "stale",
-        } and not (is_repair and state.video.editorial_status == "passed"):
+        } and not (is_repair and state.evaluation.stages.editorial == "passed"):
             raise ValueError("editorial_agent is not ready in project state")
         envelope = task or self.create_task(narrative, voice, state)
-        if envelope.based_on_state_version != state.video.state_version:
+        if envelope.based_on_state_version != state.context.state_version:
             raise ValueError("STALE_RESULT: editorial task uses an obsolete state version")
         expected_input_hash = (
             repair_input_hash(
@@ -299,7 +303,7 @@ class EditorialHarnessController:
             editorial_plan=plan,
             quality=quality,
         )
-        committed_version = state.video.state_version + 1
+        committed_version = state.context.state_version + 1
         transition = (
             TransitionRecord(
                 transition_id=(
@@ -326,11 +330,11 @@ class EditorialHarnessController:
             )
         )
         next_state = state.model_copy(deep=True)
-        next_state.video.state_version = committed_version
-        next_state.video.editorial_status = (
+        next_state.context.state_version = committed_version
+        next_state.evaluation.stages.editorial = (
             "passed" if evaluation.passed else "needs_revision"
         )
-        next_state.video.asset_status = "ready" if evaluation.passed else "blocked"
+        next_state.evaluation.stages.asset = "ready" if evaluation.passed else "blocked"
         next_graph = DependencyGraph(next_state.dependency_graph)
         commits = editorial_commits(artifact)
         commits = select_repair_commits(next_graph, commits, envelope)
@@ -360,10 +364,10 @@ class EditorialHarnessController:
             transition=transition,
             graph_update=graph_update,
         )
-        next_state.runtime_context.available_tools = sorted(
-            set(next_state.runtime_context.available_tools) | self.agent.tools.names
+        next_state.context.available_tools = sorted(
+            set(next_state.context.available_tools) | self.agent.tools.names
         )
-        models = next_state.runtime_context.available_models.setdefault("llm", [])
+        models = next_state.context.available_models.setdefault("llm", [])
         if self.model_name not in models:
             models.append(self.model_name)
         completed = EditorialHarnessRun(
@@ -406,7 +410,7 @@ class EditorialHarnessController:
     ) -> None:
         if result.task_id != task.task_id or result.input_hash != task.input_hash:
             raise ValueError("editorial agent result does not match task")
-        if result.state_version_used != state.video.state_version:
+        if result.state_version_used != state.context.state_version:
             raise ValueError("STALE_RESULT: editorial agent used an obsolete state")
         if set(result.state_patch.set) - {"video.editorial_status"}:
             raise ValueError("editorial agent proposed forbidden state paths")

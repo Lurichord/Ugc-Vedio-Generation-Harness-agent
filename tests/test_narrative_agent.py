@@ -31,11 +31,11 @@ def test_controller_runs_constrained_narrative_agent() -> None:
     )
     assert run.record.evaluation.critic_id == "narrative_critic"
     assert artifact.planning.world_state.entities[0].name == "软件测试"
-    assert run.record.project_state.video.state_version == 1
-    assert run.record.project_state.runtime_context.available_models == {
+    assert run.record.project_state.context.state_version == 1
+    assert run.record.project_state.context.available_models == {
         "llm": ["fake-model"]
     }
-    assert run.record.project_state.video.voice_status == "ready"
+    assert run.record.project_state.evaluation.stages.voice == "ready"
     assert run.record.transition.outcome == "advance"
     assert run.record.transition.to_agent == "voice_agent"
 
@@ -56,8 +56,8 @@ def test_failed_review_keeps_control_with_narrative_agent() -> None:
     assert run.record.evaluation.passed is False
     assert run.record.transition.outcome == "revise"
     assert run.record.transition.to_agent == "narrative_agent"
-    assert run.record.project_state.video.narrative_status == "needs_revision"
-    assert run.record.project_state.video.voice_status == "blocked"
+    assert run.record.project_state.evaluation.stages.narrative == "needs_revision"
+    assert run.record.project_state.evaluation.stages.voice == "blocked"
 
 
 def test_narrative_revision_preserves_both_tasks() -> None:
@@ -82,8 +82,8 @@ def test_narrative_revision_preserves_both_tasks() -> None:
     assert [task.task_kind for task in tasks] == ["generation", "revision"]
     assert tasks[0].graph_update.committed is False
     assert tasks[1].graph_update.committed is True
-    assert revised.record.project_state.video.narrative_status == "passed"
-    assert revised.record.project_state.video.voice_status == "ready"
+    assert revised.record.project_state.evaluation.stages.narrative == "passed"
+    assert revised.record.project_state.evaluation.stages.voice == "ready"
 
 
 def test_controller_rejects_task_based_on_stale_state() -> None:
@@ -135,12 +135,13 @@ def test_writer_persists_task_result_critic_and_state(tmp_path: Path) -> None:
             encoding="utf-8"
         )
     )
-    assert state["runtime_context"]["available_tools"]
+    assert state["schema_version"] == "project-state.v3"
+    assert state["context"]["available_tools"]
     assert "world_state" not in state
-    assert (
-        state["description"]["world"]["state"]["topic_frame"]
-        == "解释测试为什么重要"
-    )
+    assert "runtime_context" not in state
+    assert "description" not in state
+    assert "state" not in state["production"]["world"]
+    assert state["production"]["world"]["claims"]
     tasks = state["trajectory"]["phases"]["narrative"]["tasks"]
     assert tasks[0]["agent_result"]["actions"]
     assert tasks[0]["transition"]["to_agent"] == "voice_agent"

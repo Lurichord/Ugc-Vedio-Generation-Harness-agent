@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Protocol
@@ -45,8 +46,11 @@ class LlmIntentModel:
         prompt = (
             "根据当前上下文决定下一步。"
             "对用户问一句时可以把 tool 设为 null，只填 message。"
+            "用户点头确认、选第几个、改口时，先 brief.update 把对白里已经定下的字段写入，再说话或开工。"
             "派制作、改某一段、查进度之前，必须先 skill.activate 对应 skill，再调 harness.* / description.*。"
-            "改某一段时先读大纲和 harness.list_graph，再 repair；不要空着手直接 harness.start_project。"
+            "改已经做出来的内容时先 skill.activate inspect-graph 或 revise-segment，"
+            "用 harness.list_graph 读图再决定 target_refs，再 repair；"
+            "不要空着手直接 harness.start_project。"
             "不要编造工具名。\n\n"
             f"可用工具：{json.dumps(catalog, ensure_ascii=False)}\n\n"
             f"{_render_messages(messages)}"
@@ -181,3 +185,15 @@ def _log_tool(
         elif "ok" in result:
             parts.append(f"ok={result['ok']}")
     print(" ".join(parts), file=sys.stderr, flush=True)
+    log_path = os.environ.get("INTAKE_TOOL_LOG")
+    if not log_path:
+        return
+    record = {"event": event, "tool": name}
+    if arguments is not None:
+        record["arguments"] = arguments
+    if result is not None:
+        record["result"] = result
+    path = Path(log_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")

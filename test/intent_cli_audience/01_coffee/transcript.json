@@ -1,0 +1,42 @@
+[
+  {
+    "role": "agent",
+    "content": "你好，我是意图解析层。先告诉我你想做什么视频、给谁看、大概多长。\n[waiting_user] topic=无\n输入内容回车即可；exit / quit / 退出 结束。\n"
+  },
+  {
+    "role": "user",
+    "content": "我想做个视频"
+  },
+  {
+    "role": "agent",
+    "content": "[fields] （尚未填写）\n意图：请问你这支视频具体是讲什么主题的呢？\n[waiting_user] topic=无\n"
+  },
+  {
+    "role": "user",
+    "content": "做一条讲手冲咖啡的抖音"
+  },
+  {
+    "role": "agent",
+    "content": "[fields] topic=手冲咖啡  mode=explainer  duration=90s\n意图：这支手冲咖啡的视频，你希望观众看完之后能做成哪一件具体的事呢？\n[waiting_user] topic=手冲咖啡\n"
+  },
+  {
+    "role": "user",
+    "content": "目标是让新手分清粉水比。"
+  },
+  {
+    "role": "agent",
+    "content": "harness：项目目录 D:\\桌面\\ugc-vedio-generation-agent\\test\\intent_cli_audience\\01_coffee\\project\\手冲咖啡\n[fields] topic=手冲咖啡  mode=explainer  duration=90s  goal=让新手分清粉水比\n意图：已经按当前任务书做好了脚本和口播文案，请问可以继续推进后续的制作阶段吗？\n[waiting_user] topic=手冲咖啡\n"
+  },
+  {
+    "role": "user",
+    "content": "第三段太长，收成两句，粉水比那句留下"
+  },
+  {
+    "role": "agent",
+    "content": "harness：项目目录 D:\\桌面\\ugc-vedio-generation-agent\\test\\intent_cli_audience\\01_coffee\\project\\手冲咖啡\n[fields] topic=手冲咖啡  mode=explainer  duration=90s  goal=让新手分清粉水比\n意图：已经按要求把讲粉水比定义的第三段修改完成，压缩成两句保留了粉水比定义的核心内容，可以继续推进后续制作了。\n[waiting_user] topic=手冲咖啡\n"
+  },
+  {
+    "role": "user",
+    "content": "退出"
+  }
+]

@@ -9,7 +9,7 @@ from ..agents.narrative_agent.models import CreativeBrief
 from ..content import AudienceSpec, ContentPolicy, TargetSpec
 from ..harness.description import VideoIntent
 from ..harness.models import ProjectState, VideoState
-from .models import BriefDraft, IntakeSession, IntentDraft, ProgressSnapshot, utc_now
+from .models import BriefDraft, IntakeSession, IntentDraft, ProgressSnapshot, TargetPatch, utc_now
 
 
 def progress_from_video(video: VideoState) -> ProgressSnapshot:
@@ -23,6 +23,21 @@ def progress_from_video(video: VideoState) -> ProgressSnapshot:
         asset=video.asset_status,
         timeline=video.timeline_status,
         render=video.render_status,
+    )
+
+
+def progress_from_state(state: ProjectState) -> ProgressSnapshot:
+    stages = state.evaluation.stages
+    return ProgressSnapshot(
+        project_id=state.context.project_id,
+        state_version=state.context.state_version,
+        narrative=stages.narrative,
+        script=stages.script,
+        voice=stages.voice,
+        editorial=stages.editorial,
+        asset=stages.asset,
+        timeline=stages.timeline,
+        render=stages.render,
     )
 
 
@@ -42,17 +57,23 @@ def load_project_state(project_dir: Path) -> ProjectState | None:
 
 
 def apply_state_to_session(session: IntakeSession, state: ProjectState) -> IntakeSession:
-    progress = progress_from_video(state.video)
+    progress = progress_from_state(state)
     updates: dict[str, object] = {
         "progress": progress,
-        "project_id": state.video.project_id or session.project_id,
+        "project_id": state.context.project_id or session.project_id,
         "updated_at": utc_now(),
     }
-    description = state.description
-    if description is not None:
-        intent = description.intent
+    if state.creative.brief is not None:
+        updates["working_brief"] = brief_draft_from_creative_brief(
+            CreativeBrief.model_validate(state.creative.brief.model_dump())
+        )
+    intent = state.creative.intent
+    if intent is not None:
         updates["working_intent"] = intent_draft_from_video_intent(intent)
-        updates["working_brief"] = _sync_brief_from_intent(session.working_brief, intent)
+        if "working_brief" not in updates:
+            updates["working_brief"] = _sync_brief_from_intent(
+                session.working_brief, intent
+            )
     return session.model_copy(update=updates)
 
 
@@ -72,7 +93,7 @@ def materialize_brief(draft: BriefDraft) -> CreativeBrief:
     communication = draft.communication
     if communication is None or not communication.goal.strip():
         raise ValueError("CreativeBrief 需要 communication.goal")
-    target = draft.target or TargetSpec()
+    target = _target_spec_from_draft(draft.target)
     audience = draft.audience or AudienceSpec()
     brief = make_brief(
         topic=topic,
@@ -116,10 +137,29 @@ def _sync_brief_from_intent(current: BriefDraft, intent: VideoIntent) -> BriefDr
     return current.model_copy(
         update={
             "topic": intent.topic,
-            "target": intent.target,
+            "target": _target_patch_from_spec(intent.target),
             "audience": intent.audience,
             "communication": intent.communication,
             "content_policy": intent.content_policy,
             "production_mode": production_mode,
         }
     )
+
+
+def _target_spec_from_draft(target: TargetPatch | None) -> TargetSpec:
+    if target is None:
+        return TargetSpec()
+    fields = {
+        key: value
+        for key, value in target.model_dump().items()
+        if value is not None
+    }
+    if not fields:
+        return TargetSpec()
+    return TargetSpec().model_copy(update=fields)
+
+
+def _target_patch_from_spec(target: TargetSpec | None) -> TargetPatch | None:
+    if target is None:
+        return None
+    return TargetPatch.model_validate(target.model_dump())

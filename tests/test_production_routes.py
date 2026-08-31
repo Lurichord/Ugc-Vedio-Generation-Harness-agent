@@ -79,8 +79,8 @@ def test_drama_and_tutorial_assets_are_ai_video_only(
         "read_voice_artifact",
         "modify_narrative",
     ]
-    assert run.project_state.video.asset_status == "passed"
-    assert run.project_state.video.timeline_status == "ready"
+    assert run.project_state.evaluation.stages.asset == "passed"
+    assert run.project_state.evaluation.stages.timeline == "ready"
     assert all(action.result == "success" for action in run.actions)
 
     timeline, timeline_run = ShotTimelineHarnessController().run(
@@ -93,5 +93,5 @@ def test_drama_and_tutorial_assets_are_ai_video_only(
         current.end_ms == following.start_ms
         for current, following in zip(timeline.clips, timeline.clips[1:])
     )
-    assert timeline_run.project_state.video.timeline_status == "passed"
-    assert timeline_run.project_state.video.render_status == "ready"
+    assert timeline_run.project_state.evaluation.stages.timeline == "passed"
+    assert timeline_run.project_state.evaluation.stages.render == "ready"

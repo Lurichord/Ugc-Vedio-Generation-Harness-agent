@@ -23,6 +23,7 @@ from ...content import (
     TutorialMaterial,
     TutorialStep,
     VideoWorldState,
+    identity_refs_for_world,
 )
 from ...profiles.models import VideoProfileDecision, VideoProfileRequest
 from ...shared.models import StrictModel
@@ -125,6 +126,17 @@ class PlanningArtifact(StrictModel):
         if [beat.order for beat in self.beats] != list(range(1, len(self.beats) + 1)):
             raise ValueError("beat order must be contiguous and start at 1")
         _validate_character_consistency(self.world_state, self.video_profile)
+        roster = identity_refs_for_world(self.world_state)
+        unknown_binds = {
+            ref
+            for beat in self.beats
+            for ref in beat.bind_refs
+            if ref not in roster
+        }
+        if unknown_binds:
+            raise ValueError(
+                f"beats bind identities missing from world_state: {sorted(unknown_binds)}"
+            )
         return self
 
 

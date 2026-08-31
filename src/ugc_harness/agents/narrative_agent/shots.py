@@ -19,6 +19,7 @@ from ...content import (
     TimingSpec,
     TutorialShotPayload,
     TutorialVisualSpec,
+    VideoWorldState,
 )
 from .models import (
     DramaPlanningArtifact,
@@ -28,6 +29,50 @@ from .models import (
     TutorialPlanningArtifact,
     TutorialScriptArtifact,
 )
+
+_KIND_TO_PREFIX = {"person": "cast", "place": "place", "product": "prop"}
+
+
+def _unique_binds(*groups: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for group in groups:
+        for ref in group:
+            if ref and ref not in seen:
+                seen.add(ref)
+                ordered.append(ref)
+    return ordered
+
+
+def _mentioned_binds(world_state: VideoWorldState, *texts: str) -> list[str]:
+    blob = "\n".join(text for text in texts if text)
+    if not blob:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    candidates: list[tuple[str, str, str]] = []
+    aroll = world_state.aroll_character
+    if aroll is not None:
+        candidates.append(
+            (aroll.character_id, aroll.character_id, f"cast:{aroll.character_id}")
+        )
+    for entity in world_state.entities:
+        prefix = _KIND_TO_PREFIX.get(entity.kind)
+        if prefix is None:
+            continue
+        candidates.append(
+            (entity.entity_id, entity.name, f"{prefix}:{entity.entity_id}")
+        )
+    for entity_id, name, ref in candidates:
+        if entity_id in blob or (len(name) >= 2 and name in blob):
+            if ref not in seen:
+                seen.add(ref)
+                found.append(ref)
+    return found
+
+
+def _prop_ref(subject_ref: str) -> str:
+    return subject_ref if subject_ref.startswith("prop:") else f"prop:{subject_ref}"
 
 
 def compile_tutorial_shots(
@@ -48,6 +93,25 @@ def compile_tutorial_shots(
         narration_text = "".join(item.text for item in narration) or None
         subject_ref = action.subject_ref or "tutorial_workpiece"
         critical_detail = action.critical_detail or action.description
+        mentioned = [
+            f"prop:{item.material_id}"
+            for item in planning.materials
+            if item.material_id in (action.subject_ref or "")
+            or (
+                item.name
+                and len(item.name) >= 2
+                and item.name
+                in "\n".join(
+                    part
+                    for part in (
+                        action.description,
+                        action.critical_detail,
+                        action.subject_ref,
+                    )
+                    if part
+                )
+            )
+        ]
         shots.append(
             ProductionShot(
                 shot_id=f"shot_{action.action_id}",
@@ -57,8 +121,19 @@ def compile_tutorial_shots(
                 source_refs=[
                     f"step:{step.step_id}",
                     f"action:{action.action_id}",
-                    *(f"explanation:{item}" for item in narration_ids),
+                    *(f"utterance:{item}" for item in narration_ids),
                 ],
+                binds=_unique_binds(
+                    [_prop_ref(action.subject_ref)] if action.subject_ref else [],
+                    mentioned,
+                    _mentioned_binds(
+                        planning.world_state,
+                        action.description,
+                        action.critical_detail or "",
+                        action.subject_ref or "",
+                        step.instruction,
+                    ),
+                ),
                 visual=TutorialVisualSpec(
                     step_id=step.step_id,
                     action_id=action.action_id,
@@ -106,12 +181,27 @@ def compile_drama_shots(
             f"{item.name}：{item.description}" for item in cast
         ) or "无出镜人物"
         dialogue = "；".join(action.dialogue_lines) or "无对白"
+        binds = _unique_binds(
+            [f"cast:{item}" for item in action.character_ids],
+            [f"place:{scene.location_id}"] if scene.location_id else [],
+            _mentioned_binds(
+                planning.world_state,
+                action.description,
+                action.objective or "",
+                action.reaction or "",
+                *action.state_changes,
+                *action.dialogue_lines,
+                scene.purpose,
+                *scene.continuity_constraints,
+            ),
+        )
         prompt = (
             f"剧情场景 {scene.scene_id}，地点 {scene.location_id}。"
             f"人物：{cast_description}。动作：{action.description}。"
             f"反应：{action.reaction or '自然承接动作'}。对白：{dialogue}。"
             f"镜头：{action.camera_instruction}。"
             f"连续性约束：{'；'.join(continuity) or '保持上一个镜头状态'}。"
+            f"身份绑定：{'；'.join(binds) or '无'}。"
             "生成画面时同步生成对白、动作声与环境声，不添加外部旁白。"
         )
         shots.append(
@@ -123,10 +213,8 @@ def compile_drama_shots(
                 source_refs=[
                     f"scene:{scene.scene_id}",
                     f"action:{action.action_id}",
-                    *(f"character:{item}" for item in action.character_ids),
                 ],
-                world_state_before_ref=f"drama_state:{action.order - 1}",
-                world_state_after_ref=f"drama_state:{action.order}",
+                binds=binds,
                 visual=DramaVisualSpec(
                     scene_id=scene.scene_id,
                     character_ids=action.character_ids,
@@ -163,6 +251,12 @@ def compile_explainer_shots(
         segments_by_beat.setdefault(segment.planned_beat_id, []).append(segment)
 
     shots: list[ProductionShot] = []
+    speaker = (
+        planning.video_profile.character_id
+        if planning.video_profile.resolved in {"a_roll", "ab_roll"}
+        and planning.video_profile.character_id
+        else None
+    )
     for index, beat in enumerate(planning.beats, start=1):
         segments = segments_by_beat.get(beat.planned_beat_id)
         if not segments:
@@ -170,6 +264,7 @@ def compile_explainer_shots(
                 f"beat {beat.planned_beat_id} has no script coverage; "
                 "shots cannot be compiled"
             )
+        narration = "".join(segment.text for segment in segments)
         shots.append(
             ProductionShot(
                 shot_id=f"shot_{beat.planned_beat_id}",
@@ -177,12 +272,22 @@ def compile_explainer_shots(
                 shot_kind="explainer",
                 purpose=beat.semantic_goal,
                 source_refs=[
-                    f"planned_beat:{beat.planned_beat_id}",
+                    f"beat:{beat.planned_beat_id}",
                     *(
-                        f"script_segment:{segment.script_segment_id}"
+                        f"utterance:{segment.script_segment_id}"
                         for segment in segments
                     ),
                 ],
+                binds=_unique_binds(
+                    list(beat.bind_refs),
+                    [f"cast:{speaker}"] if speaker else [],
+                    _mentioned_binds(
+                        planning.world_state,
+                        beat.visual_intent_hint,
+                        beat.semantic_goal,
+                        narration,
+                    ),
+                ),
                 visual=ExplainerVisualSpec(
                     visual_source=beat.visual_intent_hint,
                 ),
@@ -201,7 +306,7 @@ def compile_explainer_shots(
                     script_segment_ids=[
                         segment.script_segment_id for segment in segments
                     ],
-                    narration_text="".join(segment.text for segment in segments),
+                    narration_text=narration,
                     visual_intent=beat.visual_intent_hint,
                 ),
             )

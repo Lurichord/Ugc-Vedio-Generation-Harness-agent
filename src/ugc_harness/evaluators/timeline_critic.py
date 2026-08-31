@@ -27,7 +27,7 @@ class TimelineCritic:
                 issues.append((
                     "TIMELINE_MEDIA_MISSING",
                     f"{clip.clip_id} playback media is missing or empty.",
-                    f"timeline_clip:{clip.beat_id}",
+                    f"clip:{clip.clip_id}",
                 ))
         clips = candidate.timeline.clips
         full_coverage = bool(

@@ -68,18 +68,10 @@ def test_asset_critic_creates_and_executes_image_repair_tasks(tmp_path: Path) ->
         == ["asset.prepare_image", "asset.submit_candidate"]
         for item in history[-1:]
     )
-    assert "prepared_image:asset_vr01" in run.record.project_state.dependency_graph.nodes
-    graph = run.record.project_state.dependency_graph.nodes
-    assert graph["asset_inspection:asset_vr01"].depends_on == [
-        "asset:asset_vr01"
-    ]
-    assert set(graph["prepared_image:asset_vr01"].depends_on) == {
-        "asset:asset_vr01",
-        "asset_inspection:asset_vr01",
-    }
-    assert "prepared_image:asset_vr01" in graph[
-        "asset_inspection:asset_vr01"
-    ].dependents
+    assert not any(
+        ref.startswith(("prepared_image:", "asset_inspection:", "asset:"))
+        for ref in run.record.project_state.dependency_graph.nodes
+    )
 
 
 def test_generated_image_uses_full_frame_subject_cover(tmp_path: Path) -> None:

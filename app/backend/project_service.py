@@ -46,12 +46,12 @@ class ProjectService:
                 continue
             projects.append(
                 ProjectSummary(
-                    project_id=state.video.project_id,
+                    project_id=state.context.project_id,
                     project_name=str(manifest.get("project_name") or directory.name),
                     topic=manifest.get("topic"),
                     path_key=directory.name,
                     current_stage=self.current_stage(state, directory.name),
-                    state_version=state.video.state_version,
+                    state_version=state.context.state_version,
                     updated_at=manifest.get("updated_at"),
                 )
             )
@@ -83,7 +83,7 @@ class ProjectService:
 
     def current_stage(self, state: ProjectState, storage_key: str) -> StageName:
         statuses = {
-            stage: getattr(state.video, f"{stage}_status") for stage in STAGES
+            stage: getattr(state.evaluation.stages, stage) for stage in STAGES
         }
         approvals = {
             item.stage: item for item in self.app_data.approvals(storage_key)
@@ -105,7 +105,7 @@ class ProjectService:
 
     @staticmethod
     def core_status(state: ProjectState, stage: StageName) -> str:
-        return str(getattr(state.video, f"{stage}_status"))
+        return str(getattr(state.evaluation.stages, stage))
 
     @staticmethod
     def stage_artifact(project_dir: Path, stage: StageName) -> dict[str, Any] | None:

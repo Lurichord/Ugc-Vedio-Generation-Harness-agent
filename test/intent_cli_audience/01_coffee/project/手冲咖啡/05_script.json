@@ -1,0 +1,201 @@
+{
+  "script_type": "explainer",
+  "script_version": "v1",
+  "title_options": [
+    "手冲总冲错？问题出在粉水比！",
+    "别再用固定粉水比了！新手看这",
+    "新手手冲粉水比 直接套用就对了"
+  ],
+  "segments": [
+    {
+      "script_segment_id": "ss01",
+      "planned_beat_id": "pb01",
+      "text": "你冲的手冲，是不是要么太淡要么太苦？",
+      "delivery_hint": {
+        "speech_act": "question",
+        "emphasis_words": [
+          "太淡",
+          "太苦"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 200,
+        "energy": "high"
+      }
+    },
+    {
+      "script_segment_id": "ss02",
+      "planned_beat_id": "pb02",
+      "text": "根据咖啡入门教学资料，核心问题其实出在粉水比",
+      "delivery_hint": {
+        "speech_act": "reveal",
+        "emphasis_words": [
+          "粉水比"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 150,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss03",
+      "planned_beat_id": "pb03",
+      "text": "粉水比就是咖啡粉和冲煮用水的比例。它是影响口感的核心参数。",
+      "delivery_hint": {
+        "speech_act": "explanation",
+        "emphasis_words": [
+          "比例",
+          "核心参数"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 120,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss04",
+      "planned_beat_id": "pb04",
+      "text": "很多新手都错了，粉水比根本不是固定的1:15或1:16",
+      "delivery_hint": {
+        "speech_act": "claim",
+        "emphasis_words": [
+          "根本不是固定"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 180,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss05",
+      "planned_beat_id": "pb05",
+      "text": "这个固定比例是专业测评用的，用来统一标准突出咖啡豆风味",
+      "delivery_hint": {
+        "speech_act": "explanation",
+        "emphasis_words": [
+          "专业测评",
+          "统一标准"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 120,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss06",
+      "planned_beat_id": "pb06",
+      "text": "那我们自己日常喝，到底该用什么比例？",
+      "delivery_hint": {
+        "speech_act": "question",
+        "emphasis_words": [
+          "日常喝",
+          "什么比例"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 150,
+        "energy": "high"
+      }
+    },
+    {
+      "script_segment_id": "ss07",
+      "planned_beat_id": "pb07",
+      "text": "喜欢浓醇苦口的，直接选1:10到1:12",
+      "delivery_hint": {
+        "speech_act": "example",
+        "emphasis_words": [
+          "浓醇苦口",
+          "1:10到1:12"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 120,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss08",
+      "planned_beat_id": "pb08",
+      "text": "日常喝想要风味平衡，选1:14到1:16",
+      "delivery_hint": {
+        "speech_act": "example",
+        "emphasis_words": [
+          "风味平衡",
+          "1:14到1:16"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 120,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss09",
+      "planned_beat_id": "pb09",
+      "text": "喜欢清爽淡口不发苦，就选1:17到1:18",
+      "delivery_hint": {
+        "speech_act": "example",
+        "emphasis_words": [
+          "清爽淡口",
+          "1:17到1:18"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 120,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss10",
+      "planned_beat_id": "pb10",
+      "text": "根据专业入门教学建议，新手不需要追求专业精度，记住框架就够",
+      "delivery_hint": {
+        "speech_act": "claim",
+        "emphasis_words": [
+          "不需要追求精度"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 120,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss11",
+      "planned_beat_id": "pb11",
+      "text": "新手先固定比例，再微调研磨粗细，比乱调简单多了",
+      "delivery_hint": {
+        "speech_act": "implication",
+        "emphasis_words": [
+          "先固定比例",
+          "微调研磨"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 120,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss12",
+      "planned_beat_id": "pb12",
+      "text": "所以冲不好别怪手艺，是你粉水比用错了",
+      "delivery_hint": {
+        "speech_act": "callback",
+        "emphasis_words": [
+          "粉水比用错了"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 150,
+        "energy": "medium"
+      }
+    },
+    {
+      "script_segment_id": "ss13",
+      "planned_beat_id": "pb13",
+      "text": "记住口诀：浓10-12，平14-16，淡17-18，记得收藏！",
+      "delivery_hint": {
+        "speech_act": "payoff",
+        "emphasis_words": [
+          "口诀"
+        ],
+        "pause_before_ms": 0,
+        "pause_after_ms": 100,
+        "energy": "high"
+      }
+    }
+  ]
+}

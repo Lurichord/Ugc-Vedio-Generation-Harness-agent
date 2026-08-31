@@ -32,6 +32,16 @@ def _with_repair_context(
     )
 
 
+def _identity_roster_rules(format_hint: str) -> str:
+    """Thin identity book: only people/places/props that must stay recognizable."""
+
+    return f"""跨镜身份册（写入 world_state.entities，禁止添加 Schema 外字段）：
+- 只登记镜头上必须认成同一个的人、地点、物品：Brief 点过名、会跨至少两镜出现、或该镜主体。
+- 人 kind=person，地点 kind=place，物品 kind=product；entity_id 稳定，后续 scene / action / subject_ref 只能引用这些 id。
+- 台词里闪过的名词、路人、一次性画面、机构名、抽象概念不要进册；那些用 kind=concept / organization / event。
+- {format_hint}"""
+
+
 def drama_world_prompt(
     brief: CreativeBrief,
     current: DramaWorldArtifact | None = None,
@@ -43,8 +53,9 @@ CreativeBrief:
 {brief.model_dump_json(indent=2)}
 
 硬性要求：
+- {_identity_roster_rules("短剧登记开口角色、场次地点、会转手或反复出现的道具；群众和桌上闲杂物不进。")}
 - world_state 必须包含每个 character_id，以及剧情使用的每个地点和关键物品。
-- characters 描述可重复生成的外观、服装、人物目标和声音约束。
+- characters 描述可重复生成的外观、服装、人物目标和声音约束；每个 character_id 必须同时是 kind=person 的 entity_id。
 - 未由 Brief 给出的事实不能伪装成已验证事实。
 - 本视频没有主持人口播。video_profile 使用无主持人的 b_roll 表达；Brief 为 auto 时
   requested=auto、resolved=b_roll、selection_source=ai；显式指定时必须遵守原值。
@@ -75,10 +86,10 @@ DramaWorldArtifact:
 
 硬性要求：
 - 生成 2–12 个按 order 连续排列的 Scene。
-- 每个 scene_id 唯一，location_id 和 character_ids 必须来自 World Artifact。
+- 每个 scene_id 唯一；location_id 必须是 World 里 kind=place 的 entity_id，character_ids 必须是 kind=person 的 entity_id。
 - 场景应形成建立目标→冲突升级→人物选择→结果/回响的因果链。
 - emotional_turn 描述该场景前后真实发生的情绪变化。
-- continuity_constraints 写出进入下一场仍必须保持的服装、物品归属或环境状态。
+- continuity_constraints 写出进入下一场仍必须保持的服装、物品归属或环境状态；会传下去的物品用 World 里 kind=product 的 entity_id 点名。
 
 返回 DramaStoryArtifact，禁止添加 Schema 外字段。"""
     return _with_repair_context(prompt, current, problems)
@@ -109,11 +120,11 @@ DramaStoryArtifact:
 硬性要求：
 - 生成 4–24 个按 order 连续排列的 Action，每个场景至少一个。
 - 每个 Action 必须是一次可连续拍摄/生成的动作与反应，不能只写抽象情绪。
-- character_ids 和 scene_id 必须引用上游已存在对象。
+- character_ids 和 scene_id 必须引用上游已存在对象；出镜物品只能点 World 里已有的 product entity_id，不要临编无名道具。
 - dialogue_lines 只写该片段中真正说出口的台词；画面与台词音频将由视频模型一起生成。
 - camera_instruction 明确景别、机位和关注对象。
 - target_duration_ms 为 1000–15000，所有 Action 总时长应接近目标时长。
-- state_changes 记录物品归属、位置、人物状态等需要传递给后续片段的变化。
+- state_changes 记录物品归属、位置、人物状态等需要传递给后续片段的变化，并用册内 id 点名。
 
 返回 DramaActionPlanArtifact，禁止添加 Schema 外字段。"""
     return _with_repair_context(prompt, current, problems)
@@ -130,6 +141,7 @@ CreativeBrief:
 {brief.model_dump_json(indent=2)}
 
 硬性要求：
+- {_identity_roster_rules("教程登记成品和反复上手的材料/工具；不要为每颗螺丝建条。materials 与 kind=product 的 entity 使用同一套 id。")}
 - objective 必须描述观众最终能做出的具体成品或可验证结果。
 - 列出必要材料、数量和工具；不要把可选装饰写成必需品。
 - world_state 维护成品、材料、工具和关键状态，事实不确定时标记为 to_verify。
@@ -165,7 +177,7 @@ TutorialDefinitionArtifact:
 - 每一步至少有一个 Action；Action 必须是能连续拍摄的手部或工具操作，不能只是抽象说明。
 - visual_evidence 明确观众应看到什么才能判断该步完成。
 - common_mistakes 与 safety_constraints 只写和该操作直接相关的内容。
-- subject_ref 使用稳定的材料、工具或成品 ID；critical_detail 写必须给特写的细节。
+- subject_ref 必须是 World 身份册里 kind=product 的 entity_id（与 materials.material_id 同一套）；critical_detail 写必须给特写的细节。
 - target_duration_ms 根据真实操作决定，所有 Action 总时长应接近目标视频时长。
 - 画面以制作动作为主，讲解只能补充原因、判断标准和安全信息。
 
@@ -210,6 +222,7 @@ CreativeBrief:
   Myth→Evidence→Correction 或 Result→Reverse Engineering→Lesson。
 - 先建立本视频的 world_state：明确涉及的实体、会在视频里使用的主张、因果关系、
   待回答问题和不能越过的叙事边界。它描述视频内容世界，不描述模型或工具环境。
+- {_identity_roster_rules("讲解通常 0–1 个出镜主持人（已在 aroll_character）加 1–2 个主题产品；口播举例的品牌不要都建成 product。")}
 - 未经 CreativeBrief 直接提供、但会按事实讲述的主张，epistemic_status 必须为
   to_verify，且 evidence_required 必须为 true；观点和推断不能伪装成已知事实。
 - 生成 video_profile 决策。CreativeBrief.video_profile 不是 auto 时必须原样采用，
@@ -289,7 +302,7 @@ CreativeBrief:
 }}
 
 枚举：
-- entity.kind: person, organization, place, product, concept, event, other
+- entity.kind: person, place, product 只用于跨镜身份册；organization, concept, event, other 不进册
 - claim.epistemic_status: given_by_brief, to_verify, interpretation, hypothesis
 - arroll_character.voice_profile.gender: male, female, neutral
 - arroll_character.voice_profile.age_style: young, mature, senior
@@ -342,6 +355,9 @@ SectionPlanArtifact:
 - opening 只能用于首个 Beat；其他 Beat 明确与前一 Beat 的语义关系。
 - factual claim 必须将 evidence_need.required 设为 true，并写清待核实主张。
 - visual_intent_hint 只描述视觉功能方向，不绑定具体素材。
+- bind_refs 列出这一 Beat 对应镜头要认出来的册内身份，格式为
+  cast:/prop:/place: 加上 world_state 里对应的 person/place/product id。
+  没有跨镜主体则 []；概念和机构不要写入。
 
 返回对象必须严格符合此结构，不得添加字段：
 {{
@@ -367,7 +383,8 @@ SectionPlanArtifact:
         "claim_to_verify": null,
         "acceptable_source_types": []
       }},
-      "visual_intent_hint": "string"
+      "visual_intent_hint": "string",
+      "bind_refs": ["cast:host_main"]
     }}
   ]
 }}

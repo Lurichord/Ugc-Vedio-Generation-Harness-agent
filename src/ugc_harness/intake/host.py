@@ -16,9 +16,7 @@ from .models import (
 )
 from .view import refresh_session_from_disk
 
-OPENING_REPLY = (
-    "你好，我是意图解析层。先告诉我你想做什么视频、给谁看、大概多长。"
-)
+OPENING_REPLY = "你好，想做什么视频？"
 
 
 def new_session() -> IntakeSession:
@@ -42,6 +40,16 @@ def append_message(session: IntakeSession, role: str, content: str) -> IntakeSes
     )
 
 
+def record_user_text(session: IntakeSession, text: str) -> IntakeSession:
+    """Append the user line unless this turn already persisted it."""
+    cleaned = _require_user_text(Inbound(text=text))
+    if session.messages:
+        last = session.messages[-1]
+        if last.role == "user" and last.content == cleaned:
+            return session
+    return append_message(session, "user", cleaned)
+
+
 class IntentHost:
     def __init__(
         self,
@@ -55,7 +63,7 @@ class IntentHost:
 
     def respond(self, session: IntakeSession, inbound: Inbound) -> HostResult:
         text = _require_user_text(inbound)
-        session = append_message(session, "user", text)
+        session = record_user_text(session, text)
         session = self.brief_sync.apply(session, text)
         session = refresh_session_from_disk(session)
         yielded = self.agent.run_until_yield(session, self.runtime)

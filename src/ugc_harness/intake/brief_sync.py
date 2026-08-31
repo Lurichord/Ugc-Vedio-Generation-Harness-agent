@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-from typing import Protocol
+from typing import Any, Protocol
 
-from ..content import AudienceSpec, CommunicationSpec, TargetSpec
+from pydantic import ValidationError
+
+from ..content import AudienceSpec, CommunicationSpec
 from .models import (
-    AudiencePatch,
     BriefDraft,
     BriefPatch,
     CommunicationPatch,
@@ -48,7 +49,26 @@ def apply_brief_patch(current: BriefDraft, patch: BriefPatch) -> BriefDraft:
     return current.model_copy(update=updates)
 
 
-def _merge_target(current: TargetSpec | None, patch: TargetPatch) -> TargetSpec | None:
+def apply_brief_update(
+    session: IntakeSession,
+    arguments: dict[str, Any],
+) -> tuple[IntakeSession, dict[str, Any]]:
+    try:
+        patch = BriefPatch.model_validate(arguments)
+    except ValidationError as exc:
+        return session, {"ok": False, "error": f"brief.update 参数无效：{exc}"}
+    brief = apply_brief_patch(session.working_brief, patch)
+    if brief is not session.working_brief:
+        session = session.model_copy(
+            update={"working_brief": brief, "updated_at": utc_now()}
+        )
+    return session, {
+        "ok": True,
+        "working_brief": session.working_brief.model_dump(mode="json"),
+    }
+
+
+def _merge_target(current: TargetPatch | None, patch: TargetPatch) -> TargetPatch | None:
     fields = {
         key: value
         for key, value in patch.model_dump().items()
@@ -56,7 +76,9 @@ def _merge_target(current: TargetSpec | None, patch: TargetPatch) -> TargetSpec 
     }
     if not fields:
         return current
-    return (current or TargetSpec()).model_copy(update=fields)
+    if current is None:
+        return TargetPatch.model_validate(fields)
+    return current.model_copy(update=fields)
 
 
 def _merge_audience(

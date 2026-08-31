@@ -13,7 +13,6 @@ def _timeline_tool_model() -> CyclingToolModel:
 from ugc_harness.shared.artifacts import ArtifactWriter
 from ugc_harness.agents.timeline_agent.models import DerivedAsset
 from ugc_harness.harness.timeline_controller import TimelineHarnessController
-from ugc_harness.harness.repair import RepairScheduler
 from ugc_harness.agents.asset_agent.models import AssetCard
 from ugc_harness.agents.asset_agent.providers import ProviderResult
 from ugc_harness.agents.editorial_agent.models import ExplorationDirection
@@ -143,36 +142,10 @@ def test_timeline_uses_audio_clock_and_ai_screen_derivative(
     assert artifact.captions
     assert any(path.name == "timeline_artifact.json" for path in written)
     assert run.record.transition.to_agent == "render_agent"
-    assert run.record.project_state.video.render_status == "ready"
-    assert "artifact:timeline" in run.record.project_state.dependency_graph.nodes
-    assert run.record.project_state.trajectory.phases["timeline"].tasks
-
-    state = run.record.project_state
-    first_beat_id = voice.realized_beats[0].beat_id
-    for ref in {
-        f"timeline_clip:{first_beat_id}",
-        f"timeline_transform:{first_beat_id}",
-        "artifact:timeline",
-    }:
-        state.dependency_graph.nodes[ref].status = "stale"
-    repair_task = RepairScheduler().plan(
-        state, ["artifact:timeline"]
-    ).tasks[0]
-    repaired = TimelineHarnessController.from_provider(
-        FakeScreenAnimation(), tool_model=_timeline_tool_model()
-    ).run(
-        voice,
-        editorial,
-        assets_run.artifact,
-        tmp_path,
-        state,
-        repair_task,
-        current_artifact=artifact,
+    assert run.record.project_state.evaluation.stages.render == "ready"
+    assert not any(
+        ref.startswith("clip:")
+        for ref in run.record.project_state.dependency_graph.nodes
     )
-
-    realized_ids = {item.beat_id for item in voice.realized_beats}
-    assert set(repair_task.scope.beat_ids) & realized_ids == {first_beat_id}
-    assert repaired.record.transition.to_agent == "repair_scheduler"
-    assert repaired.record.project_state.trajectory.phases[
-        "timeline"
-    ].tasks[-1].task_kind == "repair"
+    assert "artifact:timeline" not in run.record.project_state.dependency_graph.nodes
+    assert run.record.project_state.trajectory.phases["timeline"].tasks

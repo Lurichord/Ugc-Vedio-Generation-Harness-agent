@@ -30,7 +30,7 @@ from ..agents.voice_agent.models import VoiceArtifact
 from ..evaluators.asset_critic import AssetCritic, ImageAnalyzer
 from ..tools.registry import ToolRegistry
 from .dependencies import DependencyGraph
-from .dependency_builders import asset_commits
+from .dependency_builders import asset_commits, refs_with_prefix
 from .models import (
     AgentResult,
     ArtifactRef,
@@ -161,14 +161,11 @@ class AssetHarnessController:
         voice: VoiceArtifact,
         state: ProjectState,
     ) -> TaskEnvelope:
-        visual_refs = [
-            f"visual_requirement:{item.visual_request_id}"
-            for item in editorial.editorial_plan.visual_requirements
-        ]
+        visual_refs = refs_with_prefix(state.dependency_graph.nodes, "shot:")
         graph = DependencyGraph(state.dependency_graph)
         return TaskEnvelope(
             task_id=(
-                f"task_asset_{editorial.project_id}_v{state.video.state_version}"
+                f"task_asset_{editorial.project_id}_v{state.context.state_version}"
             ),
             agent="asset_agent",
             goal="按 first-success 规则为每个 VisualRequirement 获取一份可用素材",
@@ -183,7 +180,7 @@ class AssetHarnessController:
                     for item in editorial.editorial_plan.visual_requirements
                 ],
             ),
-            based_on_state_version=state.video.state_version,
+            based_on_state_version=state.context.state_version,
             agent_instructions=load_instructions("asset"),
             allowed_tools=[ACQUIRE_TOOL, SUBMIT_TOOL],
             forbidden_actions=[
@@ -249,7 +246,7 @@ class AssetHarnessController:
             }
             task.task_id = (
                 f"task_asset_revision_{editorial.project_id}_"
-                f"v{state.video.state_version}"
+                f"v{state.context.state_version}"
             )
             task.goal = "Regenerate only visual requirements with non-repairable failures."
             task.scope.visual_request_ids = sorted(visual_ids)
@@ -268,17 +265,17 @@ class AssetHarnessController:
         current_artifact: AssetArtifact | None = None,
     ) -> AssetHarnessRun:
         project_id = editorial.project_id
-        if voice.project_id != project_id or state.video.project_id != project_id:
+        if voice.project_id != project_id or state.context.project_id != project_id:
             raise ValueError("asset inputs have different project_id values")
-        if state.video.editorial_status != "passed":
+        if state.evaluation.stages.editorial != "passed":
             raise ValueError("asset_agent requires an approved editorial artifact")
         is_repair = bool(task and task.scope.target_refs)
-        if state.video.asset_status not in {"ready", "needs_revision", "stale"} and not (
-            is_repair and state.video.asset_status == "passed"
+        if state.evaluation.stages.asset not in {"ready", "needs_revision", "stale"} and not (
+            is_repair and state.evaluation.stages.asset == "passed"
         ):
             raise ValueError("asset_agent is not ready in project state")
         envelope = task or self.create_task(editorial, voice, state)
-        if envelope.based_on_state_version != state.video.state_version:
+        if envelope.based_on_state_version != state.context.state_version:
             raise ValueError("STALE_RESULT: asset task uses an obsolete state version")
         expected_hash = (
             repair_input_hash(envelope.dependency_snapshot, envelope.scope.target_refs)
@@ -326,7 +323,7 @@ class AssetHarnessController:
             prepared_images=candidate.prepared_images,
             quality=quality,
         )
-        committed_version = state.video.state_version + 1
+        committed_version = state.context.state_version + 1
         transition = transition_after_review(
             current_agent="asset_agent",
             evaluation=evaluation,
@@ -336,11 +333,11 @@ class AssetHarnessController:
             ),
         )
         next_state = state.model_copy(deep=True)
-        next_state.video.state_version = committed_version
-        next_state.video.asset_status = (
+        next_state.context.state_version = committed_version
+        next_state.evaluation.stages.asset = (
             "passed" if evaluation.passed else "needs_revision"
         )
-        next_state.video.timeline_status = (
+        next_state.evaluation.stages.timeline = (
             "ready" if evaluation.passed else "blocked"
         )
         next_graph = DependencyGraph(next_state.dependency_graph)
@@ -376,8 +373,8 @@ class AssetHarnessController:
             transition=transition,
             graph_update=graph_update,
         )
-        next_state.runtime_context.available_tools = sorted(
-            set(next_state.runtime_context.available_tools) | self.agent.tools.names
+        next_state.context.available_tools = sorted(
+            set(next_state.context.available_tools) | self.agent.tools.names
         )
         completed = AssetHarnessRun(
             artifact=artifact,
@@ -415,14 +412,11 @@ class AssetHarnessController:
         state: ProjectState,
         asset_ids: list[str],
     ) -> TaskEnvelope:
-        visual_refs = [
-            f"visual_requirement:{item.visual_request_id}"
-            for item in editorial.editorial_plan.visual_requirements
-        ]
+        visual_refs = refs_with_prefix(state.dependency_graph.nodes, "shot:")
         return TaskEnvelope(
             task_id=(
                 f"task_asset_image_repair_{editorial.project_id}_"
-                f"v{state.video.state_version}"
+                f"v{state.context.state_version}"
             ),
             agent="asset_agent",
             goal="Prepare only the rejected images for portrait video rendering.",
@@ -430,7 +424,7 @@ class AssetHarnessController:
                 project_id=editorial.project_id,
                 asset_ids=asset_ids,
             ),
-            based_on_state_version=state.video.state_version,
+            based_on_state_version=state.context.state_version,
             agent_instructions=load_instructions("asset"),
             allowed_tools=[PREPARE_TOOL, SUBMIT_TOOL],
             forbidden_actions=[
@@ -486,7 +480,7 @@ class AssetHarnessController:
     ) -> None:
         if result.task_id != task.task_id or result.input_hash != task.input_hash:
             raise ValueError("asset agent result does not match task")
-        if result.state_version_used != state.video.state_version:
+        if result.state_version_used != state.context.state_version:
             raise ValueError("STALE_RESULT: asset agent used an obsolete state")
         if set(result.state_patch.set) - {"video.asset_status"}:
             raise ValueError("asset agent proposed forbidden state paths")

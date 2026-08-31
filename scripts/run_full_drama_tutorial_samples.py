@@ -35,15 +35,15 @@ def prepare(format_id: str, source: Path) -> tuple[Path, NarrativeArtifact, Proj
             "project_name": f"端午节_{format_id}_完整AI视频",
         })
     })
-    state.video.project_id = project_id
-    state.video.state_version = 1
-    state.video.narrative_status = "passed"
-    state.video.script_status = "not_required" if format_id == "drama" else "passed"
-    state.video.voice_status = "not_required"
-    state.video.editorial_status = "not_required"
-    state.video.asset_status = "ready"
-    state.video.timeline_status = "pending"
-    state.video.render_status = "pending"
+    state.context.project_id = project_id
+    state.context.state_version = 1
+    state.evaluation.stages.narrative = "passed"
+    state.evaluation.stages.script = "not_required" if format_id == "drama" else "passed"
+    state.evaluation.stages.voice = "not_required"
+    state.evaluation.stages.editorial = "not_required"
+    state.evaluation.stages.asset = "ready"
+    state.evaluation.stages.timeline = "pending"
+    state.evaluation.stages.render = "pending"
     state.dependency_graph.nodes = {}
     state.dependency_graph.graph_version = 0
     state.trajectory.phases = {}

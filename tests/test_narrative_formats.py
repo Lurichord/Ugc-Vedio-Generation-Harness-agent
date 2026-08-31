@@ -61,6 +61,7 @@ def test_pack_materializes_the_agent_contract_into_task_envelope() -> None:
     assert task.allowed_tools == list(EXPLAINER_PACK.capability_tools())
     assert task.required_outputs == ["planning", "script", "shots"]
     assert task.agent_instructions
+    assert "person/place/product" in task.agent_instructions
 
 
 @pytest.mark.parametrize(
@@ -100,6 +101,7 @@ def test_future_pack_materializes_a_complete_task_contract(
         for name in task.allowed_tools
     )
     assert task.agent_instructions
+    assert "world_state.entities" in task.agent_instructions
 
 
 def test_drama_pack_rejects_presenter_led_video_profiles() -> None:

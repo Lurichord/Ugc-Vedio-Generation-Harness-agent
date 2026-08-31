@@ -58,7 +58,7 @@ class ReviewService:
             stage=stage,
             approved_refs=approved_refs,
             beat_ids=sorted(set(beat_ids)),
-            state_version=state.video.state_version,
+            state_version=state.context.state_version,
         )
         self.repository.save_approval(project_id, record)
         return record
@@ -66,7 +66,7 @@ class ReviewService:
     def add_feedback(
         self, project_id: str, state: ProjectState, request: FeedbackRequest
     ) -> FeedbackRecord:
-        if request.expected_state_version != state.video.state_version:
+        if request.expected_state_version != state.context.state_version:
             raise ValueError("STALE_RESULT: project state changed; refresh and retry")
         node = state.dependency_graph.nodes.get(request.target_ref)
         if node is None:

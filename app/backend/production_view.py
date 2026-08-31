@@ -18,11 +18,11 @@ STAGE_LABELS: dict[StageName, str] = {
 }
 
 _PREFERRED_KINDS: dict[StageName, tuple[str, ...]] = {
-    "narrative": ("script_segment", "planned_beat", "shot"),
-    "voice": ("audio_segment", "realized_beat", "voice_segment"),
-    "editorial": ("visual_requirement", "claim"),
-    "asset": ("asset", "shot_video", "visual_resolution"),
-    "timeline": ("timeline_clip", "caption"),
+    "narrative": ("utterance", "beat", "shot"),
+    "voice": ("audio",),
+    "editorial": ("shot", "beat"),
+    "asset": ("shot", "shot_video"),
+    "timeline": ("clip",),
     "render": ("rendered_media",),
 }
 
@@ -61,7 +61,7 @@ class ProductionView:
             )
         return ProductionSnapshot(
             project_key=project_key,
-            project_id=state.video.project_id,
+            project_id=state.context.project_id,
             current_stage=self.projects.current_stage(state, project_key),
             stages=stages,
         )

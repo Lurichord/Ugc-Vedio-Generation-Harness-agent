@@ -7,7 +7,7 @@
         <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=20;fontColor=#172033;fontStyle=1;" value="感知层工作流：用户驱动外循环 · 工具驱动内循环 · 只通过意图 MCP 启用 Harness&lt;br&gt;&lt;font color=&quot;#5E687A&quot; style=&quot;font-size:13px;&quot;&gt;对应代码：IntentHost.respond → IntentAgent.run_until_yield（最多 8 拍）→ ugc-intake MCP。感知层不组 TaskEnvelope，也不直接调用 GenericAgent。&lt;/font&gt;" vertex="1">
           <mxGeometry height="56" width="2400" x="40" y="16" as="geometry" />
         </mxCell>
-        <mxCell id="legend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=14;fillColor=#F7F8FA;strokeColor=#DDE2EA;fontSize=13;fontColor=#172033;" value="&lt;b&gt;图例&lt;/b&gt;　深蓝＝用户　玫红＝感知层　橙＝意图 MCP　蓝＝Harness / GenericAgent 指令　绿＝对用户出口　灰虚线＝只读或未接线　底部两框＝全部 skill / 任务说明书" vertex="1">
+        <mxCell id="legend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=14;fillColor=#F7F8FA;strokeColor=#DDE2EA;fontSize=13;fontColor=#172033;" value="&lt;b&gt;图例&lt;/b&gt;　深蓝＝用户　玫红＝感知层　橙＝意图 MCP　蓝＝Harness / GenericAgent 指令　绿＝对用户出口　灰虚线＝只读或 dry-run　底部两框＝全部 skill / 任务说明书" vertex="1">
           <mxGeometry height="40" width="2400" x="40" y="76" as="geometry" />
         </mxCell>
         <mxCell id="outer" parent="1" style="swimlane;html=1;rounded=1;startSize=40;horizontal=1;fillColor=#FFF1F2;strokeColor=#E11D48;strokeWidth=2;fontColor=#9F1239;fontStyle=1;fontSize=16;" value="外循环　IntentHost.respond　用户一句话跑一轮，出口永远是一句人话" vertex="1">
@@ -109,7 +109,7 @@
         <mxCell id="pp2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=12;" value="&lt;b&gt;Harness 规划　RepairScheduler.plan&lt;/b&gt;&lt;br&gt;校验节点存在 → 收 stale 上游 → 切可执行前沿&lt;br&gt;按 produced_by 组 TaskEnvelope（scope / allowed_tools / snapshot）" vertex="1">
           <mxGeometry height="140" width="720" x="1640" y="1240" as="geometry" />
         </mxCell>
-        <mxCell id="pp3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;dashed=1;dashPattern=8 8;fillColor=#F8FAFC;strokeColor=#94A3B8;fontColor=#5E687A;fontSize=12;" value="&lt;b&gt;执行　当前未接线&lt;/b&gt;&lt;br&gt;设计：StageRunner → *HarnessController.run(task) → GenericAgent&lt;br&gt;现状：harness.repair 返回「执行器未接线」。Studio RepairService 才是完整循环。" vertex="1">
+        <mxCell id="pp3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=12;" value="&lt;b&gt;执行　已接线&lt;/b&gt;&lt;br&gt;invalidate 种子+下游 → drive_repair → StageRunner.run(task, feedback)&lt;br&gt;Intake 与 Studio RepairService 共用。dry-run 只预览不跑 agent。" vertex="1">
           <mxGeometry height="140" width="720" x="1640" y="1400" as="geometry" />
         </mxCell>
         <mxCell id="sk" parent="1" style="swimlane;html=1;rounded=1;startSize=40;horizontal=1;fillColor=#F8FAFC;strokeColor=#64748B;strokeWidth=2;fontColor=#172033;fontStyle=1;fontSize=16;" value="Skill / 任务说明书目录　感知层按需 activate；GenericAgent 随 TaskEnvelope 整段注入，本任务不能切换" vertex="1">

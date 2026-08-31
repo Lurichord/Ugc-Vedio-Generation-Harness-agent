@@ -29,20 +29,6 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class BriefDraft(StrictModel):
-    """Working copy of CreativeBrief. Incomplete fields stay None."""
-
-    project_id: str | None = None
-    project_name: str | None = None
-    topic: str | None = None
-    production_mode: ProductionMode | None = None
-    video_profile: VideoProfileRequest | None = None
-    target: TargetSpec | None = None
-    audience: AudienceSpec | None = None
-    communication: CommunicationSpec | None = None
-    content_policy: ContentPolicy | None = None
-
-
 class TargetPatch(StrictModel):
     platform: str | None = None
     duration_target_ms: int | None = None
@@ -72,6 +58,20 @@ class BriefPatch(StrictModel):
     target: TargetPatch | None = None
     audience: AudiencePatch | None = None
     communication: CommunicationPatch | None = None
+    content_policy: ContentPolicy | None = None
+
+
+class BriefDraft(StrictModel):
+    """Working copy of CreativeBrief. Incomplete fields stay None."""
+
+    project_id: str | None = None
+    project_name: str | None = None
+    topic: str | None = None
+    production_mode: ProductionMode | None = None
+    video_profile: VideoProfileRequest | None = None
+    target: TargetPatch | None = None
+    audience: AudienceSpec | None = None
+    communication: CommunicationSpec | None = None
     content_policy: ContentPolicy | None = None
 
 

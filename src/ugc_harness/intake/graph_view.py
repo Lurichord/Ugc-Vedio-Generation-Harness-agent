@@ -4,12 +4,29 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..harness.dependency_builders import CONTENT_ROOT_PREFIXES
 from ..harness.models import DependencyGraphState, DependencyNode, ProjectState
 
 _DESCRIPTION_ALIASES: dict[str, tuple[str, ...]] = {
     "beat": ("planned_beat", "realized_beat"),
-    "shot": ("shot", "timeline_clip"),
+    "planned_beat": ("beat",),
+    "realized_beat": ("beat",),
+    "section": ("section",),
+    "scene": ("scene",),
+    "step": ("step",),
+    "action": ("action",),
+    "shot": ("shot",),
     "clip": ("timeline_clip",),
+    "timeline_clip": ("clip",),
+    "cast": ("character",),
+    "character": ("cast",),
+    "prop": ("prop",),
+    "place": ("place",),
+    "utterance": ("script_segment",),
+    "script_segment": ("utterance",),
+    "audio": ("audio_segment", "voice_segment"),
+    "audio_segment": ("audio",),
+    "voice_segment": ("audio",),
 }
 
 
@@ -45,7 +62,7 @@ def dump_node(
     if edge_refs is not None:
         depends_on = [item for item in depends_on if item in edge_refs]
         dependents = [item for item in dependents if item in edge_refs]
-    return {
+    payload = {
         "ref": node.ref,
         "kind": node.kind,
         "produced_by": node.produced_by,
@@ -54,6 +71,13 @@ def dump_node(
         "depends_on": depends_on,
         "dependents": dependents,
     }
+    if node.edges:
+        payload["edges"] = [
+            {"to": edge.to, "family": edge.family}
+            for edge in node.edges
+            if edge_refs is None or edge.to in edge_refs
+        ]
+    return payload
 
 
 def list_graph(
@@ -66,7 +90,7 @@ def list_graph(
     nodes = graph.nodes
     focus = (around_ref or "").strip() or None
     if focus is None:
-        return _artifact_overview(nodes)
+        return _content_root_overview(nodes)
     return _neighborhood(nodes, focus)
 
 
@@ -80,15 +104,15 @@ def _graph_state(
     return state.dependency_graph
 
 
-def _artifact_overview(nodes: dict[str, DependencyNode]) -> dict[str, Any]:
-    artifact_refs = {ref for ref in nodes if ref.startswith("artifact:")}
+def _content_root_overview(nodes: dict[str, DependencyNode]) -> dict[str, Any]:
+    root_refs = {ref for ref in nodes if ref.startswith(CONTENT_ROOT_PREFIXES)}
     dumped = [
-        dump_node(nodes[ref], edge_refs=artifact_refs)
-        for ref in sorted(artifact_refs)
+        dump_node(nodes[ref], edge_refs=root_refs)
+        for ref in sorted(root_refs)
     ]
     return {
         "ok": True,
-        "scope": "artifacts",
+        "scope": "roots",
         "nodes": dumped,
     }
 
@@ -104,12 +128,7 @@ def _neighborhood(nodes: dict[str, DependencyNode], around_ref: str) -> dict[str
         }
     center = nodes[resolved]
     neighbor_refs = set(center.depends_on) | set(center.dependents)
-    if resolved.startswith("artifact:"):
-        shown_neighbors = {ref for ref in neighbor_refs if ref.startswith("artifact:")}
-    else:
-        shown_neighbors = neighbor_refs
-    omitted_edges = len(neighbor_refs - shown_neighbors)
-    selected = [resolved, *sorted(shown_neighbors)]
+    selected = [resolved, *sorted(neighbor_refs)]
     dumped = [dump_node(nodes[ref], edge_refs=set(selected)) for ref in selected]
     payload: dict[str, Any] = {
         "ok": True,
@@ -120,6 +139,4 @@ def _neighborhood(nodes: dict[str, DependencyNode], around_ref: str) -> dict[str
     }
     if around_ref != resolved:
         payload["resolved_from"] = around_ref
-    if omitted_edges:
-        payload["omitted_edges"] = omitted_edges
     return payload

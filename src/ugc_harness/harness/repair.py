@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable, Iterable
+from pathlib import Path
 
 from pydantic import Field
 
@@ -27,6 +29,29 @@ class RepairPlan(HarnessModel):
     tasks: list[TaskEnvelope] = Field(default_factory=list)
     blockers: list[RepairBlocker] = Field(default_factory=list)
     complete: bool = False
+
+
+class RepairRunResult(HarnessModel):
+    ok: bool
+    complete: bool = False
+    dry_run: bool = False
+    target_refs: list[str] = Field(default_factory=list)
+    invalidated: list[str] = Field(default_factory=list)
+    planned_tasks: int = 0
+    rounds: int = 0
+    tasks_run: list[str] = Field(default_factory=list)
+    blockers: list[RepairBlocker] = Field(default_factory=list)
+    error: str | None = None
+
+
+AGENT_STAGE: dict[str, str] = {
+    "narrative_agent": "narrative",
+    "voice_agent": "voice",
+    "editorial_agent": "editorial",
+    "asset_agent": "asset",
+    "timeline_agent": "timeline",
+    "render_agent": "render",
+}
 
 
 _NARRATIVE_FORMATS = default_narrative_format_registry()
@@ -134,13 +159,13 @@ class RepairScheduler:
             task_id = self._task_id(
                 agent,
                 targets,
-                state.video.state_version,
+                state.context.state_version,
                 state.dependency_graph.graph_version,
             )
             if agent == "narrative_agent":
-                mode = state.runtime_context.constraints.get(
+                mode = state.context.constraints.get(
                     "narrative_format",
-                    state.runtime_context.constraints.get(
+                    state.context.constraints.get(
                         "production_mode",
                         "auto",
                     ),
@@ -152,7 +177,7 @@ class RepairScheduler:
                     pack.create_repair_task(
                         task_id=task_id,
                         scope=scope,
-                        state_version=state.video.state_version,
+                        state_version=state.context.state_version,
                         input_hash=repair_input_hash(
                             snapshots,
                             sorted(targets),
@@ -169,7 +194,7 @@ class RepairScheduler:
                         "局部修复失效依赖节点，保持 scope 外的已批准内容不变"
                     ),
                     scope=scope,
-                    based_on_state_version=state.video.state_version,
+                    based_on_state_version=state.context.state_version,
                     allowed_tools=_TOOLS[agent],
                     forbidden_actions=[
                         "modify_outside_repair_scope",
@@ -244,8 +269,7 @@ class RepairScheduler:
     def _scope(state: ProjectState, refs: set[str]) -> TaskScope:
         beat_ids: set[str] = set()
         script_ids: set[str] = set()
-        visual_ids: set[str] = set()
-        asset_ids: set[str] = set()
+        shot_ids: set[str] = set()
         queue = list(refs)
         visited: set[str] = set()
         while queue:
@@ -254,35 +278,20 @@ class RepairScheduler:
                 continue
             visited.add(ref)
             prefix, _, identifier = ref.partition(":")
-            if prefix == "realized_beat":
+            if prefix in {"beat", "scene", "step"}:
                 beat_ids.add(identifier)
-            elif prefix in {"timeline_clip", "timeline_transform"}:
-                beat_ids.add(identifier)
-            elif prefix == "alignment_segment":
+            elif prefix in {"utterance", "audio"}:
                 script_ids.add(identifier)
-            elif prefix == "visual_requirement":
-                visual_ids.add(identifier)
-            elif prefix == "visual_resolution":
-                visual_ids.add(identifier)
-            elif prefix in {"asset", "asset_inspection", "prepared_image"}:
-                asset_ids.add(identifier)
+            elif prefix == "shot":
+                shot_ids.add(identifier)
             node = state.dependency_graph.nodes.get(ref)
             if node:
-                queue.extend(
-                    dependency
-                    for dependency in node.depends_on
-                    if prefix != "artifact" or dependency in refs
-                    if not (
-                        prefix in {"timeline_clip", "timeline_transform"}
-                        and dependency == "audio:narration"
-                    )
-                )
+                queue.extend(node.depends_on)
         return TaskScope(
-            project_id=state.video.project_id,
+            project_id=state.context.project_id,
+            shot_ids=sorted(shot_ids),
             beat_ids=sorted(beat_ids),
             script_segment_ids=sorted(script_ids),
-            visual_request_ids=sorted(visual_ids),
-            asset_ids=sorted(asset_ids),
             target_refs=sorted(refs),
         )
 
@@ -302,7 +311,10 @@ def repair_input_hash(
     target_refs: list[str],
 ) -> str:
     payload = {
-        "dependencies": [item.model_dump(mode="json") for item in snapshots],
+        "dependencies": [
+            {"ref": item.ref, "version": item.version}
+            for item in snapshots
+        ],
         "target_refs": sorted(target_refs),
     }
     encoded = json.dumps(
@@ -338,3 +350,88 @@ def select_repair_commits(
             f"{sorted(unauthorized_changes)}"
         )
     return [candidates[ref] for ref in sorted(targets)]
+
+
+def invalidate_subgraph(state: ProjectState, seeds: Iterable[str]) -> list[str]:
+    """Mark seeds and all dependents stale. Locked nodes abort the whole mark."""
+
+    queue = list(seeds)
+    visited: set[str] = set()
+    while queue:
+        ref = queue.pop(0)
+        if ref in visited:
+            continue
+        node = state.dependency_graph.nodes.get(ref)
+        if node is None:
+            raise ValueError(f"unknown repair target: {ref}")
+        if node.locked:
+            raise ValueError(f"dependency node is locked: {ref}")
+        visited.add(ref)
+        node.status = "stale"
+        queue.extend(node.dependents)
+    return sorted(visited)
+
+
+def write_project_state(project_dir: str | Path, state: ProjectState) -> None:
+    path = Path(project_dir) / "harness" / "project_state.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(state.model_dump_json(indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def load_project_state(project_dir: str | Path) -> ProjectState:
+    path = Path(project_dir) / "harness" / "project_state.json"
+    return ProjectState.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def drive_repair(
+    *,
+    desired_refs: list[str],
+    instruction: str,
+    load_state: Callable[[], ProjectState],
+    run_task: Callable[[TaskEnvelope, str], None],
+    max_rounds: int = 12,
+) -> RepairRunResult:
+    """Run the next stale frontier until desired_refs are current."""
+
+    tasks_run: list[str] = []
+    scheduler = RepairScheduler()
+    for round_index in range(1, max_rounds + 1):
+        plan = scheduler.plan(load_state(), desired_refs)
+        if plan.blockers:
+            return RepairRunResult(
+                ok=False,
+                target_refs=desired_refs,
+                rounds=round_index - 1,
+                tasks_run=tasks_run,
+                planned_tasks=len(plan.tasks),
+                blockers=plan.blockers,
+                error="；".join(item.reason for item in plan.blockers),
+            )
+        if plan.complete:
+            return RepairRunResult(
+                ok=True,
+                complete=True,
+                target_refs=desired_refs,
+                rounds=round_index - 1,
+                tasks_run=tasks_run,
+            )
+        if not plan.tasks:
+            return RepairRunResult(
+                ok=False,
+                target_refs=desired_refs,
+                rounds=round_index - 1,
+                tasks_run=tasks_run,
+                error="repair scheduler produced no runnable task",
+            )
+        for task in plan.tasks:
+            run_task(task, instruction)
+            tasks_run.append(task.task_id)
+    return RepairRunResult(
+        ok=False,
+        target_refs=desired_refs,
+        rounds=max_rounds,
+        tasks_run=tasks_run,
+        error=f"repair did not converge within {max_rounds} scheduler rounds",
+    )

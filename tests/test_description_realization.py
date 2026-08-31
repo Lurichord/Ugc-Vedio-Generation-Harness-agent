@@ -40,7 +40,7 @@ def _drama_state() -> ProjectState:
 
 
 def _shot_assets(state: ProjectState) -> ShotAssetArtifact:
-    assert state.description is not None
+    assert state.production.shots
     assets = [
         ShotVideoAsset(
             asset_id=f"asset_{shot.spec.shot_id}",
@@ -56,10 +56,10 @@ def _shot_assets(state: ProjectState) -> ShotAssetArtifact:
             audio_mode="embedded_in_video",
             preserve_source_audio=True,
         )
-        for shot in state.description.shots
+        for shot in state.production.shots
     ]
     return ShotAssetArtifact(
-        project_id=state.video.project_id,
+        project_id=state.context.project_id,
         format_id="drama",
         assets=assets,
         quality=ShotAssetQuality(
@@ -74,12 +74,12 @@ def test_shot_media_realization_updates_document_and_tags() -> None:
     state = _drama_state()
     apply_shot_media(state, _shot_assets(state))
 
-    assert state.description is not None
-    for shot in state.description.shots:
+    assert state.production.shots
+    for shot in state.production.shots:
         assert shot.media is not None
         assert shot.media.modality == "ai_video"
         assert shot.media.generation_job_id == f"job_{shot.spec.shot_id}"
-        tag = state.execution.elements[f"shot:{shot.spec.shot_id}"]
+        tag = state.evaluation.elements[f"shot:{shot.spec.shot_id}"]
         assert tag.attempts == 1
         assert tag.generation_job_id == f"job_{shot.spec.shot_id}"
         assert tag.cost_usd == 0.2
@@ -106,15 +106,14 @@ def test_shot_timeline_realization_adds_clips_and_refs() -> None:
         )
         cursor += asset.duration_ms
     timeline = ShotTimelineArtifact(
-        project_id=state.video.project_id,
+        project_id=state.context.project_id,
         format_id="drama",
         duration_ms=cursor,
         clips=clips,
     )
     apply_shot_timeline_realization(state, timeline)
 
-    assert state.description is not None
-    document_timeline = state.description.timeline
+    document_timeline = state.production.timeline
     assert document_timeline is not None
     assert document_timeline.duration_ms == cursor
     assert document_timeline.audio_file is None
@@ -122,7 +121,7 @@ def test_shot_timeline_realization_adds_clips_and_refs() -> None:
         f"shot:{asset.shot_id}" for asset in assets.assets
     ]
     for clip in document_timeline.clips:
-        assert f"clip:{clip.clip_id}" in state.execution.elements
+        assert f"clip:{clip.clip_id}" in state.evaluation.elements
 
 
 def test_render_realization_fills_deliverable() -> None:
@@ -144,8 +143,7 @@ def test_render_realization_fills_deliverable() -> None:
     )
     apply_render_realization(state, render)  # type: ignore[arg-type]
 
-    assert state.description is not None
-    deliverable = state.description.deliverable
+    deliverable = state.production.deliverable
     assert deliverable is not None
     assert deliverable.video_file == "video/final.mp4"
     assert deliverable.width == 1080 and deliverable.height == 1920
@@ -162,8 +160,8 @@ def test_voice_realization_binds_utterances() -> None:
         ).make_brief(topic="配音回填测试", duration_seconds=90)
     )
     state = brief_run.record.project_state
-    assert state.description is not None and state.description.voice is not None
-    utterances = state.description.voice.utterances
+    assert state.production.voice is not None
+    utterances = state.production.voice.utterances
 
     segments = [
         SimpleNamespace(
@@ -196,7 +194,7 @@ def test_voice_realization_binds_utterances() -> None:
     )
     apply_voice_realization(state, voice)  # type: ignore[arg-type]
 
-    design = state.description.voice
+    design = state.production.voice
     assert design.speaker is not None and design.speaker.voice_id == "voice_1"
     assert design.narration_audio is not None
     assert design.narration_audio.audio_file == "voice/narration.wav"

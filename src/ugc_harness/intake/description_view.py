@@ -8,15 +8,43 @@ from ..harness.description import (
     DramaStructure,
     ExplainerStructure,
     TutorialStructure,
-    VideoDescription,
 )
 
 
-def list_outline(description: VideoDescription | None) -> list[dict[str, Any]]:
+def list_outline(description: Any) -> list[dict[str, Any]]:
     if description is None:
         return []
     structure = description.structure
     items: list[dict[str, Any]] = []
+    world = getattr(description, "world", None)
+    if world is not None:
+        for member in getattr(world, "cast", []):
+            items.append(
+                {
+                    "ref": f"cast:{member.character_id}",
+                    "kind": "cast",
+                    "order": 0,
+                    "title": member.name,
+                }
+            )
+        for prop in getattr(world, "props", []):
+            items.append(
+                {
+                    "ref": f"prop:{prop.prop_id}",
+                    "kind": "prop",
+                    "order": 0,
+                    "title": prop.name,
+                }
+            )
+        for place in getattr(world, "places", []):
+            items.append(
+                {
+                    "ref": f"place:{place.place_id}",
+                    "kind": "place",
+                    "order": 0,
+                    "title": place.name,
+                }
+            )
     if isinstance(structure, ExplainerStructure):
         for index, section in enumerate(structure.sections, start=1):
             items.append(
@@ -79,9 +107,7 @@ def list_outline(description: VideoDescription | None) -> list[dict[str, Any]]:
     return items
 
 
-def get_element(
-    description: VideoDescription | None, ref: str
-) -> dict[str, Any] | None:
+def get_element(description: Any, ref: str) -> dict[str, Any] | None:
     if description is None or ":" not in ref:
         return None
     kind, _, ident = ref.partition(":")
@@ -93,7 +119,20 @@ def get_element(
     return {"ref": ref, "kind": kind, "element": payload}
 
 
-def _lookup(description: VideoDescription, kind: str, ident: str) -> Any:
+def _lookup(description: Any, kind: str, ident: str) -> Any:
+    world = getattr(description, "world", None)
+    if kind == "cast" and world is not None:
+        for member in getattr(world, "cast", []):
+            if member.character_id == ident:
+                return member.model_dump(mode="json")
+    if kind == "prop" and world is not None:
+        for prop in getattr(world, "props", []):
+            if prop.prop_id == ident:
+                return prop.model_dump(mode="json")
+    if kind == "place" and world is not None:
+        for place in getattr(world, "places", []):
+            if place.place_id == ident:
+                return place.model_dump(mode="json")
     structure = description.structure
     if kind == "section" and isinstance(structure, ExplainerStructure):
         for section in structure.sections:

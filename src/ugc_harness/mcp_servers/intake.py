@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server import MCPServer
 
+from ..harness.stage_execution import run_repair_task
 from ..intake.actions import (
     execute_start_project,
     get_description_element,
@@ -135,10 +136,20 @@ def harness_repair(
     target_refs: list[str],
     instruction: str,
 ) -> dict[str, Any]:
+    session = _load_session()
+    executor = None
+    if not _dry_run and session.project_dir:
+        project_dir = Path(session.project_dir)
+
+        def executor(task, instruction_text: str) -> None:
+            run_repair_task(project_dir, task, instruction_text)
+
     session, result = repair_description(
-        _load_session(),
+        session,
         target_refs,
         instruction,
+        dry_run=_dry_run,
+        run_task=executor,
     )
     _save_session(session)
     return result

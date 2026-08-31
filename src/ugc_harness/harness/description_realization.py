@@ -1,12 +1,9 @@
-"""Backfill realization data into the VideoDescription document.
+"""Backfill realization data into production.
 
 Each production stage reports what it actually made; these helpers write that
-realization into the description document and keep the execution tags in
-sync. Controllers call them only after their critic (or deterministic quality
-gate) passed, so the document never carries rejected realizations.
-
-All functions mutate the given ProjectState in place and are no-ops when the
-state predates the description document (legacy projects).
+realization into ProjectState.production and keep evaluation tags in sync.
+Controllers call them only after their critic (or deterministic quality
+gate) passed, so the ledger never carries rejected realizations.
 """
 
 from __future__ import annotations
@@ -37,24 +34,24 @@ if TYPE_CHECKING:
 
 
 def apply_voice_realization(state: ProjectState, voice: "VoiceArtifact") -> None:
-    description = state.description
-    if description is None or description.voice is None:
+    production = state.production
+    if production.voice is None:
         return
     speaker = voice.voice_plan.speaker
-    description.voice.speaker = VoiceSpeakerSpec(
+    production.voice.speaker = VoiceSpeakerSpec(
         provider=speaker.provider,
         voice_id=speaker.voice_id,
         language=speaker.language,
         persona=speaker.persona,
         character_id=speaker.character_id,
     )
-    description.voice.narration_audio = NarrationAudio(
+    production.voice.narration_audio = NarrationAudio(
         audio_file=voice.timed_audio.audio_file,
         duration_ms=voice.timed_audio.duration_ms,
         sample_rate=voice.timed_audio.sample_rate,
         channels=voice.timed_audio.channels,
     )
-    description.voice.alignment = AlignmentSummary(
+    production.voice.alignment = AlignmentSummary(
         coverage=voice.word_alignment.coverage,
         word_count=voice.word_alignment.word_count,
     )
@@ -62,7 +59,7 @@ def apply_voice_realization(state: ProjectState, voice: "VoiceArtifact") -> None
         segment.script_segment_id: segment
         for segment in voice.timed_audio.segments
     }
-    for utterance in description.voice.utterances:
+    for utterance in production.voice.utterances:
         segment = segments_by_script_id.get(utterance.utterance_id)
         if segment is not None:
             utterance.audio_segment = AudioSegmentBinding(
@@ -80,24 +77,31 @@ def apply_timeline_realization(
 ) -> None:
     """Explainer timeline: beat-keyed clips resolve to shot refs."""
 
-    description = state.description
-    if description is None:
+    production = state.production
+    if production.structure is None:
         return
+    explainer_shots = [
+        shot
+        for shot in production.shots
+        if shot.spec.payload.payload_type == "explainer"
+    ]
     shot_by_beat: dict[str, str] = {}
-    for shot in description.shots:
-        payload = shot.spec.payload
-        if payload.payload_type == "explainer":
-            shot_by_beat[payload.planned_beat_id] = shot.spec.shot_id
+    for shot in explainer_shots:
+        shot_by_beat[shot.spec.payload.planned_beat_id] = shot.spec.shot_id
+    clips = list(timeline.timeline.clips)
+    if len(clips) == len(explainer_shots):
+        for clip, shot in zip(clips, explainer_shots):
+            shot_by_beat.setdefault(clip.beat_id, shot.spec.shot_id)
     missing = [
         clip.beat_id
-        for clip in timeline.timeline.clips
+        for clip in clips
         if clip.beat_id not in shot_by_beat
     ]
     if missing:
         raise ValueError(
             f"timeline clips reference beats without compiled shots: {missing}"
         )
-    description.timeline = TimelineDescription(
+    production.timeline = TimelineDescription(
         canvas_width=timeline.timeline.canvas_width,
         canvas_height=timeline.timeline.canvas_height,
         fps=timeline.timeline.fps,
@@ -146,10 +150,10 @@ def apply_timeline_realization(
 
 
 def apply_shot_media(state: ProjectState, assets: "ShotAssetArtifact") -> None:
-    description = state.description
-    if description is None:
+    production = state.production
+    if production.structure is None:
         return
-    shots_by_id = {shot.spec.shot_id: shot for shot in description.shots}
+    shots_by_id = {shot.spec.shot_id: shot for shot in production.shots}
     for asset in assets.assets:
         shot = shots_by_id.get(asset.shot_id)
         if shot is None:
@@ -164,7 +168,7 @@ def apply_shot_media(state: ProjectState, assets: "ShotAssetArtifact") -> None:
             generation_job_id=asset.generation_job_id,
             generation_cost_usd=asset.generation_cost_usd,
         )
-        tag = state.execution.elements.get(f"shot:{asset.shot_id}")
+        tag = state.evaluation.elements.get(f"shot:{asset.shot_id}")
         if tag is not None:
             tag.attempts += 1
             tag.generation_job_id = asset.generation_job_id
@@ -176,10 +180,10 @@ def apply_shot_timeline_realization(
     state: ProjectState,
     timeline: "ShotTimelineArtifact",
 ) -> None:
-    description = state.description
-    if description is None:
+    production = state.production
+    if production.structure is None:
         return
-    description.timeline = TimelineDescription(
+    production.timeline = TimelineDescription(
         duration_ms=timeline.duration_ms,
         audio_file=None,
         clips=[
@@ -202,8 +206,8 @@ def apply_shot_timeline_realization(
 
 
 def apply_render_realization(state: ProjectState, render: "RenderArtifact") -> None:
-    description = state.description
-    if description is None:
+    production = state.production
+    if production.structure is None:
         return
     final = next(
         (output for output in render.outputs if output.kind == "final"),
@@ -211,9 +215,9 @@ def apply_render_realization(state: ProjectState, render: "RenderArtifact") -> N
     )
     if final is None:
         return
-    if description.deliverable is None:
-        description.deliverable = Deliverable()
-    deliverable = description.deliverable
+    if production.deliverable is None:
+        production.deliverable = Deliverable()
+    deliverable = production.deliverable
     deliverable.video_file = final.local_path
     deliverable.sha256 = final.sha256
     deliverable.duration_ms = final.duration_ms
@@ -228,11 +232,10 @@ def apply_render_realization(state: ProjectState, render: "RenderArtifact") -> N
 
 
 def _sync_execution_elements(state: ProjectState) -> None:
-    """Tag newly realized description elements (e.g. clips) as passed."""
+    """Tag newly realized production elements (e.g. clips) as passed."""
 
-    assert state.description is not None
-    for ref in element_refs(state.description):
-        state.execution.elements.setdefault(
+    for ref in element_refs(state.production):
+        state.evaluation.elements.setdefault(
             ref,
             ElementStatus(status="passed", version=1),
         )

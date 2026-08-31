@@ -19,6 +19,7 @@ from ..agents.narrative_agent.models import (
 from ..content import ProductionShot, TutorialVisualSpec
 from .description import (
     CastMember,
+    CreativeBriefRecord,
     Deliverable,
     DramaStructure,
     ExplainerStructure,
@@ -33,9 +34,11 @@ from .description import (
     VideoStructure,
     VideoWorld,
     VoiceDesign,
+    WorldPlace,
+    WorldProp,
     element_refs,
 )
-from .models import ElementStatus, ExecutionState
+from .models import ElementStatus, ExecutionState, ProjectState
 
 
 def build_video_description(artifact: NarrativeArtifact) -> VideoDescription:
@@ -47,6 +50,19 @@ def build_video_description(artifact: NarrativeArtifact) -> VideoDescription:
         shots=_shots(artifact),
         deliverable=_deliverable(artifact),
     )
+
+
+def apply_narrative_document(
+    state: ProjectState, artifact: NarrativeArtifact
+) -> None:
+    """Write creative + production from an approved narrative artifact."""
+
+    document = build_video_description(artifact)
+    state.apply_description(document)
+    state.creative.brief = CreativeBriefRecord.model_validate(
+        artifact.brief.model_dump(mode="json")
+    )
+    state.evaluation.elements = initial_execution_state(document).elements
 
 
 def initial_execution_state(description: VideoDescription) -> ExecutionState:
@@ -84,8 +100,10 @@ def _intent(artifact: NarrativeArtifact) -> VideoIntent:
 
 def _world(artifact: NarrativeArtifact) -> VideoWorld:
     planning = artifact.planning
+    world_state = planning.world_state
+    entities = {entity.entity_id: entity for entity in world_state.entities}
     cast: list[CastMember] = []
-    aroll = planning.world_state.aroll_character
+    aroll = world_state.aroll_character
     if aroll is not None:
         cast.append(
             CastMember(
@@ -97,17 +115,13 @@ def _world(artifact: NarrativeArtifact) -> VideoWorld:
             )
         )
     if isinstance(planning, DramaPlanningArtifact):
-        entity_names = {
-            entity.entity_id: entity.name
-            for entity in planning.world_state.entities
-        }
         for character in planning.characters:
+            entity = entities.get(character.character_id)
             cast.append(
                 CastMember(
                     character_id=character.character_id,
-                    name=character.name or entity_names.get(
-                        character.character_id, character.character_id
-                    ),
+                    name=character.name
+                    or (entity.name if entity else character.character_id),
                     role="performer",
                     description=character.description,
                     dramatic_objective=character.dramatic_objective,
@@ -115,7 +129,69 @@ def _world(artifact: NarrativeArtifact) -> VideoWorld:
                     voice_constraints=list(character.voice_constraints),
                 )
             )
-    return VideoWorld(state=planning.world_state, cast=cast)
+    places: list[WorldPlace] = []
+    if isinstance(planning, DramaPlanningArtifact):
+        seen: set[str] = set()
+        for scene in planning.scenes:
+            if scene.location_id in seen:
+                continue
+            seen.add(scene.location_id)
+            entity = entities.get(scene.location_id)
+            places.append(
+                WorldPlace(
+                    place_id=scene.location_id,
+                    name=entity.name if entity else scene.location_id,
+                    description=entity.description if entity else "",
+                )
+            )
+    props: list[WorldProp] = []
+    if isinstance(planning, TutorialPlanningArtifact):
+        for material in planning.materials:
+            props.append(
+                WorldProp(
+                    prop_id=material.material_id,
+                    name=material.name,
+                    description=material.quantity or material.name,
+                )
+            )
+    seen_cast = {member.character_id for member in cast}
+    seen_places = {item.place_id for item in places}
+    seen_props = {item.prop_id for item in props}
+    for entity in world_state.entities:
+        if entity.kind == "person" and entity.entity_id not in seen_cast:
+            cast.append(
+                CastMember(
+                    character_id=entity.entity_id,
+                    name=entity.name,
+                    role="performer",
+                    description=entity.description,
+                )
+            )
+            seen_cast.add(entity.entity_id)
+        elif entity.kind == "place" and entity.entity_id not in seen_places:
+            places.append(
+                WorldPlace(
+                    place_id=entity.entity_id,
+                    name=entity.name,
+                    description=entity.description,
+                )
+            )
+            seen_places.add(entity.entity_id)
+        elif entity.kind == "product" and entity.entity_id not in seen_props:
+            props.append(
+                WorldProp(
+                    prop_id=entity.entity_id,
+                    name=entity.name,
+                    description=entity.description,
+                )
+            )
+            seen_props.add(entity.entity_id)
+    return VideoWorld(
+        cast=cast,
+        props=props,
+        places=places,
+        claims=list(world_state.claims),
+    )
 
 
 def _structure(artifact: NarrativeArtifact) -> VideoStructure:
@@ -147,14 +223,23 @@ def _structure(artifact: NarrativeArtifact) -> VideoStructure:
     )
 
 
+def _speaker_ref(artifact: NarrativeArtifact) -> str | None:
+    aroll = artifact.planning.world_state.aroll_character
+    if aroll is None:
+        return None
+    return f"cast:{aroll.character_id}"
+
+
 def _voice(artifact: NarrativeArtifact) -> VoiceDesign | None:
     script = artifact.script
+    speaker_ref = _speaker_ref(artifact)
     if isinstance(script, ScriptArtifact):
         return VoiceDesign(
             utterances=[
                 Utterance(
                     utterance_id=segment.script_segment_id,
                     anchor_ref=f"beat:{segment.planned_beat_id}",
+                    speaker_ref=speaker_ref,
                     placement="full",
                     text=segment.text,
                     delivery=segment.delivery_hint,
@@ -168,6 +253,7 @@ def _voice(artifact: NarrativeArtifact) -> VoiceDesign | None:
                 Utterance(
                     utterance_id=segment.explanation_segment_id,
                     anchor_ref=f"step:{segment.step_id}",
+                    speaker_ref=speaker_ref,
                     placement=segment.placement,
                     text=segment.text,
                 )

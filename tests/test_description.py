@@ -7,8 +7,10 @@ from ugc_harness.agents.narrative_agent.models import (
 )
 from ugc_harness.agents.narrative_agent.shots import (
     compile_drama_shots,
+    compile_explainer_shots,
     compile_tutorial_shots,
 )
+from ugc_harness.content import WorldEntity
 from ugc_harness.harness.description import (
     DramaStructure,
     ExplainerStructure,
@@ -32,6 +34,7 @@ from tests.test_narrative_controller import (
     FakeGenerator,
     narrative_controller_from_generator,
 )
+from tests.test_quality import sample_plan, sample_script
 
 
 def _passing_quality() -> QualityReport:
@@ -85,33 +88,48 @@ def test_explainer_controller_commits_description() -> None:
         brief
     )
     state = run.record.project_state
-    description = state.description
+    production = state.production
+    intent = state.creative.intent
 
-    assert description is not None
-    assert description.intent.format_id == "explainer"
-    assert description.intent.topic == brief.topic
-    assert isinstance(description.structure, ExplainerStructure)
-    assert description.voice is not None
-    assert len(description.voice.utterances) == len(run.artifact.script.segments)
+    assert intent is not None
+    assert intent.format_id == "explainer"
+    assert intent.topic == brief.topic
+    assert isinstance(production.structure, ExplainerStructure)
+    assert production.voice is not None
+    assert len(production.voice.utterances) == len(run.artifact.script.segments)
     assert all(
         utterance.anchor_ref.startswith("beat:")
-        for utterance in description.voice.utterances
+        for utterance in production.voice.utterances
     )
-    assert description.shots, "explainer description must carry compiled shots"
+    assert production.shots, "explainer production must carry compiled shots"
     assert all(
         shot.continuity.join == "fresh" and shot.media is None
-        for shot in description.shots
+        for shot in production.shots
     )
-    assert description.deliverable is not None
-    assert description.deliverable.publish.title_options
+    assert production.deliverable is not None
+    assert production.deliverable.publish.title_options
+    assert state.schema_version == "project-state.v3"
+    assert state.creative.brief is not None
+    assert state.creative.brief.topic == brief.topic
+    assert state.context.project_id
+    assert all(
+        utterance.speaker_ref is None
+        or utterance.speaker_ref.startswith("cast:")
+        for utterance in production.voice.utterances
+    )
 
-    refs = element_refs(description)
+    refs = element_refs(production)
     assert len(refs) == len(set(refs))
-    assert set(state.execution.elements) == set(refs)
+    assert set(state.evaluation.elements) == set(refs)
     assert all(
         tag.status == "passed" and tag.version == 1
-        for tag in state.execution.elements.values()
+        for tag in state.evaluation.elements.values()
     )
+    graph = state.dependency_graph.nodes
+    assert any(ref.startswith("beat:") for ref in graph)
+    assert not any(ref.startswith("section:") for ref in graph)
+    assert not any(ref.startswith("action:") for ref in graph)
+    assert not any(ref.startswith("clip:") for ref in graph)
 
 
 def test_drama_description_cast_structure_and_continuity() -> None:
@@ -125,8 +143,24 @@ def test_drama_description_cast_structure_and_continuity() -> None:
     ]
     assert [member.character_id for member in performers] == ["character_azhou"]
     assert performers[0].appearance_constraints == ["白色棉麻衬衫", "短发"]
+    assert [place.place_id for place in description.world.places] == [
+        "location_kitchen"
+    ]
     assert isinstance(description.structure, DramaStructure)
     assert description.voice is None, "drama dialogue lives in structure.actions"
+    assert all(
+        f"cast:character_azhou" in shot.spec.binds
+        and f"place:location_kitchen" in shot.spec.binds
+        for shot in description.shots
+    )
+    assert all(
+        shot.spec.source_refs
+        == [
+            f"scene:{shot.spec.payload.scene_id}",
+            f"action:{shot.spec.payload.action_ids[0]}",
+        ]
+        for shot in description.shots
+    )
 
     shots = description.shots
     assert shots[0].continuity.join == "fresh"
@@ -183,4 +217,123 @@ def test_tutorial_description_result_utterances_and_continuity() -> None:
         "action",
         "utterance",
         "shot",
+        "prop",
     }
+    assert {item.prop_id for item in description.world.props} == {
+        "mat_leaf",
+        "mat_rice",
+        "mat_string",
+    }
+    assert all(
+        any(ref.startswith("prop:") for ref in shot.spec.binds)
+        for shot in description.shots
+    )
+    assert all(
+        f"step:{shot.spec.payload.step_id}" in shot.spec.source_refs
+        and f"action:{shot.spec.payload.action_ids[0]}" in shot.spec.source_refs
+        for shot in description.shots
+    )
+
+
+def test_identity_entities_enter_production_world() -> None:
+    artifact = _drama_artifact()
+    artifact.planning.world_state.entities.append(
+        WorldEntity(
+            entity_id="prop_zongzi",
+            name="四角粽",
+            kind="product",
+            narrative_role="workpiece",
+            description="包好的四角粽",
+        )
+    )
+    description = build_video_description(artifact)
+    assert [item.prop_id for item in description.world.props] == ["prop_zongzi"]
+    assert {member.character_id for member in description.world.cast} == {
+        "character_azhou"
+    }
+    assert {item.place_id for item in description.world.places} == {"location_kitchen"}
+
+    planning = sample_plan()
+    planning.world_state.entities.extend(
+        [
+            WorldEntity(
+                entity_id="product_calendar",
+                name="历法",
+                kind="product",
+                narrative_role="subject",
+                description="墙上的年历",
+            ),
+            WorldEntity(
+                entity_id="place_studio",
+                name="讲解台",
+                kind="place",
+                narrative_role="set",
+                description="同一张讲解桌",
+            ),
+        ]
+    )
+    script = sample_script(planning)
+    explainer = NarrativeArtifact(
+        model="fake-model",
+        brief=make_brief(topic="为什么会有闰年"),
+        planning=planning,
+        script=script,
+        shots=compile_explainer_shots(planning, script),
+        quality=_passing_quality(),
+    )
+    world = build_video_description(explainer).world
+    assert {item.prop_id for item in world.props} == {"product_calendar"}
+    assert {item.place_id for item in world.places} == {"place_studio"}
+    assert "entity_testing" not in {
+        *(item.prop_id for item in world.props),
+        *(item.place_id for item in world.places),
+        *(item.character_id for item in world.cast),
+    }
+
+
+def test_compile_shots_copy_roster_identities_into_binds() -> None:
+    artifact = _drama_artifact()
+    artifact.planning.world_state.entities.append(
+        WorldEntity(
+            entity_id="prop_zongzi",
+            name="四角粽",
+            kind="product",
+            narrative_role="workpiece",
+            description="包好的四角粽",
+        )
+    )
+    shots = compile_drama_shots(artifact.planning)
+    assert all(
+        "cast:character_azhou" in shot.binds and "place:location_kitchen" in shot.binds
+        for shot in shots.shots
+    )
+    assert "prop:prop_zongzi" in shots.shots[-1].binds
+    assert "prop:prop_zongzi" not in shots.shots[0].binds
+
+    planning = sample_plan()
+    planning.world_state.entities.extend(
+        [
+            WorldEntity(
+                entity_id="product_calendar",
+                name="历法",
+                kind="product",
+                narrative_role="subject",
+                description="墙上的年历",
+            ),
+            WorldEntity(
+                entity_id="place_studio",
+                name="讲解台",
+                kind="place",
+                narrative_role="set",
+                description="同一张讲解桌",
+            ),
+        ]
+    )
+    planning.beats[0].bind_refs = ["prop:product_calendar", "place:place_studio"]
+    script = sample_script(planning)
+    explainer_shots = compile_explainer_shots(planning, script)
+    assert explainer_shots.shots[0].binds == [
+        "prop:product_calendar",
+        "place:place_studio",
+    ]
+    assert explainer_shots.shots[1].binds == []

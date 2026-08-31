@@ -112,9 +112,11 @@ def test_narrative_agent_runs_the_explainer_tool_chain() -> None:
 
     assert run.artifact.quality.passed is True
     assert run.record.agent_result.artifact_refs
-    state_description = run.record.project_state.description
-    assert state_description is not None
-    assert run.artifact.planning.world_state == state_description.world.state
+    production = run.record.project_state.production
+    assert production.structure is not None
+    assert [item.claim_id for item in production.world.claims] == [
+        item.claim_id for item in run.artifact.planning.world_state.claims
+    ]
     # The model saw the full allowed tool set on every step, not a forced
     # single-tool menu.
     assert model.offered == [HAPPY_PATH] * 5
@@ -139,8 +141,11 @@ def test_narrative_agent_runs_the_explainer_tool_chain() -> None:
         for shot in shots.shots
     )
     graph = run.record.project_state.dependency_graph.nodes
-    assert "artifact:narrative" in graph
+    assert "artifact:narrative" not in graph
+    assert any(ref.startswith("beat:") for ref in graph)
     assert not any(ref.startswith("section:") for ref in graph)
+    assert any(ref.startswith("utterance:") for ref in graph)
+    assert any(ref.startswith("shot:") for ref in graph)
     assert not any(ref.startswith("planned_beat:") for ref in graph)
     assert not any(ref.startswith("script_segment:") for ref in graph)
 
@@ -222,10 +227,10 @@ def test_narrative_agent_runs_the_drama_tool_chain_with_embedded_audio() -> None
     assert run.record.evaluation.critic_id == "drama_critic"
     assert run.record.evaluation.passed is True
     assert run.record.transition.to_agent == "asset_agent"
-    assert run.record.project_state.video.script_status == "not_required"
-    assert run.record.project_state.video.voice_status == "not_required"
-    assert run.record.project_state.video.editorial_status == "not_required"
-    assert run.record.project_state.video.asset_status == "ready"
+    assert run.record.project_state.evaluation.stages.script == "not_required"
+    assert run.record.project_state.evaluation.stages.voice == "not_required"
+    assert run.record.project_state.evaluation.stages.editorial == "not_required"
+    assert run.record.project_state.evaluation.stages.asset == "ready"
     assert model.selected == DRAMA_HAPPY_PATH
     assert [action.tool for action in run.record.agent_result.actions] == [
         "narrative.drama.plan_story",
@@ -244,10 +249,13 @@ def test_narrative_agent_runs_the_drama_tool_chain_with_embedded_audio() -> None
         for shot in shots.shots
     )
     graph = run.record.project_state.dependency_graph.nodes
-    assert "artifact:narrative" in graph
-    assert "character:character_azhou" not in graph
-    assert "scene:scene_attempt" not in graph
+    assert "artifact:narrative" not in graph
+    assert "cast:character_azhou" in graph
+    assert "place:location_kitchen" in graph
+    assert "scene:scene_attempt" in graph
     assert "action:action_01" not in graph
+    assert any(ref.startswith("shot:") for ref in graph)
+    assert "character:character_azhou" not in graph
 
 
 def test_narrative_agent_runs_the_tutorial_tools_with_mixed_audio() -> None:
@@ -263,10 +271,10 @@ def test_narrative_agent_runs_the_tutorial_tools_with_mixed_audio() -> None:
     assert run.record.evaluation.critic_id == "tutorial_critic"
     assert run.record.evaluation.passed is True
     assert run.record.transition.to_agent == "asset_agent"
-    assert run.record.project_state.video.script_status == "passed"
-    assert run.record.project_state.video.voice_status == "not_required"
-    assert run.record.project_state.video.editorial_status == "not_required"
-    assert run.record.project_state.video.asset_status == "ready"
+    assert run.record.project_state.evaluation.stages.script == "passed"
+    assert run.record.project_state.evaluation.stages.voice == "not_required"
+    assert run.record.project_state.evaluation.stages.editorial == "not_required"
+    assert run.record.project_state.evaluation.stages.asset == "ready"
     assert all(
         action.result == "success"
         for action in run.record.agent_result.actions
@@ -282,9 +290,11 @@ def test_narrative_agent_runs_the_tutorial_tools_with_mixed_audio() -> None:
         for shot in shots.shots
     )
     graph = run.record.project_state.dependency_graph.nodes
-    assert "artifact:narrative" in graph
-    assert not any(ref.startswith("step:") for ref in graph)
+    assert "artifact:narrative" not in graph
+    assert any(ref.startswith("step:") for ref in graph)
+    assert any(ref.startswith("prop:") for ref in graph)
     assert not any(ref.startswith("action:") for ref in graph)
+    assert any(ref.startswith("shot:") for ref in graph)
 
 
 def test_agent_accepts_allow_listed_original_mcp_tool_names() -> None:

@@ -23,6 +23,8 @@ const state = {
   payload: null,
   projects: [],
   busy: false,
+  pendingReply: false,
+  requestId: 0,
   pollTimer: null,
   feedbackTarget: null,
   stageViews: {},
@@ -60,7 +62,14 @@ const toast = (message) => {
   toast.timer = setTimeout(() => node.classList.remove("show"), 3200);
 };
 
-function applyPayload(payload) {
+function nextRequest() {
+  state.requestId += 1;
+  return state.requestId;
+}
+
+function applyPayload(payload, requestId) {
+  if (requestId !== undefined && requestId !== state.requestId) return;
+  state.pendingReply = false;
   state.payload = payload;
   if (payload.session_id) {
     state.sessionId = payload.session_id;
@@ -111,10 +120,21 @@ function renderChat() {
     const who = item.role === "user" ? "你" : item.role === "studio" ? "制作台" : "助手";
     return `<article class="bubble ${item.role}"><span class="bubble-meta">${who}</span>${escapeHtml(item.content)}</article>`;
   }).join("");
-  if (state.busy && state.payload?.gate?.kind === "running") {
-    root.insertAdjacentHTML("beforeend", `<article class="bubble studio thinking">正在生成，右侧会更新已完成内容…</article>`);
+  const thinking = thinkingCopy();
+  if (thinking) {
+    root.insertAdjacentHTML("beforeend", `<article class="bubble studio thinking">${thinking}</article>`);
   }
   root.scrollTop = root.scrollHeight;
+}
+
+function thinkingCopy() {
+  if (state.payload?.gate?.kind === "running") {
+    return "正在生成，右侧会更新已完成内容…";
+  }
+  if (state.pendingReply) {
+    return "正在想…";
+  }
+  return "";
 }
 
 function renderGate() {
@@ -156,9 +176,13 @@ function renderRail() {
 }
 
 const kindLabels = {
+  utterance: "口播",
+  beat: "规划",
+  shot: "镜头",
+  audio: "配音",
+  clip: "剪辑",
   script_segment: "口播",
   planned_beat: "规划",
-  shot: "镜头",
   audio_segment: "配音",
   voice_segment: "声音设计",
   realized_beat: "实际 Beat",
@@ -224,8 +248,9 @@ function mediaMarkup(item) {
 }
 
 function syncProjectSelect() {
-  const key = state.payload?.project_key || "";
-  if (key) $("#projectSelect").value = key;
+  const select = $("#projectSelect");
+  if (!select) return;
+  select.value = state.payload?.project_key || "";
 }
 
 async function ensureSession() {
@@ -250,31 +275,65 @@ async function loadProjects() {
 }
 
 async function sendMessage(text) {
-  if (!text.trim() || !state.sessionId || state.busy) return;
+  const trimmed = text.trim();
+  if (!trimmed || !state.sessionId || state.busy) return;
+  const previous = state.payload;
+  const now = new Date().toISOString();
+  const running = previous?.gate?.kind === "running";
+  state.payload = running
+    ? {
+      ...previous,
+      notices: [...(previous?.notices || []), { role: "user", content: trimmed, created_at: now }],
+    }
+    : {
+      ...previous,
+      messages: [...(previous?.messages || []), { role: "user", content: trimmed, created_at: now }],
+    };
+  const requestId = nextRequest();
+  state.pendingReply = true;
   setBusy(true);
   $("#composerInput").value = "";
+  renderChat();
   try {
     applyPayload(await api(
       `/api/intake/sessions/${encodeURIComponent(state.sessionId)}/messages`,
-      { method: "POST", body: JSON.stringify({ message: text }) },
-    ));
+      { method: "POST", body: JSON.stringify({ message: trimmed }) },
+    ), requestId);
   } catch (error) {
-    toast(error.message);
+    if (requestId !== state.requestId) return;
+    state.payload = previous;
+    state.pendingReply = false;
     setBusy(false);
+    renderChat();
+    $("#composerInput").value = trimmed;
+    toast(error.message);
   }
 }
 
 async function continueProduction() {
-  if (!state.sessionId) return;
+  if (!state.sessionId || state.busy) return;
+  const previous = state.payload;
+  const now = new Date().toISOString();
+  state.payload = {
+    ...previous,
+    notices: [...(previous?.notices || []), { role: "user", content: "可以", created_at: now }],
+  };
+  const requestId = nextRequest();
+  state.pendingReply = true;
   setBusy(true);
+  renderChat();
   try {
     applyPayload(await api(
       `/api/intake/sessions/${encodeURIComponent(state.sessionId)}/continue`,
       { method: "POST", body: "{}" },
-    ));
+    ), requestId);
   } catch (error) {
-    toast(error.message);
+    if (requestId !== state.requestId) return;
+    state.payload = previous;
+    state.pendingReply = false;
     setBusy(false);
+    renderChat();
+    toast(error.message);
   }
 }
 
@@ -282,10 +341,14 @@ function startPolling() {
   if (state.pollTimer) return;
   state.pollTimer = setInterval(async () => {
     if (!state.sessionId) return;
+    const sessionId = state.sessionId;
+    const requestId = state.requestId;
     try {
-      applyPayload(await api(`/api/intake/sessions/${encodeURIComponent(state.sessionId)}`));
+      const payload = await api(`/api/intake/sessions/${encodeURIComponent(sessionId)}`);
+      if (requestId !== state.requestId || payload.session_id !== state.sessionId) return;
+      applyPayload(payload, requestId);
     } catch {
-      stopPolling();
+      if (requestId === state.requestId) stopPolling();
     }
   }, 2000);
 }
@@ -298,21 +361,34 @@ function stopPolling() {
 
 async function attachProject(projectKey) {
   if (!projectKey || !state.sessionId) return;
+  if (state.payload?.project_key === projectKey) return;
+  const select = $("#projectSelect");
+  const requestId = nextRequest();
+  stopPolling();
+  state.pendingReply = false;
+  if (select) select.disabled = true;
   try {
     applyPayload(await api(
       `/api/intake/sessions/${encodeURIComponent(state.sessionId)}/attach`,
       { method: "POST", body: JSON.stringify({ project_key: projectKey }) },
-    ));
+    ), requestId);
   } catch (error) {
-    toast(error.message);
+    if (requestId === state.requestId) {
+      toast(error.message);
+      syncProjectSelect();
+    }
+  } finally {
+    if (select) select.disabled = false;
   }
 }
 
 async function newSession() {
+  const requestId = nextRequest();
   stopPolling();
+  state.pendingReply = false;
   localStorage.removeItem(SESSION_KEY);
   state.sessionId = null;
-  applyPayload(await api("/api/intake/sessions", { method: "POST" }));
+  applyPayload(await api("/api/intake/sessions", { method: "POST" }), requestId);
 }
 
 function formatTime(ms = 0) {

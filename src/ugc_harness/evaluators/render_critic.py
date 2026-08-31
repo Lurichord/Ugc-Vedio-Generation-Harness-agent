@@ -62,7 +62,12 @@ class RenderCritic:
             ]
             issues.extend((code, message, "rendered_media:final") for passed, code, message in checks if not passed)
         if not timeline.quality.full_audio_coverage:
-            issues.append(("TIMELINE_COVERAGE_INVALID", "Approved timeline does not cover the full audio.", "artifact:timeline"))
+            clip_ref = (
+                f"clip:{timeline.timeline.clips[0].clip_id}"
+                if timeline.timeline.clips
+                else "clip:timeline"
+            )
+            issues.append(("TIMELINE_COVERAGE_INVALID", "Approved timeline does not cover the full audio.", clip_ref))
         preview = outputs.get("preview")
         if preview and (preview.width, preview.height) != (540, 960):
             issues.append((

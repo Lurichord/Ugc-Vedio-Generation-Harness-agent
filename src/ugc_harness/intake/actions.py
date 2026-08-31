@@ -5,10 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from ..harness.models import TaskEnvelope
+
 from pydantic import ValidationError
 
 from ..agents.narrative_agent.models import CreativeBrief
-from ..harness.repair import RepairScheduler
+from ..harness.repair import (
+    RepairScheduler,
+    drive_repair,
+    invalidate_subgraph,
+    load_project_state as load_repair_state,
+    write_project_state,
+)
 from .description_view import get_element, list_outline
 from .graph_view import list_graph, resolve_graph_ref
 from .models import IntakeSession
@@ -135,6 +143,9 @@ def repair_description(
     session: IntakeSession,
     target_refs: list[str],
     instruction: str,
+    *,
+    dry_run: bool = False,
+    run_task: Callable[[TaskEnvelope, str], None] | None = None,
 ) -> tuple[IntakeSession, dict[str, Any]]:
     refs = [item.strip() for item in target_refs if item and item.strip()]
     note = instruction.strip()
@@ -144,7 +155,8 @@ def repair_description(
         return session, {"ok": False, "error": "instruction 不能为空"}
     if not session.project_dir:
         return session, {"ok": False, "error": "还没有项目目录，无法 repair"}
-    state = load_project_state(Path(session.project_dir))
+    project_dir = Path(session.project_dir)
+    state = load_project_state(project_dir)
     if state is None:
         return session, {"ok": False, "error": "找不到 project_state.json"}
     graph_refs: list[str] = []
@@ -161,20 +173,72 @@ def repair_description(
             "error": "；".join(item["reason"] for item in missing),
             "blockers": missing,
         }
-    plan = RepairScheduler().plan(state, graph_refs)
-    if plan.blockers:
+    try:
+        working = state.model_copy(deep=True)
+        invalidated = invalidate_subgraph(working, graph_refs)
+    except ValueError as exc:
+        return session, {"ok": False, "error": str(exc), "target_refs": graph_refs}
+    preview = RepairScheduler().plan(working, invalidated)
+    if preview.blockers:
         return session, {
             "ok": False,
-            "error": "；".join(item.reason for item in plan.blockers),
-            "blockers": [item.model_dump(mode="json") for item in plan.blockers],
+            "error": "；".join(item.reason for item in preview.blockers),
+            "blockers": [item.model_dump(mode="json") for item in preview.blockers],
+            "target_refs": graph_refs,
+            "invalidated": invalidated,
         }
-    return session, {
-        "ok": False,
-        "error": "harness.repair 执行器未接线",
+    preview_payload = {
         "target_refs": graph_refs,
-        "planned_tasks": len(plan.tasks),
-        "complete": plan.complete,
+        "invalidated": invalidated,
+        "planned_tasks": len(preview.tasks),
+        "complete": preview.complete,
     }
+    if dry_run:
+        return session, {
+            "ok": True,
+            "dry_run": True,
+            **preview_payload,
+            "text": (
+                f"dry-run：将修复 {', '.join(graph_refs)}，"
+                f"弄脏 {len(invalidated)} 个节点，首轮 {len(preview.tasks)} 个任务。"
+            ),
+        }
+    if run_task is None:
+        return session, {
+            "ok": False,
+            "error": "harness.repair 执行器未接线",
+            **preview_payload,
+        }
+    invalidate_subgraph(state, graph_refs)
+    write_project_state(project_dir, state)
+    try:
+        result = drive_repair(
+            desired_refs=invalidated,
+            instruction=note,
+            load_state=lambda: load_repair_state(project_dir),
+            run_task=run_task,
+        )
+    except Exception as exc:
+        session = refresh_session_from_disk(session)
+        return session, {
+            "ok": False,
+            "error": f"repair 执行失败：{exc}",
+            **preview_payload,
+        }
+    session = refresh_session_from_disk(session)
+    payload = result.model_dump(mode="json")
+    payload["target_refs"] = graph_refs
+    payload["invalidated"] = invalidated
+    if result.ok:
+        payload["text"] = (
+            f"repair 完成。已按指令改 {', '.join(graph_refs)}，"
+            f"跑了 {len(result.tasks_run)} 个任务。"
+            f"{format_progress(session.progress)}"
+        )
+        payload["progress"] = session.progress.model_dump(mode="json")
+    else:
+        payload["error"] = result.error or "repair 未完成"
+    return session, payload
 
 
 def _already_started(session: IntakeSession) -> bool:
@@ -187,9 +251,9 @@ def _description_or_error(session: IntakeSession) -> Any:
     if not session.project_dir:
         return {"ok": False, "error": "还没有项目，description 为空"}
     state = load_project_state(Path(session.project_dir))
-    if state is None or state.description is None:
-        return {"ok": False, "error": "还没有 VideoDescription"}
-    return state.description
+    if state is None or state.production.structure is None:
+        return {"ok": False, "error": "还没有 production"}
+    return state.production
 
 
 def execute_start_project(brief: CreativeBrief, output_root: Path) -> Path:

@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> None:
         prior_evaluation = None
         artifact_path = project_dir / "asset_artifact.json"
         evaluation_path = project_dir / "harness" / "asset_evaluation.json"
-        if state.video.asset_status == "needs_revision" and artifact_path.is_file():
+        if state.evaluation.stages.asset == "needs_revision" and artifact_path.is_file():
             current_artifact = AssetArtifact.model_validate_json(
                 artifact_path.read_text(encoding="utf-8")
             )

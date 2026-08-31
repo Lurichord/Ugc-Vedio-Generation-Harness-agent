@@ -5,10 +5,13 @@ fields; production stages fill ``realization`` fields (media bindings, audio
 files, the rendered deliverable). Execution bookkeeping (statuses, attempts,
 budgets) lives outside this document in the execution plane.
 
-Cross-layer references use one ref syntax shared with the dependency graph:
+Cross-layer references use one ref syntax. The dependency graph only
+materializes cast/prop/place, beat/scene/step, utterance, audio, and shot.
+section/action/clip remain document addresses, not graph nodes:
 
+    cast:c1            prop:p1      place:loc1
     section:sec_hook   beat:b3      scene:s2       action:a5
-    step:s1            utterance:u4 shot:shot_3    clip:c2
+    step:s1            utterance:u4 audio:u4       shot:shot_3    clip:c2
 
 Only decision-relevant content belongs here. Word-level timestamps and media
 bytes stay on disk; the document stores paths plus content hashes.
@@ -30,15 +33,16 @@ from ..content import (
     DramaScene,
     NarrativeFormatId,
     PlannedBeat,
+    ProductionMode,
     ProductionShot,
     Section,
     TargetSpec,
     TutorialAction,
     TutorialMaterial,
     TutorialStep,
-    VideoWorldState,
+    WorldClaim,
 )
-from ..profiles.models import VideoProfileDecision
+from ..profiles.models import VideoProfileDecision, VideoProfileRequest
 from ..shared.models import StrictModel
 
 
@@ -61,6 +65,20 @@ class VideoIntent(StrictModel):
     presentation: VideoProfileDecision
 
 
+class CreativeBriefRecord(StrictModel):
+    """Project-level brief. Field-aligned with CreativeBrief, no agent import."""
+
+    project_id: str = ""
+    project_name: str | None = None
+    topic: str = ""
+    target: TargetSpec = Field(default_factory=TargetSpec)
+    audience: AudienceSpec = Field(default_factory=AudienceSpec)
+    communication: CommunicationSpec | None = None
+    production_mode: ProductionMode = "auto"
+    video_profile: VideoProfileRequest = "auto"
+    content_policy: ContentPolicy = Field(default_factory=ContentPolicy)
+
+
 # ---------------------------------------------------------------------------
 # World layer
 # ---------------------------------------------------------------------------
@@ -77,55 +95,52 @@ class CastMember(StrictModel):
     appearance_constraints: list[str] = Field(default_factory=list)
     voice_constraints: list[str] = Field(default_factory=list)
     voice_profile: ArollVoiceProfile | None = None
+    reference_image: str | None = None
+
+
+class WorldProp(StrictModel):
+    """A core object that must stay recognizable across shots."""
+
+    prop_id: str
+    name: str
+    description: str
+    appearance: str | None = None
+    reference_image: str | None = None
+
+
+class WorldPlace(StrictModel):
+    """A core location that must stay recognizable across shots."""
+
+    place_id: str
+    name: str
+    description: str
+    appearance: str | None = None
+    reference_image: str | None = None
 
 
 class VideoWorld(StrictModel):
-    state: VideoWorldState
+    """Identity books: only the people, props, places, and claims that can be named."""
+
     cast: list[CastMember] = Field(default_factory=list)
+    props: list[WorldProp] = Field(default_factory=list)
+    places: list[WorldPlace] = Field(default_factory=list)
+    claims: list[WorldClaim] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_cast_entities(self) -> "VideoWorld":
-        ids = [member.character_id for member in self.cast]
-        if len(ids) != len(set(ids)):
+    def validate_identity_ids(self) -> "VideoWorld":
+        cast_ids = [member.character_id for member in self.cast]
+        prop_ids = [item.prop_id for item in self.props]
+        place_ids = [item.place_id for item in self.places]
+        claim_ids = [item.claim_id for item in self.claims]
+        if len(cast_ids) != len(set(cast_ids)):
             raise ValueError("cast character_id values must be unique")
+        if len(prop_ids) != len(set(prop_ids)):
+            raise ValueError("prop_id values must be unique")
+        if len(place_ids) != len(set(place_ids)):
+            raise ValueError("place_id values must be unique")
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("claim_id values must be unique")
         return self
-
-
-# ---------------------------------------------------------------------------
-# Visual language layer (global style anchor)
-# ---------------------------------------------------------------------------
-
-
-class VisualLanguage(StrictModel):
-    """Whole-video look; shot generation prompts must reference this anchor."""
-
-    style_keywords: list[str] = Field(min_length=1)
-    color_mood: str
-    lighting: str | None = None
-    camera_style: str | None = None
-    reference_notes: list[str] = Field(default_factory=list)
-    negative_constraints: list[str] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Sound design layer (placeholder until a BGM/mix capability exists)
-# ---------------------------------------------------------------------------
-
-
-class BgmSpec(StrictModel):
-    style: str
-    mood: str
-    anchor_refs: list[str] = Field(default_factory=list)
-
-
-class SfxCue(StrictModel):
-    anchor_ref: str
-    effect: str
-
-
-class SoundDesign(StrictModel):
-    bgm: BgmSpec | None = None
-    sfx_cues: list[SfxCue] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +209,7 @@ class AudioSegmentBinding(StrictModel):
 class Utterance(StrictModel):
     utterance_id: str
     anchor_ref: str
+    speaker_ref: str | None = None
     placement: Literal[
         "full", "before_action", "during_action", "after_action"
     ] = "full"
@@ -379,8 +395,6 @@ class VideoDescription(StrictModel):
     schema_version: str = "video-description.v1"
     intent: VideoIntent
     world: VideoWorld
-    visual_language: VisualLanguage | None = None
-    sound_design: SoundDesign | None = None
     structure: VideoStructure
     voice: VoiceDesign | None = None
     shots: list[ShotDescription] = Field(default_factory=list)
@@ -414,12 +428,19 @@ class VideoDescription(StrictModel):
 def element_refs(description: VideoDescription) -> list[str]:
     """Stable refs for every trackable description element, in document order.
 
-    These refs key the execution-plane status tags and the dependency graph
-    nodes, so the description document and the ledgers share one address space.
+    These refs key the evaluation-plane status tags and the dependency graph
+    nodes, so the content ledger and the ledgers share one address space.
     """
 
     refs: list[str] = []
-    structure = description.structure
+    structure = getattr(description, "structure", None)
+    if structure is None:
+        return refs
+    world = getattr(description, "world", None)
+    if world is not None:
+        refs.extend(f"cast:{item.character_id}" for item in getattr(world, "cast", []))
+        refs.extend(f"prop:{item.prop_id}" for item in getattr(world, "props", []))
+        refs.extend(f"place:{item.place_id}" for item in getattr(world, "places", []))
     if isinstance(structure, ExplainerStructure):
         refs.extend(f"section:{item.section_id}" for item in structure.sections)
         refs.extend(f"beat:{item.planned_beat_id}" for item in structure.beats)
@@ -430,9 +451,10 @@ def element_refs(description: VideoDescription) -> list[str]:
         refs.extend(f"step:{item.step_id}" for item in structure.steps)
         refs.extend(f"action:{item.action_id}" for item in structure.actions)
     if description.voice is not None:
-        refs.extend(
-            f"utterance:{item.utterance_id}" for item in description.voice.utterances
-        )
+        for item in description.voice.utterances:
+            refs.append(f"utterance:{item.utterance_id}")
+            if item.audio_segment is not None:
+                refs.append(f"audio:{item.utterance_id}")
     refs.extend(f"shot:{shot.spec.shot_id}" for shot in description.shots)
     if description.timeline is not None:
         refs.extend(f"clip:{clip.clip_id}" for clip in description.timeline.clips)

@@ -39,7 +39,7 @@ from .dependencies import DependencyGraph
 from .dependency_builders import narrative_commits
 from .trajectory import record_task, task_kind_for
 from .repair import repair_input_hash, select_repair_commits
-from .description_builder import build_video_description, initial_execution_state
+from .description_builder import apply_narrative_document
 from .narrative_formats import (
     NarrativeFormatRegistry,
     default_narrative_format_registry,
@@ -171,9 +171,9 @@ class NarrativeHarnessController:
         state: ProjectState | None = None,
     ) -> NarrativeHarnessRun:
         if state is not None:
-            if state.video.project_id != brief.project_id:
+            if state.context.project_id != brief.project_id:
                 raise ValueError("project state and brief have different project_id")
-            self.state_version = state.video.state_version
+            self.state_version = state.context.state_version
         envelope = task or self.create_task(brief)
         if envelope.scope.project_id != brief.project_id:
             raise ValueError("task scope does not match brief project_id")
@@ -320,41 +320,36 @@ class NarrativeHarnessController:
             )
         else:
             project_state = state.model_copy(deep=True)
-            project_state.video.state_version = committed_version
-            project_state.video.narrative_status = narrative_status
-            project_state.video.script_status = script_status
-            project_state.video.voice_status = voice_status
-            project_state.video.editorial_status = (
+            project_state.context.state_version = committed_version
+            project_state.evaluation.stages.narrative = narrative_status
+            project_state.evaluation.stages.script = script_status
+            project_state.evaluation.stages.voice = voice_status
+            project_state.evaluation.stages.editorial = (
                 editorial_status if direct_to_assets else "blocked"
             )
-            project_state.video.asset_status = (
+            project_state.evaluation.stages.asset = (
                 asset_status if direct_to_assets else "blocked"
             )
-            project_state.video.timeline_status = "blocked"
-            project_state.video.render_status = "blocked"
+            project_state.evaluation.stages.timeline = "blocked"
+            project_state.evaluation.stages.render = "blocked"
             if evaluation.passed:
-                project_state.runtime_context.constraints.update(
+                project_state.context.constraints.update(
                     {
                         "production_mode": brief.production_mode,
                         "narrative_format": pack.format_id,
                     }
                 )
-            project_state.runtime_context.available_tools = sorted(
-                set(project_state.runtime_context.available_tools)
+            project_state.context.available_tools = sorted(
+                set(project_state.context.available_tools)
                 | self.agent.tools.names
             )
-            models = project_state.runtime_context.available_models.setdefault(
+            models = project_state.context.available_models.setdefault(
                 "llm", []
             )
             if self.model_name not in models:
                 models.append(self.model_name)
         if evaluation.passed:
-            # The approved candidate becomes the authoritative description
-            # document; execution tags are re-keyed to its element refs.
-            project_state.description = build_video_description(artifact)
-            project_state.execution = initial_execution_state(
-                project_state.description
-            )
+            apply_narrative_document(project_state, artifact)
         graph = DependencyGraph(project_state.dependency_graph)
         commits = narrative_commits(artifact)
         commits = select_repair_commits(graph, commits, envelope)

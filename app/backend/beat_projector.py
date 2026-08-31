@@ -13,12 +13,12 @@ from .schemas import ArtifactView, BeatView, StageName, StageView
 
 
 STAGE_PREFIXES: dict[StageName, tuple[str, ...]] = {
-    "narrative": ("planned_beat:", "script_segment:"),
-    "voice": ("voice_segment:", "audio_segment:", "alignment_segment:", "realized_beat:"),
-    "editorial": ("claim:", "visual_requirement:"),
-    "asset": ("asset:", "asset_inspection:", "prepared_image:", "visual_resolution:"),
-    "timeline": ("timeline_clip:", "caption:", "timeline_transform:", "timeline_overlay:"),
-    "render": ("rendered_media:",),
+    "narrative": ("beat:", "utterance:", "shot:", "scene:", "step:"),
+    "voice": ("audio:",),
+    "editorial": ("beat:", "shot:"),
+    "asset": ("shot:",),
+    "timeline": ("shot:", "audio:"),
+    "render": ("shot:",),
 }
 
 
@@ -80,7 +80,7 @@ class BeatProjector:
             can_run=can_run,
             can_approve=can_approve and previous_ok,
             can_advance=critic_passed and approval is not None and not open_feedback,
-            state_version=state.video.state_version,
+            state_version=state.context.state_version,
             graph_version=state.dependency_graph.graph_version,
             issues=list((evaluation or {}).get("issues", [])),
             beats=beats,
@@ -121,8 +121,8 @@ class BeatProjector:
             bid = beat["planned_beat_id"]
             add(
                 stage="narrative",
-                ref=f"planned_beat:{bid}",
-                kind="planned_beat",
+                ref=f"beat:{bid}",
+                kind="beat",
                 beat_id=bid,
                 title=str(beat.get("title") or "规划"),
                 summary=beat.get("semantic_goal"),
@@ -141,8 +141,8 @@ class BeatProjector:
             )
             add(
                 stage="narrative",
-                ref=f"script_segment:{sid}",
-                kind="script_segment",
+                ref=f"utterance:{sid}",
+                kind="utterance",
                 beat_id=str(bid),
                 title="口播文本",
                 summary=segment.get("text"),
@@ -171,42 +171,34 @@ class BeatProjector:
         def planned_beat_id(beat_id: str) -> str:
             return realized_to_planned.get(beat_id, beat_id)
 
-        for segment in voice.get("voice_plan", {}).get("segments", []):
-            bid, sid = segment["planned_beat_id"], segment["voice_segment_id"]
-            add(stage="voice", ref=f"voice_segment:{sid}", kind="voice_segment", beat_id=bid,
-                title="声音设计", summary=segment.get("delivery_instruction"), payload=segment)
         for segment in voice.get("timed_audio", {}).get("segments", []):
-            bid, sid = segment["planned_beat_id"], segment["audio_segment_id"]
-            add(stage="voice", ref=f"audio_segment:{sid}", kind="audio_segment", beat_id=bid,
+            bid = segment["planned_beat_id"]
+            sid = segment["script_segment_id"]
+            add(stage="voice", ref=f"audio:{sid}", kind="audio", beat_id=bid,
                 title="配音片段", summary=f"{segment.get('duration_ms', 0) / 1000:.2f} 秒", payload=segment,
                 media=f"/api/projects/{project_dir.name}/media/{segment.get('file', '')}",
                 start=segment.get("start_ms"), end=segment.get("end_ms"))
-        for beat in voice.get("realized_beats", []):
-            bid = beat["planned_beat_id"]
-            add(stage="voice", ref=f"realized_beat:{beat['beat_id']}", kind="realized_beat", beat_id=bid,
-                title="实际 Beat", summary=beat.get("narration"), payload=beat,
-                start=beat.get("start_ms"), end=beat.get("end_ms"))
 
         editorial = self.projects.stage_artifact(project_dir, "editorial") or {}
         plan = editorial.get("editorial_plan", {})
         for claim in plan.get("claims", []):
-            bid, cid = planned_beat_id(claim["beat_id"]), claim["claim_id"]
-            add(stage="editorial", ref=f"claim:{cid}", kind="claim", beat_id=bid,
+            bid = planned_beat_id(claim["beat_id"])
+            add(stage="editorial", ref=f"beat:{bid}", kind="beat", beat_id=bid,
                 title="内容主张", summary=claim.get("statement"), payload=claim)
         for visual in plan.get("visual_requirements", []):
-            bid, vid = planned_beat_id(visual["beat_id"]), visual["visual_request_id"]
-            add(stage="editorial", ref=f"visual_requirement:{vid}", kind="visual_requirement", beat_id=bid,
+            bid = planned_beat_id(visual["beat_id"])
+            add(stage="editorial", ref=f"shot:shot_{bid}", kind="shot", beat_id=bid,
                 title="画面需求", summary=visual.get("purpose"), payload=visual)
 
         assets = self.projects.stage_artifact(project_dir, "asset") or {}
         for asset in assets.get("assets", []):
-            bid, aid = planned_beat_id(asset["beat_id"]), asset["asset_id"]
-            add(stage="asset", ref=f"asset:{aid}", kind="asset", beat_id=bid,
+            bid = planned_beat_id(asset["beat_id"])
+            add(stage="asset", ref=f"shot:shot_{bid}", kind="shot", beat_id=bid,
                 title="画面素材", summary=asset.get("modality"), payload=asset,
                 media=f"/api/projects/{project_dir.name}/media/{asset.get('local_path', '')}")
         for resolution in assets.get("resolutions", []):
-            bid, vid = planned_beat_id(resolution["beat_id"]), resolution["visual_request_id"]
-            add(stage="asset", ref=f"visual_resolution:{vid}", kind="visual_resolution", beat_id=bid,
+            bid = planned_beat_id(resolution["beat_id"])
+            add(stage="asset", ref=f"shot:shot_{bid}", kind="shot", beat_id=bid,
                 title="素材决策", summary=resolution.get("status"), payload=resolution)
 
         timeline = self.projects.stage_artifact(project_dir, "timeline") or {}
@@ -215,7 +207,7 @@ class BeatProjector:
         for clip in clips:
             raw_bid = clip["beat_id"]
             bid = planned_beat_id(raw_bid)
-            add(stage="timeline", ref=f"timeline_clip:{raw_bid}", kind="timeline_clip", beat_id=bid,
+            add(stage="timeline", ref=f"clip:{clip['clip_id']}", kind="clip", beat_id=bid,
                 title="画面剪辑", summary=clip.get("playback_policy"), payload=clip,
                 media=f"/api/projects/{project_dir.name}/media/{clip.get('playback_path', '')}",
                 start=clip.get("timeline_start_ms"), end=clip.get("timeline_end_ms"))
