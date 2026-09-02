@@ -79,7 +79,7 @@ function applyPayload(payload, requestId) {
   renderGate();
   renderRail();
   syncProjectSelect();
-  setBusy(payload.gate?.kind === "running");
+  setBusy(false);
   if (payload.gate?.kind === "running") startPolling();
   else stopPolling();
 }
@@ -88,25 +88,18 @@ function setBusy(busy) {
   state.busy = busy;
   $("#sendButton").disabled = busy;
   $("#composerInput").disabled = busy;
-  $("#continueButton").disabled = busy && state.payload?.gate?.kind === "running";
+  $("#continueButton").disabled = busy || state.payload?.gate?.kind === "running";
 }
 
 function transcript() {
   const payload = state.payload || {};
-  const items = [
-    ...(payload.messages || []).map((item) => ({
+  return (payload.messages || [])
+    .map((item) => ({
       role: item.role === "user" ? "user" : "agent",
       content: item.content,
       created_at: item.created_at || "",
-    })),
-    ...(payload.notices || []).map((item) => ({
-      role: item.role === "user" ? "user" : "studio",
-      content: item.content,
-      created_at: item.created_at || "",
-    })),
-  ].filter((item) => item.content);
-  items.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-  return items;
+    }))
+    .filter((item) => item.content);
 }
 
 function renderChat() {
@@ -116,24 +109,23 @@ function renderChat() {
     root.innerHTML = `<div class="chat-empty"><h2>先说你想做什么视频</h2><p>主题、观众、平台和时长说清楚后，我会开工。每做完一步都会停下来问你：可以继续，还是先改。</p></div>`;
     return;
   }
-  root.innerHTML = items.map((item) => {
+  const bubbles = items.map((item) => {
     const who = item.role === "user" ? "你" : item.role === "studio" ? "制作台" : "助手";
-    return `<article class="bubble ${item.role}"><span class="bubble-meta">${who}</span>${escapeHtml(item.content)}</article>`;
-  }).join("");
+    const variant = item.role === "user" ? "user" : item.role === "studio" ? "notice" : "agent";
+    return `<article class="bubble ${variant}"><span class="bubble-meta">${who}</span>${escapeHtml(item.content)}</article>`;
+  });
   const thinking = thinkingCopy();
   if (thinking) {
-    root.insertAdjacentHTML("beforeend", `<article class="bubble studio thinking">${thinking}</article>`);
+    bubbles.push(`<article class="bubble notice thinking">${thinking}</article>`);
   }
-  root.scrollTop = root.scrollHeight;
+  root.innerHTML = `<div class="chat-log">${bubbles.join("")}</div>`;
+  if (root.scrollHeight - root.clientHeight > 8) {
+    root.scrollTop = root.scrollHeight;
+  }
 }
 
 function thinkingCopy() {
-  if (state.payload?.gate?.kind === "running") {
-    return "正在生成，右侧会更新已完成内容…";
-  }
-  if (state.pendingReply) {
-    return "正在想…";
-  }
+  if (state.pendingReply) return "正在想…";
   return "";
 }
 
@@ -194,6 +186,14 @@ const kindLabels = {
   timeline_clip: "剪辑",
   caption: "字幕",
   rendered_media: "成片",
+  cast: "人物",
+  character: "人物",
+  prop: "道具",
+  place: "场景",
+  section: "段落",
+  scene: "场",
+  step: "步骤",
+  action: "动作",
 };
 
 function renderStageItems(items, skipped, isCurrent) {
@@ -279,16 +279,10 @@ async function sendMessage(text) {
   if (!trimmed || !state.sessionId || state.busy) return;
   const previous = state.payload;
   const now = new Date().toISOString();
-  const running = previous?.gate?.kind === "running";
-  state.payload = running
-    ? {
-      ...previous,
-      notices: [...(previous?.notices || []), { role: "user", content: trimmed, created_at: now }],
-    }
-    : {
-      ...previous,
-      messages: [...(previous?.messages || []), { role: "user", content: trimmed, created_at: now }],
-    };
+  state.payload = {
+    ...previous,
+    messages: [...(previous?.messages || []), { role: "user", content: trimmed, created_at: now }],
+  };
   const requestId = nextRequest();
   state.pendingReply = true;
   setBusy(true);
@@ -312,16 +306,9 @@ async function sendMessage(text) {
 
 async function continueProduction() {
   if (!state.sessionId || state.busy) return;
-  const previous = state.payload;
-  const now = new Date().toISOString();
-  state.payload = {
-    ...previous,
-    notices: [...(previous?.notices || []), { role: "user", content: "可以", created_at: now }],
-  };
+  if (state.payload?.gate?.kind === "running") return;
   const requestId = nextRequest();
-  state.pendingReply = true;
   setBusy(true);
-  renderChat();
   try {
     applyPayload(await api(
       `/api/intake/sessions/${encodeURIComponent(state.sessionId)}/continue`,
@@ -329,10 +316,7 @@ async function continueProduction() {
     ), requestId);
   } catch (error) {
     if (requestId !== state.requestId) return;
-    state.payload = previous;
-    state.pendingReply = false;
     setBusy(false);
-    renderChat();
     toast(error.message);
   }
 }
@@ -409,14 +393,192 @@ function taskMarkup(item) {
   return `<article class="task-card"><time class="task-time">${escapeHtml(formatDate(when))}</time><div><strong>${escapeHtml(title || "Task")}</strong><div class="task-meta">${escapeHtml(item.goal || item.message || "")}</div></div><span class="status-pill ${status}">${escapeHtml(status || "")}</span></article>`;
 }
 
+const GRAPH_COLUMNS = [
+  { id: "world", label: "人物 / 场景", kinds: ["cast", "character", "prop", "place"] },
+  { id: "structure", label: "结构", kinds: ["section", "scene", "step", "action"] },
+  { id: "beat", label: "Beat", kinds: ["beat", "planned_beat", "realized_beat"] },
+  { id: "script", label: "口播", kinds: ["utterance", "script_segment"] },
+  { id: "voice", label: "声音", kinds: ["audio", "audio_segment", "voice_segment"] },
+  { id: "visual", label: "镜头", kinds: ["shot", "visual_requirement", "asset", "shot_video", "visual_resolution"] },
+  { id: "cut", label: "剪辑", kinds: ["clip", "timeline_clip", "caption", "timeline_overlay", "timeline_transform"] },
+  { id: "out", label: "成片", kinds: ["rendered_media", "render"] },
+];
+const GRAPH_COL_W = 196;
+const GRAPH_NODE_W = 168;
+const GRAPH_NODE_H = 72;
+const GRAPH_GAP = 12;
+const GRAPH_HEADER = 28;
+const GRAPH_PAD = 18;
+
+function graphNodeLabel(node) {
+  const title = (node.title || "").trim();
+  if (title) return title;
+  const ref = node.ref || "";
+  return ref.includes(":") ? ref.slice(ref.indexOf(":") + 1) : ref;
+}
+
+function layoutGraph(nodes) {
+  const columns = GRAPH_COLUMNS.map((column) => ({ ...column, nodes: [] }));
+  const other = { id: "other", label: "其他", kinds: [], nodes: [] };
+  const byKind = new Map();
+  for (const column of columns) {
+    for (const kind of column.kinds) byKind.set(kind, column);
+  }
+  for (const node of nodes) {
+    (byKind.get(node.kind) || other).nodes.push(node);
+  }
+  for (const column of columns) {
+    column.nodes.sort((a, b) => String(a.ref).localeCompare(String(b.ref)));
+  }
+  other.nodes.sort((a, b) => String(a.ref).localeCompare(String(b.ref)));
+  const used = columns.filter((column) => column.nodes.length);
+  if (other.nodes.length) used.push(other);
+  const positions = new Map();
+  used.forEach((column, columnIndex) => {
+    const x = GRAPH_PAD + columnIndex * GRAPH_COL_W;
+    column.nodes.forEach((node, row) => {
+      positions.set(node.ref, {
+        x,
+        y: GRAPH_PAD + GRAPH_HEADER + row * (GRAPH_NODE_H + GRAPH_GAP),
+        node,
+      });
+    });
+  });
+  const tallest = Math.max(1, ...used.map((column) => column.nodes.length));
+  return {
+    columns: used,
+    positions,
+    width: GRAPH_PAD * 2 + used.length * GRAPH_COL_W,
+    height: GRAPH_PAD * 2 + GRAPH_HEADER + tallest * (GRAPH_NODE_H + GRAPH_GAP),
+  };
+}
+
+function graphEdgePath(x1, y1, x2, y2) {
+  const mid = (x1 + x2) / 2;
+  return `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
+}
+
+function renderGraph(data) {
+  const nodes = data.nodes || [];
+  if (!nodes.length) {
+    return "<p class='muted'>还没有依赖图。开工写出脚本后会出现。</p>";
+  }
+  const layout = layoutGraph(nodes);
+  const cy = GRAPH_NODE_H / 2;
+  const edges = [];
+  for (const node of nodes) {
+    for (const parent of node.depends_on || []) {
+      const from = layout.positions.get(parent);
+      const to = layout.positions.get(node.ref);
+      if (!from || !to) continue;
+      edges.push({
+        from: parent,
+        to: node.ref,
+        d: graphEdgePath(from.x + GRAPH_NODE_W, from.y + cy, to.x, to.y + cy),
+      });
+    }
+  }
+  const labels = layout.columns.map((column, index) => (
+    `<span class="graph-col-label" style="left:${GRAPH_PAD + index * GRAPH_COL_W}px;width:${GRAPH_NODE_W}px">${escapeHtml(column.label)}</span>`
+  )).join("");
+  const nodeButtons = nodes.map((node) => {
+    const pos = layout.positions.get(node.ref);
+    const title = graphNodeLabel(node);
+    const preview = (node.summary || "").trim();
+    const second = preview && preview !== title ? preview : "";
+    return `<button type="button" class="graph-node ${escapeHtml(node.status || "current")}${node.locked ? " is-locked" : ""}" data-ref="${escapeHtml(node.ref)}" style="left:${pos.x}px;top:${pos.y}px">
+      <small>${escapeHtml(kindLabels[node.kind] || node.kind)}</small>
+      <strong>${escapeHtml(title)}</strong>
+      ${second ? `<span class="graph-preview">${escapeHtml(second)}</span>` : ""}
+    </button>`;
+  }).join("");
+  const paths = edges.map((edge) => (
+    `<path data-from="${escapeHtml(edge.from)}" data-to="${escapeHtml(edge.to)}" d="${edge.d}" fill="none"></path>`
+  )).join("");
+  const kindLegend = Object.entries(data.kinds || {}).map(([kind, count]) => (
+    `<span>${escapeHtml(kindLabels[kind] || kind)} ${count}</span>`
+  )).join("");
+  return `<div class="graph-panel">
+    <div class="graph-meta">
+      <span>graph v${escapeHtml(String(data.graph_version ?? 0))} · ${nodes.length} 个节点</span>
+      <div class="graph-legend">${kindLegend}</div>
+    </div>
+    <div class="graph-workspace">
+      <div class="graph-scroll">
+        <div class="graph-board" style="width:${layout.width}px;height:${layout.height}px">
+          <svg class="graph-edges" width="${layout.width}" height="${layout.height}" viewBox="0 0 ${layout.width} ${layout.height}">${paths}</svg>
+          ${labels}
+          ${nodeButtons}
+        </div>
+      </div>
+      <aside class="graph-inspector" id="graphInspector">
+        <p class="muted">点一个节点，看这段讲什么、依赖谁。</p>
+      </aside>
+    </div>
+  </div>`;
+}
+
+function graphInspectorMarkup(node) {
+  if (!node) return `<p class="muted">点一个节点，看这段讲什么、依赖谁。</p>`;
+  const list = (refs) => refs.length
+    ? refs.map((ref) => `<button type="button" class="graph-link" data-ref="${escapeHtml(ref)}">${escapeHtml(ref)}</button>`).join("")
+    : `<span class="muted">无</span>`;
+  const details = (node.details || []).map((item) => (
+    `<div class="graph-detail"><dt>${escapeHtml(item.label)}</dt><dd>${escapeHtml(item.text)}</dd></div>`
+  )).join("");
+  const title = (node.title || "").trim() || node.ref;
+  return `<p class="eyebrow">${escapeHtml(kindLabels[node.kind] || node.kind)}</p>
+    <h3>${escapeHtml(title)}</h3>
+    <code class="graph-ref">${escapeHtml(node.ref)}</code>
+    <p class="graph-inspector-status"><span class="status-pill ${escapeHtml(node.status || "")}">${escapeHtml(node.status || "")}</span>${node.locked ? "<span class='status-pill'>已锁定</span>" : ""}</p>
+    ${details || `<p class="graph-body">${escapeHtml(node.summary || "还没有写入这段内容。")}</p>`}
+    <small>依赖</small>
+    <div class="graph-ref-list">${list(node.depends_on || [])}</div>
+    <small>被依赖</small>
+    <div class="graph-ref-list">${list(node.dependents || [])}</div>`;
+}
+
+function bindGraph(root, data) {
+  const byRef = new Map((data.nodes || []).map((node) => [node.ref, node]));
+  const inspector = root.querySelector("#graphInspector");
+  const select = (ref) => {
+    const node = byRef.get(ref) || null;
+    const related = new Set(node ? [node.ref, ...(node.depends_on || []), ...(node.dependents || [])] : []);
+    root.querySelectorAll(".graph-node").forEach((button) => {
+      const id = button.dataset.ref;
+      button.classList.toggle("is-focus", Boolean(node) && id === node.ref);
+      button.classList.toggle("is-related", Boolean(node) && related.has(id) && id !== node.ref);
+      button.classList.toggle("is-dim", Boolean(node) && !related.has(id));
+    });
+    root.querySelectorAll(".graph-edges path").forEach((path) => {
+      const active = Boolean(node) && (path.dataset.from === node.ref || path.dataset.to === node.ref);
+      path.classList.toggle("is-active", active);
+      path.classList.toggle("is-dim", Boolean(node) && !active);
+    });
+    if (inspector) inspector.innerHTML = graphInspectorMarkup(node);
+  };
+  root.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-ref]");
+    if (target?.dataset.ref) {
+      select(target.dataset.ref);
+      return;
+    }
+    if (!event.target.closest(".graph-inspector")) select(null);
+  });
+}
+
 async function openDrawer(kind) {
   const key = state.payload?.project_key;
   if (!key) {
     toast("还没有项目");
     return;
   }
-  const title = kind === "timeline" ? "统一媒体时间线" : "Task 历史";
-  $("#drawerTitle").textContent = title;
+  const titles = {
+    timeline: "统一媒体时间线",
+    tasks: "Task 历史",
+    graph: "依赖图",
+  };
+  $("#drawerTitle").textContent = titles[kind] || "详情";
   const body = $("#drawerBody");
   body.innerHTML = "<p class='muted'>加载中…</p>";
   $("#drawer").showModal();
@@ -424,6 +586,12 @@ async function openDrawer(kind) {
     if (kind === "tasks") {
       const data = await api(`/api/projects/${encodeURIComponent(key)}/tasks`);
       body.innerHTML = `<div class="task-list">${(data.chronological || []).map(taskMarkup).join("") || "<p class='muted'>还没有 Task。</p>"}</div>`;
+      return;
+    }
+    if (kind === "graph") {
+      const data = await api(`/api/projects/${encodeURIComponent(key)}/graph`);
+      body.innerHTML = renderGraph(data);
+      bindGraph(body, data);
       return;
     }
     const timeline = await api(`/api/projects/${encodeURIComponent(key)}/timeline`);

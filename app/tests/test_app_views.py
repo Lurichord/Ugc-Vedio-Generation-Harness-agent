@@ -18,6 +18,8 @@ def test_health_and_frontend_are_available() -> None:
     assert "已完成内容" in response.text
     assert "composerInput" in response.text
     assert "chat-dock" in response.text
+    assert "依赖图" in response.text
+    assert 'data-drawer="graph"' in response.text
 
 
 def test_intake_session_api_shape_and_continue_without_project() -> None:
@@ -74,6 +76,7 @@ def test_existing_projects_have_beat_task_and_timeline_views() -> None:
     stage = client.get(f"/api/projects/{project_key}/stages/narrative")
     task_history = client.get(f"/api/projects/{project_key}/tasks")
     timeline = client.get(f"/api/projects/{project_key}/timeline")
+    graph = client.get(f"/api/projects/{project_key}/graph")
 
     assert stage.status_code == 200
     assert stage.json()["beats"] or stage.json()["core_status"]
@@ -81,6 +84,12 @@ def test_existing_projects_have_beat_task_and_timeline_views() -> None:
     assert "chronological" in task_history.json()
     assert timeline.status_code == 200
     assert "tracks" in timeline.json()
+    assert graph.status_code == 200
+    assert "nodes" in graph.json()
+    assert "graph_version" in graph.json()
+    for node in graph.json()["nodes"]:
+        assert "content_hash" not in node
+        assert "dependency_hashes" not in node
     for project in projects:
         editorial = client.get(
             f"/api/projects/{project['path_key']}/stages/editorial"
@@ -96,6 +105,7 @@ def test_existing_projects_have_beat_task_and_timeline_views() -> None:
 def test_project_path_cannot_escape_outputs() -> None:
     client = TestClient(app)
     assert client.get("/api/projects/not-a-project/tasks").status_code == 404
+    assert client.get("/api/projects/not-a-project/graph").status_code == 404
 
 
 def test_asset_media_is_projected_before_timeline_stage_runs() -> None:
@@ -169,3 +179,67 @@ def test_planning_units_cover_drama_scenes_and_all_shots() -> None:
     assert len(shots) == 3
     assert shot_beat_id(shots[0]) == "sc1"
     assert shot_beat_id(shots[2]) == "sc2"
+
+
+def test_graph_projector_lists_nodes_without_hashes() -> None:
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from ugc_harness.harness.dependencies import DependencyGraph, NodeCommit
+    from ugc_harness.harness.description import Utterance, VideoWorld, VoiceDesign, WorldProp
+    from ugc_harness.harness.models import DependencyEdge, DependencyGraphState, ProductionState
+
+    from app.backend.graph_projector import GraphProjector
+
+    graph_state = DependencyGraph(DependencyGraphState())
+    graph_state.commit_batch(
+        task_id="t_narrative",
+        produced_by="narrative_agent",
+        commits=[
+            NodeCommit("prop:e1", "prop", "flour"),
+            NodeCommit("beat:b3", "beat", "beat three"),
+            NodeCommit(
+                "utterance:ss3",
+                "utterance",
+                "line three",
+                edges=(DependencyEdge(to="beat:b3", family="plot"),),
+            ),
+        ],
+    )
+    production = ProductionState(
+        world=VideoWorld(
+            props=[
+                WorldProp(prop_id="e1", name="面粉", description="中筋面粉 200g"),
+            ]
+        ),
+        voice=VoiceDesign(
+            utterances=[
+                Utterance(
+                    utterance_id="ss3",
+                    anchor_ref="beat:b3",
+                    text="先把面粉过筛。",
+                )
+            ]
+        ),
+    )
+    projects = SimpleNamespace(
+        read_state=lambda _path: SimpleNamespace(
+            dependency_graph=graph_state.state,
+            production=production,
+        )
+    )
+    view = GraphProjector(projects).view(Path("unused"))
+    refs = {node["ref"] for node in view["nodes"]}
+    assert view["node_count"] == 3
+    assert view["kinds"]["beat"] == 1
+    assert refs == {"prop:e1", "beat:b3", "utterance:ss3"}
+    prop = next(node for node in view["nodes"] if node["ref"] == "prop:e1")
+    assert prop["title"] == "面粉"
+    assert "中筋面粉" in prop["summary"]
+    utterance = next(node for node in view["nodes"] if node["ref"] == "utterance:ss3")
+    assert utterance["depends_on"] == ["beat:b3"]
+    assert utterance["title"] == "先把面粉过筛。"
+    assert any(item["text"] == "先把面粉过筛。" for item in utterance["details"])
+    for node in view["nodes"]:
+        assert "content_hash" not in node
+        assert "dependency_hashes" not in node

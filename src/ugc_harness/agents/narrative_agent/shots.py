@@ -17,6 +17,7 @@ from ...content import (
     ProductionShot,
     ScriptSegment,
     TimingSpec,
+    TutorialMaterial,
     TutorialShotPayload,
     TutorialVisualSpec,
     VideoWorldState,
@@ -44,7 +45,11 @@ def _unique_binds(*groups: list[str]) -> list[str]:
     return ordered
 
 
-def _mentioned_binds(world_state: VideoWorldState, *texts: str) -> list[str]:
+def _mentioned_binds(
+    world_state: VideoWorldState,
+    *texts: str,
+    materials: list[TutorialMaterial] | None = None,
+) -> list[str]:
     blob = "\n".join(text for text in texts if text)
     if not blob:
         return []
@@ -60,9 +65,12 @@ def _mentioned_binds(world_state: VideoWorldState, *texts: str) -> list[str]:
         prefix = _KIND_TO_PREFIX.get(entity.kind)
         if prefix is None:
             continue
-        candidates.append(
-            (entity.entity_id, entity.name, f"{prefix}:{entity.entity_id}")
-        )
+        ident = entity.entity_id
+        if prefix == "prop":
+            ident = _canonical_product_id(
+                entity.entity_id, entity.name, materials
+            )
+        candidates.append((entity.entity_id, entity.name, f"{prefix}:{ident}"))
     for entity_id, name, ref in candidates:
         if entity_id in blob or (len(name) >= 2 and name in blob):
             if ref not in seen:
@@ -73,6 +81,39 @@ def _mentioned_binds(world_state: VideoWorldState, *texts: str) -> list[str]:
 
 def _prop_ref(subject_ref: str) -> str:
     return subject_ref if subject_ref.startswith("prop:") else f"prop:{subject_ref}"
+
+
+def _canonical_product_id(
+    ident: str,
+    name: str | None,
+    materials: list[TutorialMaterial] | None,
+) -> str:
+    if not materials:
+        return ident
+    for item in materials:
+        if item.material_id == ident:
+            return ident
+    if name:
+        for item in materials:
+            if item.name == name:
+                return item.material_id
+    return ident
+
+
+def _subject_prop_ref(
+    subject_ref: str,
+    planning: TutorialPlanningArtifact,
+) -> str:
+    ident = subject_ref.partition(":")[2] if ":" in subject_ref else subject_ref
+    name = next(
+        (
+            item.name
+            for item in planning.world_state.entities
+            if item.entity_id == ident
+        ),
+        None,
+    )
+    return _prop_ref(_canonical_product_id(ident, name, planning.materials))
 
 
 def compile_tutorial_shots(
@@ -124,7 +165,11 @@ def compile_tutorial_shots(
                     *(f"utterance:{item}" for item in narration_ids),
                 ],
                 binds=_unique_binds(
-                    [_prop_ref(action.subject_ref)] if action.subject_ref else [],
+                    (
+                        [_subject_prop_ref(action.subject_ref, planning)]
+                        if action.subject_ref
+                        else []
+                    ),
                     mentioned,
                     _mentioned_binds(
                         planning.world_state,
@@ -132,6 +177,7 @@ def compile_tutorial_shots(
                         action.critical_detail or "",
                         action.subject_ref or "",
                         step.instruction,
+                        materials=planning.materials,
                     ),
                 ),
                 visual=TutorialVisualSpec(

@@ -6,12 +6,13 @@ from pathlib import Path
 from app.backend.beat_projector import BeatProjector
 from app.backend.intake_service import IntakeService
 from app.backend.intake_store import IntakeStore
-from app.backend.intake_workspace import IntakeWorkspaceStore
+from app.backend.intake_workspace import IntakeWorkspaceStore, set_gate
 from app.backend.jobs import JobManager
 from app.backend.production_view import ProductionView
 from app.backend.project_service import ProjectService
 from app.backend.repository import AppDataRepository
 from app.backend.review_service import ReviewService
+from app.backend.schemas import PendingGate
 from app.backend.stage_runner import StageRunner
 from tests.test_intake import _write_demo_project
 from ugc_harness.intake.host import append_message
@@ -81,6 +82,22 @@ def test_handle_message_persists_user_text_before_agent_runs(tmp_path: Path) -> 
     assert "想做咖啡教程" in spy.persisted
     assert any(item["content"] == "想做咖啡教程" for item in payload.messages)
     assert payload.reply == "记下了。"
+
+
+def test_handle_message_sends_continue_phrases_to_the_host(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    created = service.create_session()
+    spy = _StoreSpyAgent(service.store, created.session_id)
+    service._agent = spy
+    state = set_gate(
+        service.workspace.load(created.session_id),
+        PendingGate(kind="review", stage="narrative", question="可以继续做声音吗？"),
+    )
+    service.workspace.save(state)
+    payload = service.handle_message(created.session_id, "可以")
+    assert "可以" in spy.persisted
+    assert payload.reply == "记下了。"
+    assert any(item["content"] == "可以" for item in payload.messages)
 
 
 def test_attach_project_switches_chat_and_workspace(tmp_path: Path) -> None:

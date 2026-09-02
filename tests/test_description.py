@@ -235,6 +235,34 @@ def test_tutorial_description_result_utterances_and_continuity() -> None:
     )
 
 
+def test_tutorial_same_name_entity_does_not_duplicate_material() -> None:
+    artifact = _tutorial_artifact()
+    rice = next(
+        item for item in artifact.planning.materials if item.material_id == "mat_rice"
+    )
+    artifact.planning.world_state.entities.append(
+        WorldEntity(
+            entity_id="e_rice",
+            name=rice.name,
+            kind="product",
+            narrative_role="原料",
+            description="重复登记的糯米",
+        )
+    )
+    artifact.planning.actions[1].description = f"加入{rice.name}并压实"
+    artifact.shots = compile_tutorial_shots(artifact.planning, artifact.script)
+    description = build_video_description(artifact)
+    rice_props = [
+        item for item in description.world.props if item.name == rice.name
+    ]
+    assert [item.prop_id for item in rice_props] == ["mat_rice"]
+    fill = next(
+        shot for shot in description.shots if shot.spec.shot_id == "shot_action_fill"
+    )
+    assert "prop:mat_rice" in fill.spec.binds
+    assert "prop:e_rice" not in fill.spec.binds
+
+
 def test_identity_entities_enter_production_world() -> None:
     artifact = _drama_artifact()
     artifact.planning.world_state.entities.append(

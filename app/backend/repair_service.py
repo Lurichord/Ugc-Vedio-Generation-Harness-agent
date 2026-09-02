@@ -11,6 +11,7 @@ from ugc_harness.harness.repair import (
 )
 from ugc_harness.harness.stage_execution import run_repair_task
 from ugc_harness.intake.graph_view import resolve_graph_ref
+from ugc_harness.harness.shot_repair import resolve_shot_refs
 
 from .project_service import ProjectService
 from .repository import AppDataRepository
@@ -47,7 +48,8 @@ class RepairService:
             )
             if target is None:
                 raise ValueError("unknown repair target")
-            invalidated = invalidate_subgraph(state, [target])
+            seeds = resolve_shot_refs(state, [target]) or [target]
+            invalidated = invalidate_subgraph(state, seeds)
             write_project_state(project_dir, state)
             options = RunStageRequest()
 

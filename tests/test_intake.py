@@ -298,6 +298,35 @@ def test_agent_brief_update_writes_goal_from_confirmation() -> None:
     assert "包粽子" in result.session.working_brief.communication.goal
     assert result.message == "打算发哪个平台？"
     assert runtime.mcp_calls == []
+    assert [item["tool"] for item in runtime.tool_trace] == ["brief.update"]
+
+
+def test_recording_runtime_accumulates_host_and_mcp_tools() -> None:
+    runtime = _runtime(dry_run=True)
+    host, _, runtime = _host(
+        [
+            AgentDecision(tool="skill.activate", arguments={"name": "start-project"}),
+            AgentDecision(tool="brief.update", arguments={"topic": "包粽子"}),
+            AgentDecision(tool="harness.start_project"),
+            AgentDecision(message="dry-run 已收成任务书。"),
+        ],
+        runtime,
+    )
+    host.respond(
+        new_session(),
+        Inbound(
+            text=(
+                "主题是为什么测试很重要，目标是让观众理解测试能降低返工成本，"
+                "做讲解，一分半。开做吧。"
+            )
+        ),
+    )
+    assert [item["tool"] for item in runtime.tool_trace] == [
+        "skill.activate",
+        "brief.update",
+        "harness.start_project",
+    ]
+    assert runtime.mcp_calls == [("harness.start_project", {})]
 
 
 def test_brief_update_then_start_project_sees_new_goal() -> None:
@@ -688,8 +717,8 @@ def test_repair_resolves_description_ref_to_graph_node() -> None:
     assert preview["ok"] is True
     assert preview["dry_run"] is True
     assert preview["target_refs"] == ["beat:b3"]
-    assert "beat:b3" in preview["invalidated"]
-    assert "audio:ss3" in preview["invalidated"]
+    assert preview["shot_refs"] == ["shot:shot_b3"]
+    assert preview["invalidated"] == ["shot:shot_b3"]
     assert preview["planned_tasks"] >= 1
     assert (project_dir / "harness" / "project_state.json").read_text(
         encoding="utf-8"
@@ -720,13 +749,14 @@ def test_repair_runs_injected_executor_until_current() -> None:
     assert result["ok"] is True
     assert result["complete"] is True
     assert result["dry_run"] is False
-    assert ran[0] == "narrative_agent"
-    assert "voice_agent" in ran
+    assert result["shot_refs"] == ["shot:shot_b3"]
+    assert ran == ["narrative_agent"]
     from ugc_harness.harness.repair import load_project_state
 
     state = load_project_state(project_dir)
     for ref in result["invalidated"]:
         assert state.dependency_graph.nodes[ref].status == "current"
+    assert state.dependency_graph.nodes["beat:b3"].status == "current"
 
 
 def test_skill_catalog_and_activate() -> None:

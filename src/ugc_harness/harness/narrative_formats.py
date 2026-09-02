@@ -11,10 +11,12 @@ from ..agents.narrative_agent.models import (
     PlanningArtifact,
     TutorialPlanningArtifact,
 )
+from ..agents.instructions import load_instructions
 from .models import DependencySnapshot, TaskBudget, TaskEnvelope, TaskScope
 
 
 SUBMIT_CANDIDATE_TOOL = "narrative.submit_candidate"
+REPAIR_SUBMIT_TOOL = "repair.submit_candidate"
 
 
 class NarrativeFormatPack(Protocol):
@@ -275,7 +277,9 @@ class TutorialFormatPack:
                 "你正在运行 tutorial workflow。请自主选择工具来定义目标成品、材料、"
                 "操作步骤、补充讲解和 Procedure Shot。"
                 "成品和反复上手的材料/工具写入 world_state.entities（kind=product），"
-                "与 materials 使用同一套 id；不要为每颗螺丝建条。"
+                "与 materials 使用同一套 id；同一件东西只登记一次，"
+                "不要既写 materials 又另开一条同名 entity。"
+                "不要为每颗螺丝建条。"
                 "工具可以重复调用，不存在 Harness"
                 "规定的顺序。不要假设每一个步骤都需要口播。候选完整后主动调用"
                 "narrative.submit_candidate。"
@@ -360,20 +364,28 @@ def _create_repair_task(
     return task.model_copy(
         update={
             "task_id": task_id,
-            "goal": "局部重建失效的 narrative 节点，并保持修复范围之外的内容不变",
+            "goal": "按 instruction 微调圈中的 shot，不要重做整份规划",
             "scope": scope,
             "dependency_snapshot": dependency_snapshot,
+            "agent_instructions": load_instructions("shot_repair"),
+            "allowed_tools": [REPAIR_SUBMIT_TOOL],
+            "required_outputs": ["patches"],
             "forbidden_actions": [
                 *task.forbidden_actions,
                 "modify_outside_repair_scope",
-                "consume_stale_dependency",
-                "overwrite_locked_node",
+                "rewrite_identity_names",
+                "modify_readonly_neighbors",
             ],
             "acceptance_criteria": [
-                "所有 target_refs 重新变为 current",
-                "scope 外节点的语义 hash 不变",
-                "输出通过对应格式的 Narrative Critic",
+                "只改 editable 的 shot",
+                "交回每一个可写 shot 的补丁",
+                "shot_id / order / shot_kind / source_refs 不变",
             ],
+            "budget": TaskBudget(
+                max_steps=3,
+                max_retries=1,
+                fallback_policy="fail",
+            ),
         }
     )
 

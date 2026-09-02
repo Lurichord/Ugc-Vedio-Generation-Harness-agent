@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field as dataclass_field
@@ -70,6 +71,51 @@ class EnvironmentToolModel:
 
             self._model = StructuredLLM(LLMSettings.from_environment(None, None))
         return self._model.choose_tool(messages=messages, tools=tools)
+
+
+_MAX_LOG_CHARS = 2000
+
+
+def _log(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def _compact_json(value: Any, *, limit: int = _MAX_LOG_CHARS) -> str:
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def _log_tool(
+    agent: str,
+    event: str,
+    name: str,
+    *,
+    arguments: dict[str, Any] | None = None,
+    result: dict[str, Any] | None = None,
+    error: str | None = None,
+    duration_ms: int | None = None,
+) -> None:
+    parts = [f"[{agent}] {event} {name}"]
+    if arguments is not None:
+        parts.append(_compact_json(arguments))
+    if duration_ms is not None:
+        parts.append(f"{duration_ms}ms")
+    if error:
+        parts.append(f"error={error}")
+    elif result is not None:
+        if result.get("ok") is False and result.get("error"):
+            parts.append(f"ok=false error={result['error']}")
+        elif "ok" in result:
+            parts.append(f"ok={result['ok']}")
+        else:
+            keys = [str(key) for key in result]
+            if keys:
+                shown = ",".join(keys[:8])
+                extra = len(keys) - 8
+                parts.append(f"keys={shown}" + (f"+{extra}" if extra > 0 else ""))
+    _log(" ".join(parts))
 
 
 def failed_result(
@@ -301,10 +347,7 @@ class GenericAgent:
         kwargs: dict[str, Any],
     ) -> GenericAgentExecution:
         actions: list[ActionRecord] = []
-        print(
-            f"[{task.agent}] start task={task.task_id} format={task.format_id}",
-            flush=True,
-        )
+        _log(f"[{task.agent}] start task={task.task_id} format={task.format_id}")
         submit_tool = _submit_tool_for(task)
         context = (
             self.context_builder(task, kwargs)
@@ -356,10 +399,7 @@ class GenericAgent:
                 while candidate is None:
                     if len(actions) >= task.budget.max_steps:
                         raise RuntimeError("task step budget exhausted")
-                    print(
-                        f"[{task.agent}] step={len(actions) + 1} choosing tool",
-                        flush=True,
-                    )
+                    _log(f"[{task.agent}] step={len(actions) + 1} choosing tool")
                     decision = self.tool_model.choose_tool(
                         messages=messages,
                         tools=model_tools,
@@ -370,7 +410,7 @@ class GenericAgent:
                             f"model selected unavailable tool: {decision.name}"
                         )
                     arguments = dict(decision.arguments)
-                    print(f"[{task.agent}] call {active_name}", flush=True)
+                    _log_tool(task.agent, "call", active_name, arguments=arguments)
                     messages.append(decision.assistant_message())
                     started = time.perf_counter()
                     try:
@@ -379,9 +419,14 @@ class GenericAgent:
                         actions.append(
                             _action(task, actions, active_name, "failed", str(exc), started)
                         )
-                        print(
-                            f"[{task.agent}] failed {active_name}: {exc}",
-                            flush=True,
+                        _log_tool(
+                            task.agent,
+                            "failed",
+                            active_name,
+                            error=str(exc),
+                            duration_ms=round(
+                                (time.perf_counter() - started) * 1000
+                            ),
                         )
                         messages.append(
                             {
@@ -407,7 +452,13 @@ class GenericAgent:
                     actions.append(
                         _action(task, actions, active_name, "success", None, started)
                     )
-                    print(f"[{task.agent}] success {active_name}", flush=True)
+                    _log_tool(
+                        task.agent,
+                        "done",
+                        active_name,
+                        result=value,
+                        duration_ms=round((time.perf_counter() - started) * 1000),
+                    )
                     messages.append(
                         {
                             "role": "tool",
@@ -422,7 +473,7 @@ class GenericAgent:
                     if active_name == submit_tool:
                         candidate = self.candidate_type.model_validate(value)
                         _validate_candidate(task, candidate)
-                        print(f"[{task.agent}] candidate submitted", flush=True)
+                        _log(f"[{task.agent}] candidate submitted")
                     else:
                         board.apply_tool_result(active_name, value)
                         messages.append(

@@ -54,10 +54,11 @@ def test_repair_service_drives_the_same_loop(tmp_path: Path) -> None:
     assert stored.resolved_at
     assert runner.calls[0][0] == "narrative"
     assert runner.calls[0][1] == "收成两句"
-    assert any(stage == "voice" for stage, _feedback, _refs in runner.calls)
+    assert runner.calls[0][2] == ["shot:shot_b3"]
+    assert all(stage != "voice" for stage, _feedback, _refs in runner.calls)
     state = load_project_state(project_dir)
     assert state.dependency_graph.nodes["beat:b3"].status == "current"
-    assert state.dependency_graph.nodes["audio:ss3"].status == "current"
+    assert state.dependency_graph.nodes["shot:shot_b3"].status == "current"
 
 
 def test_repair_service_reopens_feedback_when_runner_fails(tmp_path: Path) -> None:

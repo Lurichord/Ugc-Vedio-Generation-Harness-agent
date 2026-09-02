@@ -157,6 +157,7 @@ def _world(artifact: NarrativeArtifact) -> VideoWorld:
     seen_cast = {member.character_id for member in cast}
     seen_places = {item.place_id for item in places}
     seen_props = {item.prop_id for item in props}
+    seen_prop_names = {item.name for item in props}
     for entity in world_state.entities:
         if entity.kind == "person" and entity.entity_id not in seen_cast:
             cast.append(
@@ -177,7 +178,11 @@ def _world(artifact: NarrativeArtifact) -> VideoWorld:
                 )
             )
             seen_places.add(entity.entity_id)
-        elif entity.kind == "product" and entity.entity_id not in seen_props:
+        elif (
+            entity.kind == "product"
+            and entity.entity_id not in seen_props
+            and entity.name not in seen_prop_names
+        ):
             props.append(
                 WorldProp(
                     prop_id=entity.entity_id,
@@ -186,6 +191,7 @@ def _world(artifact: NarrativeArtifact) -> VideoWorld:
                 )
             )
             seen_props.add(entity.entity_id)
+            seen_prop_names.add(entity.name)
     return VideoWorld(
         cast=cast,
         props=props,

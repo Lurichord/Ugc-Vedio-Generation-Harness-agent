@@ -12,6 +12,7 @@ from ugc_harness.intake.models import IntakeSession
 from ugc_harness.intake.tools import (
     DESCRIPTION_GET_ELEMENT,
     DESCRIPTION_LIST_OUTLINE,
+    IDENTITY_UPDATE,
     HARNESS_INSPECT,
     HARNESS_LIST_GRAPH,
     HARNESS_REPAIR,
@@ -40,6 +41,8 @@ class DirectIntakeMcpChannel:
             return intake_mcp.description_list_outline()
         if name == DESCRIPTION_GET_ELEMENT:
             return intake_mcp.description_get_element(str(args.get("ref") or ""))
+        if name == IDENTITY_UPDATE:
+            return intake_mcp.identity_update(patches=args.get("patches"))
         if name == HARNESS_INSPECT:
             return intake_mcp.harness_inspect()
         if name == HARNESS_LIST_GRAPH:
@@ -72,6 +75,7 @@ class RecordingIntakeRuntime(IntakeMcpRuntime):
     ) -> None:
         super().__init__(session_path, dry_run=dry_run, output_root=output_root)
         self.mcp_calls: list[tuple[str, dict[str, Any]]] = []
+        self.tool_trace: list[dict[str, Any]] = []
         self._direct = DirectIntakeMcpChannel()
 
     @asynccontextmanager
@@ -89,7 +93,11 @@ class RecordingIntakeRuntime(IntakeMcpRuntime):
         args = arguments or {}
         if name in INTAKE_MCP_TOOLS:
             self.mcp_calls.append((name, args))
-        return await super().call(name, arguments)
+        result = await super().call(name, arguments)
+        self.tool_trace.append(
+            {"tool": name, "arguments": args, "result": result}
+        )
+        return result
 
 
 def make_recording_runtime(*, dry_run: bool = True) -> RecordingIntakeRuntime:

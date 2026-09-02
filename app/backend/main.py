@@ -32,6 +32,7 @@ from .schemas import (
     TaskEvent,
 )
 from .stage_runner import StageRunner
+from .graph_projector import GraphProjector
 from .task_projector import TaskProjector
 from .timeline_projector import TimelineProjector
 
@@ -43,6 +44,7 @@ reviews = ReviewService(repository)
 beats = BeatProjector(projects, reviews)
 tasks = TaskProjector(projects, repository)
 timeline = TimelineProjector(projects)
+graph = GraphProjector(projects)
 runner = StageRunner(config.output_root)
 repairs = RepairService(projects, repository, runner)
 jobs = JobManager()
@@ -286,6 +288,11 @@ def task_history(project_key: str):
 @app.get("/api/projects/{project_key}/timeline")
 def unified_timeline(project_key: str):
     return timeline.view(project_or_404(project_key))
+
+
+@app.get("/api/projects/{project_key}/graph")
+def dependency_graph(project_key: str):
+    return graph.view(project_or_404(project_key))
 
 
 @app.get("/api/projects/{project_key}/media/{media_path:path}")

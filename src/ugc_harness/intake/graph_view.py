@@ -6,6 +6,7 @@ from typing import Any
 
 from ..harness.dependency_builders import CONTENT_ROOT_PREFIXES
 from ..harness.models import DependencyGraphState, DependencyNode, ProjectState
+from .description_view import get_element
 
 _DESCRIPTION_ALIASES: dict[str, tuple[str, ...]] = {
     "beat": ("planned_beat", "realized_beat"),
@@ -52,10 +53,52 @@ def resolve_graph_ref(nodes: dict[str, DependencyNode], ref: str) -> str | None:
     return None
 
 
+def identity_refs_named(
+    nodes: dict[str, DependencyNode],
+    production: Any | None,
+    name: str,
+) -> list[str]:
+    if production is None:
+        return []
+    wanted = name.strip()
+    if not wanted:
+        return []
+    world = getattr(production, "world", None)
+    if world is None:
+        return []
+    candidates = [
+        *(
+            f"cast:{item.character_id}"
+            for item in getattr(world, "cast", [])
+            if _item_name(item) == wanted
+        ),
+        *(
+            f"prop:{item.prop_id}"
+            for item in getattr(world, "props", [])
+            if _item_name(item) == wanted
+        ),
+        *(
+            f"place:{item.place_id}"
+            for item in getattr(world, "places", [])
+            if _item_name(item) == wanted
+        ),
+    ]
+    return [ref for ref in candidates if ref in nodes]
+
+
+def _item_name(item: Any) -> str:
+    value = getattr(item, "name", None)
+    return value.strip() if isinstance(value, str) else ""
+
+
+_IDENTITY_PREFIXES = ("cast:", "prop:", "place:")
+
+
 def dump_node(
     node: DependencyNode,
     *,
     edge_refs: set[str] | None = None,
+    production: Any | None = None,
 ) -> dict[str, Any]:
     depends_on = list(node.depends_on)
     dependents = list(node.dependents)
@@ -77,6 +120,9 @@ def dump_node(
             for edge in node.edges
             if edge_refs is None or edge.to in edge_refs
         ]
+    name = _identity_name(production, node.ref)
+    if name:
+        payload["name"] = name
     return payload
 
 
@@ -88,10 +134,30 @@ def list_graph(
     if graph is None:
         return {"ok": False, "error": "找不到 dependency_graph"}
     nodes = graph.nodes
+    production = _production(state)
     focus = (around_ref or "").strip() or None
     if focus is None:
-        return _content_root_overview(nodes)
-    return _neighborhood(nodes, focus)
+        return _content_root_overview(nodes, production)
+    return _neighborhood(nodes, focus, production)
+
+
+def _production(state: ProjectState | DependencyGraphState | None) -> Any | None:
+    if isinstance(state, ProjectState):
+        return state.production
+    return None
+
+
+def _identity_name(production: Any | None, ref: str) -> str | None:
+    if production is None or not ref.startswith(_IDENTITY_PREFIXES):
+        return None
+    current = get_element(production, ref)
+    element = (current or {}).get("element")
+    if not isinstance(element, dict):
+        return None
+    name = element.get("name")
+    if isinstance(name, str) and name.strip():
+        return name
+    return None
 
 
 def _graph_state(
@@ -104,12 +170,23 @@ def _graph_state(
     return state.dependency_graph
 
 
-def _content_root_overview(nodes: dict[str, DependencyNode]) -> dict[str, Any]:
+def _content_root_overview(
+    nodes: dict[str, DependencyNode],
+    production: Any | None,
+) -> dict[str, Any]:
     root_refs = {ref for ref in nodes if ref.startswith(CONTENT_ROOT_PREFIXES)}
-    dumped = [
-        dump_node(nodes[ref], edge_refs=root_refs)
-        for ref in sorted(root_refs)
-    ]
+    dumped = []
+    for ref in sorted(root_refs):
+        if ref.startswith(_IDENTITY_PREFIXES):
+            dumped.append(dump_node(nodes[ref], production=production))
+        else:
+            dumped.append(
+                dump_node(
+                    nodes[ref],
+                    edge_refs=root_refs,
+                    production=production,
+                )
+            )
     return {
         "ok": True,
         "scope": "roots",
@@ -117,19 +194,36 @@ def _content_root_overview(nodes: dict[str, DependencyNode]) -> dict[str, Any]:
     }
 
 
-def _neighborhood(nodes: dict[str, DependencyNode], around_ref: str) -> dict[str, Any]:
+def _neighborhood(
+    nodes: dict[str, DependencyNode],
+    around_ref: str,
+    production: Any | None,
+) -> dict[str, Any]:
     resolved = resolve_graph_ref(nodes, around_ref)
-    if resolved is None:
-        tried = candidate_graph_refs(around_ref)
-        return {
-            "ok": False,
-            "error": f"图上没有 {around_ref}",
-            "tried": tried,
-        }
-    center = nodes[resolved]
-    neighbor_refs = set(center.depends_on) | set(center.dependents)
-    selected = [resolved, *sorted(neighbor_refs)]
-    dumped = [dump_node(nodes[ref], edge_refs=set(selected)) for ref in selected]
+    centers: list[str]
+    if resolved is not None:
+        centers = [resolved]
+    else:
+        centers = identity_refs_named(nodes, production, around_ref)
+        if not centers:
+            tried = candidate_graph_refs(around_ref)
+            return {
+                "ok": False,
+                "error": f"图上没有 {around_ref}",
+                "tried": tried,
+            }
+        resolved = centers[0]
+    neighbor_refs: set[str] = set()
+    for ref in centers:
+        center = nodes[ref]
+        neighbor_refs.update(center.depends_on)
+        neighbor_refs.update(center.dependents)
+    selected = list(dict.fromkeys([*centers, *sorted(neighbor_refs)]))
+    dumped = [
+        dump_node(nodes[ref], edge_refs=set(selected), production=production)
+        for ref in selected
+        if ref in nodes
+    ]
     payload: dict[str, Any] = {
         "ok": True,
         "scope": "neighborhood",
@@ -139,4 +233,6 @@ def _neighborhood(nodes: dict[str, DependencyNode], around_ref: str) -> dict[str
     }
     if around_ref != resolved:
         payload["resolved_from"] = around_ref
+    if len(centers) > 1:
+        payload["resolved_refs"] = centers
     return payload

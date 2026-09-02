@@ -17,11 +17,13 @@ from ..intake.actions import (
     repair_description,
     start_project,
 )
+from ..intake.identity import update_identity
 from ..intake.models import IntakeSession
 from ..intake.tools import (
     CONFIGURE_SESSION,
     DESCRIPTION_GET_ELEMENT,
     DESCRIPTION_LIST_OUTLINE,
+    IDENTITY_UPDATE,
     HARNESS_INSPECT,
     HARNESS_LIST_GRAPH,
     HARNESS_REPAIR,
@@ -40,10 +42,9 @@ mcp = MCPServer(
     "ugc-intake",
     version="1.0.0",
     instructions=(
-        "Intent-layer tools only: read one description element or a slim "
-        "dependency graph, then dispatch harness start/inspect/repair. Does "
-        "not write working_brief and does not expose narrative.* or stage "
-        "submit_candidate tools."
+        "Intent-layer tools only: read description or a slim graph, update "
+        "identity, then dispatch start/inspect/repair. Does not write "
+        "working_brief and does not expose narrative.* tools."
     ),
 )
 
@@ -101,6 +102,15 @@ def description_list_outline() -> dict[str, Any]:
 @mcp.tool(name=DESCRIPTION_GET_ELEMENT, structured_output=True)
 def description_get_element(ref: str) -> dict[str, Any]:
     return get_description_element(_load_session(), ref)
+
+
+@mcp.tool(name=IDENTITY_UPDATE, structured_output=True)
+def identity_update(
+    patches: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    session, result = update_identity(_load_session(), patches)
+    _save_session(session)
+    return result
 
 
 @mcp.tool(name=HARNESS_INSPECT, structured_output=True)

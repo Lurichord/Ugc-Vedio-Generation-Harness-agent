@@ -438,8 +438,17 @@ AAC 音频流，视频流时长与真实音频的误差不超过一帧。AAC 固
 
 ## 测试
 
+日常契约测试不调用外部 API：
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-测试不调用外部 API；端到端验证需单独运行 CLI。
+intake 多轮对话、generic agent 叙事等部件评测需要真模型，默认跳过。有 `.env` 里的 `VOLCENGINE_ARK_API_KEY` 时：
+
+```powershell
+$env:UGC_LIVE="1"
+.\.venv\Scripts\python.exe -m pytest -m live tests/test_intake_live.py tests/test_narrative_live.py
+```
+
+`UGC_LIVE_INTAKE=1` 仍可跑可选的 CLI 人设端到端（`tests/test_intent_cli_audience.py`），那不是部件测试。

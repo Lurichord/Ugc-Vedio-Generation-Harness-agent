@@ -75,13 +75,14 @@ brief 和 intent 打架时问用户以谁为准，不要默默覆盖。
 
 - `description.list_outline`：列出大纲，只要 id 和标题。无参，`arguments` 为 `{}`
 - `description.get_element`：读一个元素。`arguments`：`{"ref": "beat:b3"}`
+- `identity.update`：按内容改已有身份。`ref` 可以是图上的 `prop:m1`，也可以是当前名字（`转化糖浆`）。同名身份一起改字段，id 不变，不要新建、不要改 `binds`。`arguments`：`{"patches": [{"ref": "转化糖浆", "name": "蜂蜜"}]}`
+- `harness.list_graph`：读精简依赖图。无参返回内容根，身份节点带 `name` 和 `dependents`。`arguments` 为 `{}`；带焦点时 `arguments`：`{"around_ref": "prop:m1"}`。先 `skill.activate` `inspect-graph`（或点名了某一段时用 `revise-segment`）。
+- `harness.repair`：把圈中的 shot 交给制作 agent 微调。换身份先 `identity.update`，`target_refs` 用返回的 `changed_refs` 或相关 `shot:`。`arguments`：`{"target_refs": ["prop:m1"], "instruction": "画面按蜂蜜来"}`
 
 派制作：
 
 - `harness.start_project`：只按当前 memory 里的 `working_brief` 开做。无参，`arguments` 为 `{}`。本拍必须先 `skill.activate` `start-project`，且「开工前」每一条都不是 null，才允许调用。
 - `harness.inspect`：刷新 progress。无参，`arguments` 为 `{}`。先 `skill.activate` `inspect-progress`。
-- `harness.list_graph`：读精简依赖图。无参只返回内容根（`cast` / `prop` / `place` / `beat` / `scene` / `step`），`arguments` 为 `{}`；带焦点时 `arguments`：`{"around_ref": "beat:b3"}`，只返回该节点及一跳邻居。先 `skill.activate` `inspect-graph`（或点名了某一段时用 `revise-segment`）。
-- `harness.repair`：只定位，不自己改字。先读图选定节点，再 repair。`arguments`：`{"target_refs": ["beat:b3"], "instruction": "收成两句"}`
 
 ## 谁写 brief
 
@@ -106,7 +107,9 @@ brief 和 intent 打架时问用户以谁为准，不要默默覆盖。
 - `working_brief.target.platform` 不是 null、不是空字符串
 - `working_brief.target.duration_target_ms` 不是 null
 
-用户已经答应，但 JSON 仍是 null：先 `brief.update`，再决定问下一件还是开工。不要反复问「登记了吗」。
+用户已经答应，但 JSON 仍是 null：先 `brief.update`，再决定问下一件还是复述整份任务书。不要反复问「登记了吗」。
+
+五项都齐了：先用人话把主题、目标、观众、平台、时长复述一遍，问能不能按这个开做脚本。用户还没对这句复述点头时，禁止 `harness.start_project`。
 
 语气、出镜、画幅、语言不是开工必要条件，没提可空。
 
@@ -119,8 +122,8 @@ brief 和 intent 打架时问用户以谁为准，不要默默覆盖。
 - 不要为了少调一次工具而跳过 `skill.activate`，直接 `harness.start_project`。
 - 已经有项目且 narrative 在跑或已就绪时，不要重复 `start_project`。
 - 用户改口改的是诉求：先 `brief.update` 覆盖，再 `skill.activate` `user-revises`。不要去改镜头。
-- 要改已经做出来的内容：先 `inspect-graph`，用 `harness.list_graph` 拿到要改的图，再决定 `target_refs`，再 `harness.repair`。用户已经点名「第几段」时走 `revise-segment`。不要自己算下游重跑。
-- 还没有项目时不要调 `description.*` / `harness.inspect` / `harness.list_graph` / `harness.repair`，它们读不到东西。
+- 要改已经做出来的内容：先 `inspect-graph`，用 `harness.list_graph` 读图。身份节点看 `name` 和 `dependents`。换人/换物/换地先 `identity.update`（`ref` 用当前名字，id 不变，不要新建、不要改 `binds`），再把返回的 `changed_refs` 交给 `harness.repair`。用户已经点名「第几段」时走 `revise-segment`。不要自己改正文，不要自己算下游重跑。
+- 还没有项目时不要调 `description.*` / `identity.update` / `harness.inspect` / `harness.list_graph` / `harness.repair`，它们读不到东西。
 
 ## 输出格式
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Callable
 
@@ -12,8 +11,6 @@ from ugc_harness.agents.narrative_agent.brief import make_brief
 from ugc_harness.agents.narrative_agent.models import (
     CreativeBrief,
     NarrativeArtifact,
-    PlanningArtifact,
-    ScriptArtifact,
 )
 from ugc_harness.agents.render_agent.capabilities import RenderCapabilities
 from ugc_harness.agents.timeline_agent.models import TimelineArtifact
@@ -149,62 +146,20 @@ class StageRunner:
         self, project_dir: Path, options: RunStageRequest,
         task: TaskEnvelope | None, feedback: str | None,
     ) -> None:
+        if task is not None and task.scope.target_refs:
+            from ugc_harness.harness.shot_repair import run_shot_repair
+
+            run_shot_repair(project_dir, task, feedback or "")
+            return
         current = NarrativeArtifact.model_validate_json(
             (project_dir / "narrative_artifact.json").read_text(encoding="utf-8")
         )
         state = self._state(project_dir)
         settings = LLMSettings.from_environment(None, options.model)
-        baselines: dict[object, tuple[str, str]] = {}
-        scope_note: str | None = None
-        if task is not None and task.scope.target_refs:
-            def compact(model: object) -> str:
-                return json.dumps(
-                    model.model_dump(mode="json"),  # type: ignore[attr-defined]
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
-
-            baselines = {
-                PlanningArtifact: ("PlanningArtifact", compact(current.planning)),
-                ScriptArtifact: ("ScriptArtifact", compact(current.script)),
-            }
-            scope = task.scope
-            editable_beats = sorted(
-                ref.split(":", 1)[1]
-                for ref in scope.target_refs
-                if ref.startswith(("beat:", "planned_beat:", "scene:", "step:"))
-            )
-            editable_segments = sorted(
-                ref.split(":", 1)[1]
-                for ref in scope.target_refs
-                if ref.startswith(("utterance:", "script_segment:"))
-            )
-            plan_rule = (
-                f"允许修改的 beat 仅限 {editable_beats}，其余"
-                if editable_beats
-                else "没有任何 beat / scene / step 允许修改，整个 PlanningArtifact"
-            )
-            script_rule = (
-                f"只能改写 utterance {editable_segments} 的 text 与 delivery_hint"
-                "（speech_act 必须保持基准原值），其余 segment 以及 script_version、"
-                "title_options 必须逐字保持基准原样。"
-                if editable_segments
-                else "整个 ScriptArtifact 必须逐字复现基准。"
-            )
-            scope_note = (
-                "本次修复只有以下内容节点允许发生变化："
-                f"{scope.target_refs}。"
-                f"生成 PlanningArtifact 时：{plan_rule}必须逐字复现基准，"
-                "包括 semantic_goal、visual_intent_hint 在内的每个字段都不得改动。"
-                f"生成 ScriptArtifact 时：{script_rule}"
-            )
         generation_context = {
             "instruction": feedback,
-            "scope_note": scope_note,
-            "baselines": {
-                output_type.__name__: {"label": label, "payload": payload}
-                for output_type, (label, payload) in baselines.items()
-            },
+            "scope_note": None,
+            "baselines": {},
         }
         run = NarrativeHarnessController.from_mcp(
             StructuredLLM(settings),

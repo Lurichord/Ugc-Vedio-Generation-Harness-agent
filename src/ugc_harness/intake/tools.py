@@ -9,6 +9,7 @@ from .skills import list_skills, load_skill
 
 DESCRIPTION_LIST_OUTLINE = "description.list_outline"
 DESCRIPTION_GET_ELEMENT = "description.get_element"
+IDENTITY_UPDATE = "identity.update"
 HARNESS_START_PROJECT = "harness.start_project"
 HARNESS_INSPECT = "harness.inspect"
 HARNESS_LIST_GRAPH = "harness.list_graph"
@@ -20,6 +21,7 @@ CONFIGURE_SESSION = "intake.configure_session"
 INTAKE_MCP_TOOLS = (
     DESCRIPTION_LIST_OUTLINE,
     DESCRIPTION_GET_ELEMENT,
+    IDENTITY_UPDATE,
     HARNESS_START_PROJECT,
     HARNESS_INSPECT,
     HARNESS_LIST_GRAPH,
@@ -45,6 +47,38 @@ def mcp_tool_specs() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": IDENTITY_UPDATE,
+            "description": (
+                "按内容改已有身份节点的字段，id 不变。"
+                "ref 可以是图上的 cast:/prop:/place:，也可以是当前 name（如 转化糖浆）。"
+                "同名身份视为同一件东西，一起改。"
+                "不要新建节点，不要改 shot.binds。"
+                "改完用返回的 changed_refs 做 harness.repair。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patches": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "ref": {"type": "string"},
+                                "name": {"type": "string"},
+                                "description": {"type": "string"},
+                                "appearance": {"type": "string"},
+                            },
+                            "required": ["ref"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["patches"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": HARNESS_START_PROJECT,
             "description": "按当前 working_brief 开工。缺 topic 或 goal 会失败。",
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
@@ -57,8 +91,8 @@ def mcp_tool_specs() -> list[dict[str, Any]]:
         {
             "name": HARNESS_LIST_GRAPH,
             "description": (
-                "读取精简依赖图。无参只返回内容根节点"
-                "（cast/prop/place/beat/scene/step）；"
+                "读取精简依赖图。无参返回内容根"
+                "（cast/prop/place/beat/scene/step），身份根带 name 和 dependents（含 shot）。"
                 "around_ref 返回该节点及一跳邻居。不含 hash。"
             ),
             "parameters": {
@@ -69,7 +103,10 @@ def mcp_tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": HARNESS_REPAIR,
-            "description": "弄脏 target_refs 及其下游，并拉起制作 agent 按 instruction 修复。",
+            "description": (
+                "把圈中的 shot 交给 generic agent 按 instruction 微调。"
+                "换身份时先 identity.update；target_refs 可填身份 ref 或 shot。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

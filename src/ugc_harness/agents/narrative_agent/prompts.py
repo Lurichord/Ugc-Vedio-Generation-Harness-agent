@@ -141,7 +141,7 @@ CreativeBrief:
 {brief.model_dump_json(indent=2)}
 
 硬性要求：
-- {_identity_roster_rules("教程登记成品和反复上手的材料/工具；不要为每颗螺丝建条。materials 与 kind=product 的 entity 使用同一套 id。")}
+- {_identity_roster_rules("教程登记成品和反复上手的材料/工具；不要为每颗螺丝建条。materials 与 kind=product 的 entity 使用同一套 id；同一件东西只登记一次，不要既写 materials 又另开一条同名 entity。")}
 - objective 必须描述观众最终能做出的具体成品或可验证结果。
 - 列出必要材料、数量和工具；不要把可选装饰写成必需品。
 - world_state 维护成品、材料、工具和关键状态，事实不确定时标记为 to_verify。

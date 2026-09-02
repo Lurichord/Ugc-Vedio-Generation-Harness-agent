@@ -37,3 +37,6 @@ ugc_harness = ["**/*.md"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "live: hits a real LLM; skipped unless UGC_LIVE=1 and an API key is set",
+]

@@ -19,6 +19,7 @@ from ..harness.repair import (
 )
 from .description_view import get_element, list_outline
 from .graph_view import list_graph, resolve_graph_ref
+from ..harness.shot_repair import resolve_shot_refs
 from .models import IntakeSession
 from .view import (
     apply_state_to_session,
@@ -173,9 +174,11 @@ def repair_description(
             "error": "；".join(item["reason"] for item in missing),
             "blockers": missing,
         }
+    shot_refs = resolve_shot_refs(state, graph_refs)
+    seeds = shot_refs or graph_refs
     try:
         working = state.model_copy(deep=True)
-        invalidated = invalidate_subgraph(working, graph_refs)
+        invalidated = invalidate_subgraph(working, seeds)
     except ValueError as exc:
         return session, {"ok": False, "error": str(exc), "target_refs": graph_refs}
     preview = RepairScheduler().plan(working, invalidated)
@@ -189,17 +192,19 @@ def repair_description(
         }
     preview_payload = {
         "target_refs": graph_refs,
+        "shot_refs": shot_refs,
         "invalidated": invalidated,
         "planned_tasks": len(preview.tasks),
         "complete": preview.complete,
     }
     if dry_run:
+        circled = ", ".join(shot_refs or graph_refs)
         return session, {
             "ok": True,
             "dry_run": True,
             **preview_payload,
             "text": (
-                f"dry-run：将修复 {', '.join(graph_refs)}，"
+                f"dry-run：将把 {circled} 交给 generic agent，"
                 f"弄脏 {len(invalidated)} 个节点，首轮 {len(preview.tasks)} 个任务。"
             ),
         }
@@ -209,7 +214,7 @@ def repair_description(
             "error": "harness.repair 执行器未接线",
             **preview_payload,
         }
-    invalidate_subgraph(state, graph_refs)
+    invalidate_subgraph(state, seeds)
     write_project_state(project_dir, state)
     try:
         result = drive_repair(
@@ -228,10 +233,12 @@ def repair_description(
     session = refresh_session_from_disk(session)
     payload = result.model_dump(mode="json")
     payload["target_refs"] = graph_refs
+    payload["shot_refs"] = shot_refs
     payload["invalidated"] = invalidated
     if result.ok:
+        circled = ", ".join(shot_refs or graph_refs)
         payload["text"] = (
-            f"repair 完成。已按指令改 {', '.join(graph_refs)}，"
+            f"repair 完成。已按指令改 {circled}，"
             f"跑了 {len(result.tasks_run)} 个任务。"
             f"{format_progress(session.progress)}"
         )
@@ -239,6 +246,7 @@ def repair_description(
     else:
         payload["error"] = result.error or "repair 未完成"
     return session, payload
+
 
 
 def _already_started(session: IntakeSession) -> bool:
@@ -257,11 +265,18 @@ def _description_or_error(session: IntakeSession) -> Any:
 
 
 def execute_start_project(brief: CreativeBrief, output_root: Path) -> Path:
+    import sys
+
     from ..harness.controller import NarrativeHarnessController
     from ..shared.artifacts import ArtifactWriter
     from ..shared.llm import StructuredLLM
     from ..shared.settings import LLMSettings
 
+    print(
+        f"start_project: 正在跑叙事 harness → {output_root}（通常要几分钟，会先出 [narrative] 日志）",
+        file=sys.stderr,
+        flush=True,
+    )
     settings = LLMSettings.from_environment(None, None)
     run = NarrativeHarnessController.from_mcp(
         StructuredLLM(settings),
@@ -270,4 +285,9 @@ def execute_start_project(brief: CreativeBrief, output_root: Path) -> Path:
     writer = ArtifactWriter(output_root)
     project_dir, _ = writer.write(run.artifact)
     writer.write_narrative_run(project_dir, run.record)
+    print(
+        f"start_project: 完成 {project_dir}",
+        file=sys.stderr,
+        flush=True,
+    )
     return project_dir

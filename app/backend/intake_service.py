@@ -94,18 +94,7 @@ class IntakeService:
 
     def handle_message(self, session_id: str, message: str) -> IntakeMessageResponse:
         session = self.store.load(session_id)
-        state = self._sync_workspace(session)
         text = message.strip()
-        gate = state.pending_gate
-        if gate and gate.kind == "running":
-            state = self.workspace.add_notice(state, text, role="user")
-            state = self.workspace.add_notice(
-                state,
-                f"{STAGE_LABELS.get(gate.stage or 'narrative', '制作')}还在跑，先看右侧进度。",
-            )
-            return self._turn_payload(session, state, state.notices[-1].content, job_id=gate.job_id)
-        if gate and gate.kind == "review" and _wants_continue(text):
-            return self.continue_production(session_id, user_text=text)
         session = record_user_text(session, text)
         self.store.save(session)
         result = self._host(session_id).respond(session, Inbound(text=text))
@@ -113,15 +102,10 @@ class IntakeService:
         state = self._sync_workspace(result.session)
         if state.project_key:
             self.project_sessions.bind(state.project_key, result.session.session_id)
-        reply = result.message
-        if state.pending_gate and state.pending_gate.kind == "review":
-            if not any(item.content == state.pending_gate.question for item in state.notices):
-                state = self.workspace.add_notice(state, state.pending_gate.question)
-            reply = f"{reply}\n\n{state.pending_gate.question}"
         return self._turn_payload(
             result.session,
             state,
-            reply,
+            result.message,
             done=result.done,
         )
 
@@ -510,8 +494,6 @@ class IntakeService:
         reply = extra.get("reply")
         if reply is None:
             reply = session.last_message or ""
-            if state.pending_gate and state.pending_gate.kind in {"review", "done"}:
-                reply = state.pending_gate.question
         return {
             "session_id": session.session_id,
             "status": session.status,
