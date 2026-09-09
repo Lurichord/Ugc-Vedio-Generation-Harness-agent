@@ -4,14 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .beat_projector import BeatProjector, shot_list, shot_beat_id, shot_summary
-from .project_service import STAGES, ProjectService
+from .beat_projector import BeatProjector, media_unit_id, shot_list, shot_beat_id, shot_summary
+from .project_service import (
+    STAGES,
+    ProjectService,
+    pipeline_format_id,
+    production_pipeline,
+)
 from .schemas import ProductionItem, ProductionSnapshot, StageName, StageSnapshot
 
 STAGE_LABELS: dict[StageName, str] = {
     "narrative": "脚本",
     "voice": "声音",
     "editorial": "画面规划",
+    "references": "参考图",
     "asset": "镜头 / 素材",
     "timeline": "时间线",
     "render": "成片",
@@ -21,6 +27,7 @@ _PREFERRED_KINDS: dict[StageName, tuple[str, ...]] = {
     "narrative": ("utterance", "beat", "shot"),
     "voice": ("audio",),
     "editorial": ("shot", "beat"),
+    "references": ("identity",),
     "asset": ("shot", "shot_video"),
     "timeline": ("clip",),
     "render": ("rendered_media",),
@@ -40,10 +47,13 @@ class ProductionView:
         except FileNotFoundError:
             return ProductionSnapshot(project_key=project_key)
         state = self.projects.read_state(directory)
+        pipeline = production_pipeline(state, directory)
         stages: list[StageSnapshot] = []
         for stage in STAGES:
             status = self.projects.core_status(state, stage)
-            required = status != "not_required"
+            required = stage in pipeline
+            if required and status == "not_required":
+                status = "pending"
             view = self.beats.stage_view(directory, stage)
             items = _pick_items(view.beats, stage)
             items.extend(_shot_items(directory, project_key, stage))
@@ -62,7 +72,9 @@ class ProductionView:
         return ProductionSnapshot(
             project_key=project_key,
             project_id=state.context.project_id,
+            format_id=pipeline_format_id(state, directory),
             current_stage=self.projects.current_stage(state, project_key),
+            pipeline=list(pipeline),
             stages=stages,
         )
 
@@ -77,16 +89,20 @@ def required_stages(status_by_stage: dict[StageName, str]) -> list[StageName]:
 
 def next_stage_after(
     stage: StageName,
-    status_by_stage: dict[StageName, str],
+    status_by_stage: dict[StageName, str] | None = None,
+    *,
+    pipeline: list[StageName] | tuple[StageName, ...] | None = None,
 ) -> StageName | None:
-    pipeline = required_stages(status_by_stage)
+    steps = list(pipeline) if pipeline is not None else required_stages(
+        status_by_stage or {}
+    )
     try:
-        index = pipeline.index(stage)
+        index = steps.index(stage)
     except ValueError:
         return None
-    if index + 1 >= len(pipeline):
+    if index + 1 >= len(steps):
         return None
-    return pipeline[index + 1]
+    return steps[index + 1]
 
 
 def gate_question(stage: StageName, nxt: StageName | None) -> str:
@@ -143,8 +159,26 @@ def _shot_items(directory: Path, project_key: str, stage: StageName) -> list[Pro
                     summary=shot_summary(shot) or str(shot.get("shot_kind") or ""),
                 )
             )
+    if stage == "references":
+        payload = ProjectService.stage_artifact(directory, "references") or {}
+        for item in payload.get("identities") or []:
+            ref = str(item.get("ref") or "")
+            path = item.get("local_path")
+            items.append(
+                ProductionItem(
+                    ref=ref or f"identity:{item.get('name')}",
+                    kind="identity",
+                    beat_id=ref.partition(":")[2] or ref,
+                    title=str(item.get("name") or ref),
+                    summary=str(item.get("kind") or ""),
+                    media_url=(
+                        f"/api/projects/{project_key}/media/{path}" if path else None
+                    ),
+                )
+            )
     if stage == "asset":
         payload = ProjectService.stage_artifact(directory, "asset") or {}
+        narrative = ProjectService.stage_artifact(directory, "narrative") or {}
         for asset in payload.get("assets") or []:
             if asset.get("modality") != "ai_video" and not asset.get("shot_id"):
                 continue
@@ -154,7 +188,7 @@ def _shot_items(directory: Path, project_key: str, stage: StageName) -> list[Pro
                 ProductionItem(
                     ref=f"shot_video:{shot_id}",
                     kind="shot_video",
-                    beat_id=shot_id,
+                    beat_id=media_unit_id(asset, narrative) or shot_id,
                     title=f"镜头 {shot_id}",
                     summary=str(asset.get("generation_prompt") or asset.get("modality") or ""),
                     media_url=(

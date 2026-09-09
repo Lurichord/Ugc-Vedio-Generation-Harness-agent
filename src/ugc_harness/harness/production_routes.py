@@ -61,5 +61,5 @@ def resolve_production_route(narrative: NarrativeArtifact) -> ProductionRoute:
     return ProductionRoute(
         format_id=format_id,
         asset_route="shot_ai_video",
-        stages=("asset", "timeline", "render"),
+        stages=("references", "asset", "timeline", "render"),
     )

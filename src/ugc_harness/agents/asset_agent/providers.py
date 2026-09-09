@@ -16,12 +16,12 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from ...shared.image_generation import generate_seedream_image
+from ...shared.media_duration import probe_duration_ms
 from ...shared.settings import AssetGenerationSettings, LLMSettings
-from ...shared.video_generation import generate_seedance_video
+from ...shared.video_generation import generate_seedance_video, last_frame_bytes_from_job
 from ..editorial_agent.models import ExplorationDirection
 from ..voice_agent.models import RealizedBeat
 from .models import (
-    VIDEO_FILE_SUFFIXES,
     AssetCard,
     AssetUsabilityReview,
     SourceTrace,
@@ -519,7 +519,6 @@ class VolcengineGeneratedAssetProvider:
         previous_asset_id = None
         if previous_character_asset is not None:
             first_frame = self._last_frame(
-                project_dir / previous_character_asset.local_path,
                 project_dir,
                 previous_character_asset.asset_id,
             )
@@ -597,39 +596,20 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
         return output
 
     @staticmethod
-    def _last_frame(video: Path, project_dir: Path, asset_id: str) -> Path:
-        if not video.is_file():
-            raise FileNotFoundError(
-                f"previous talking-head video does not exist: {video}"
-            )
-        if video.suffix.lower() not in VIDEO_FILE_SUFFIXES:
-            # ffmpeg happily "extracts a frame" from a still image, which
-            # silently breaks character continuity downstream.
-            raise ValueError(
-                f"refusing to extract a continuity frame from a non-video file: "
-                f"{video} (suffix {video.suffix or 'none'!r})"
-            )
+    def _last_frame(project_dir: Path, asset_id: str) -> Path:
         output = project_dir / "assets" / "character_reference" / f"{asset_id}_last.png"
-        repository = Path(__file__).resolve().parents[4]
-        ffmpeg = repository / "renderer" / "node_modules" / "@remotion" / "compositor-win32-x64-msvc" / "ffmpeg.exe"
-        completed = subprocess.run(
-            [str(ffmpeg), "-y", "-sseof", "-0.05", "-i", str(video), "-frames:v", "1", str(output)],
-            capture_output=True,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        if output.is_file() and output.stat().st_size:
+            return output
+        request_id = asset_id.removeprefix("asset_")
+        job_path = project_dir / "harness" / "seedance_jobs" / f"{request_id}.json"
+        payload = last_frame_bytes_from_job(job_path)
+        if payload:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(payload)
+            return output
+        raise RuntimeError(
+            f"{asset_id} 需要 Seedance 尾帧才能接镜，请先重新生成上一镜"
         )
-        if completed.returncode != 0 or not output.is_file():
-            stderr = (
-                (completed.stderr or b"")
-                .decode("utf-8", errors="replace")
-                .strip()
-            )
-            raise RuntimeError(
-                f"failed to extract last frame from {video} "
-                f"(ffmpeg exit code {completed.returncode}): "
-                f"{stderr[-400:] or 'no stderr output'}"
-            )
-        return output
 
     def _generate_image(
         self,
@@ -769,6 +749,12 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
         folder.mkdir(parents=True, exist_ok=True)
         output = folder / f"{asset_id}.mp4"
         output.write_bytes(raw)
+        if generated.last_frame:
+            last_frame = (
+                project_dir / "assets" / "character_reference" / f"{asset_id}_last.png"
+            )
+            last_frame.parent.mkdir(parents=True, exist_ok=True)
+            last_frame.write_bytes(generated.last_frame)
         card = AssetCard(
             asset_id=asset_id,
             visual_request_id=visual_request_id,
@@ -784,6 +770,7 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
             generation_prompt=prompt,
             generation_job_id=generated.job_id,
             generation_cost_usd=(generated.job.get("usage") or {}).get("cost"),
+            duration_ms=probe_duration_ms(output),
             character_id=character_id,
             continuity_group_id=continuity_group_id,
             previous_asset_id=previous_asset_id,

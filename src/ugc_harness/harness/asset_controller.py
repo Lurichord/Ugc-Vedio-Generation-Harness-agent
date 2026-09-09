@@ -25,7 +25,6 @@ from ..agents.generic import (
     RegistryTool,
     RegistryToolTransport,
 )
-from ..agents.instructions import load_instructions
 from ..agents.voice_agent.models import VoiceArtifact
 from ..evaluators.asset_critic import AssetCritic, ImageAnalyzer
 from ..tools.registry import ToolRegistry
@@ -146,7 +145,7 @@ class AssetHarnessController:
 
         return cls(
             GenericAgent(
-                tool_model=tool_model or EnvironmentToolModel(),  # type: ignore[arg-type]
+                tool_model=tool_model or EnvironmentToolModel(),
                 transport_factory=transport_factory,
                 candidate_type=AssetCandidate,
                 completion_builder=_asset_completion,
@@ -181,7 +180,6 @@ class AssetHarnessController:
                 ],
             ),
             based_on_state_version=state.context.state_version,
-            agent_instructions=load_instructions("asset"),
             allowed_tools=[ACQUIRE_TOOL, SUBMIT_TOOL],
             forbidden_actions=[
                 "modify_narrative",
@@ -425,7 +423,6 @@ class AssetHarnessController:
                 asset_ids=asset_ids,
             ),
             based_on_state_version=state.context.state_version,
-            agent_instructions=load_instructions("asset"),
             allowed_tools=[PREPARE_TOOL, SUBMIT_TOOL],
             forbidden_actions=[
                 "replace_source_asset",

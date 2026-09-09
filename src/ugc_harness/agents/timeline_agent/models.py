@@ -16,6 +16,7 @@ class DerivedAsset(StrictModel):
     local_path: str
     mime_type: str
     sha256: str
+    duration_ms: int | None = Field(default=None, gt=0)
     generator_model: str
     generation_prompt: str
     generation_job_id: str
@@ -38,6 +39,7 @@ class TimelineClip(StrictModel):
     playback_policy: Literal[
         "hold_to_audio",
         "trim_or_loop_to_audio",
+        "fit_narration_to_video",
     ]
     transition_in: Literal["none", "hard_cut", "punch_cut"]
 
@@ -114,7 +116,7 @@ class TimelinePlan(StrictModel):
             if current.timeline_end_ms != following.timeline_start_ms:
                 raise ValueError("timeline clips must be contiguous")
         if self.clips[-1].timeline_end_ms != self.duration_ms:
-            raise ValueError("timeline clips must cover the full audio duration")
+            raise ValueError("timeline clips must cover the full media duration")
         return self
 
 

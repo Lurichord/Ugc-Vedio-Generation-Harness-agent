@@ -56,9 +56,9 @@ def test_render_composition_uses_prepared_images_and_audio_clock(
     )
 
     assert missing == []
-    assert composition.duration_ms == voice.timed_audio.duration_ms
+    assert composition.duration_ms == timeline_run.artifact.timeline.duration_ms
     assert composition.duration_in_frames == math.ceil(
-        voice.timed_audio.duration_ms * 30 / 1000
+        timeline_run.artifact.timeline.duration_ms * 30 / 1000
     )
     assert len(composition.clips) == len(voice.realized_beats)
     assert all(
@@ -66,7 +66,7 @@ def test_render_composition_uses_prepared_images_and_audio_clock(
         for clip in composition.clips
         if clip.media_type == "image"
     )
-    assert composition.audio_path == voice.timed_audio.audio_file
+    assert composition.audio_path == timeline_run.artifact.timeline.audio_file
 
     def fake_render(*, voice, timeline_artifact, project_dir):
         composition, _ = _build_composition(project_dir, voice, timeline_artifact)
@@ -84,10 +84,10 @@ def test_render_composition_uses_prepared_images_and_audio_clock(
                     width=size[0],
                     height=size[1],
                     fps=30,
-                    duration_ms=voice.timed_audio.duration_ms,
-                    video_duration_ms=voice.timed_audio.duration_ms,
-                    audio_duration_ms=voice.timed_audio.duration_ms,
-                    container_duration_ms=voice.timed_audio.duration_ms,
+                    duration_ms=composition.duration_ms,
+                    video_duration_ms=composition.duration_ms,
+                    audio_duration_ms=composition.duration_ms,
+                    container_duration_ms=composition.duration_ms,
                     video_codec="h264",
                     audio_codec="aac",
                     has_video=True,

@@ -93,9 +93,11 @@ class NarrativeHarnessController:
         generation_context: dict[str, object] | None = None,
         format_registry: NarrativeFormatRegistry | None = None,
     ) -> "NarrativeHarnessController":
-        choose_tool = getattr(tool_model, "choose_tool", None)
-        if not callable(choose_tool):
-            raise TypeError("tool_model must provide choose_tool(messages, tools)")
+        if not any(
+            callable(getattr(tool_model, name, None))
+            for name in ("decide", "generate")
+        ):
+            raise TypeError("tool_model must provide decide() or generate()")
         active_registry = format_registry or default_narrative_format_registry()
         tools = ToolRegistry()
         # The registry remains the Harness capability inventory. Execution goes
@@ -142,7 +144,7 @@ class NarrativeHarnessController:
 
         return cls(
             GenericAgent(
-                tool_model=tool_model,  # type: ignore[arg-type]
+                tool_model=tool_model,
                 transport_factory=transport_factory,
                 candidate_type=NarrativeCandidate,
                 completion_builder=_narrative_completion,
@@ -273,7 +275,7 @@ class NarrativeHarnessController:
             approved_target=(
                 "repair_scheduler"
                 if envelope.scope.target_refs
-                else "asset_agent"
+                else "references_agent"
                 if pack.format_id in {"drama", "tutorial"}
                 else None
             ),
@@ -290,9 +292,16 @@ class NarrativeHarnessController:
         editorial_status = (
             "not_required" if evaluation.passed else "blocked"
         ) if direct_to_assets else "pending"
-        asset_status = (
-            successor_status if direct_to_assets else "pending"
+        references_status = (
+            successor_status if direct_to_assets else "not_required"
         )
+        asset_status = (
+            "pending" if evaluation.passed and direct_to_assets else (
+                successor_status if direct_to_assets else "pending"
+            )
+        )
+        if direct_to_assets and not evaluation.passed:
+            asset_status = "blocked"
         if state is None:
             project_state = ProjectState(
                 runtime_context=RuntimeContext(
@@ -312,12 +321,21 @@ class NarrativeHarnessController:
                     script_status=script_status,
                     voice_status=voice_status,
                     editorial_status=editorial_status,
+                    references_status=references_status,
                     asset_status=asset_status,
                     timeline_status="pending",
                     render_status="pending",
                 ),
                 trajectory=TrajectoryState(),
             )
+            project_state.evaluation.stages.narrative = narrative_status
+            project_state.evaluation.stages.script = script_status
+            project_state.evaluation.stages.voice = voice_status
+            project_state.evaluation.stages.editorial = editorial_status
+            project_state.evaluation.stages.references = references_status
+            project_state.evaluation.stages.asset = asset_status
+            project_state.evaluation.stages.timeline = "pending"
+            project_state.evaluation.stages.render = "pending"
         else:
             project_state = state.model_copy(deep=True)
             project_state.context.state_version = committed_version
@@ -327,6 +345,7 @@ class NarrativeHarnessController:
             project_state.evaluation.stages.editorial = (
                 editorial_status if direct_to_assets else "blocked"
             )
+            project_state.evaluation.stages.references = references_status
             project_state.evaluation.stages.asset = (
                 asset_status if direct_to_assets else "blocked"
             )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import uuid
 
 from ...content import (
     AudienceSpec,
@@ -13,10 +14,16 @@ from .models import CreativeBrief
 from ...profiles.models import VideoProfileRequest
 
 
-def _project_id(topic: str) -> str:
+def _project_id(topic: str, *, salt: str = "") -> str:
     ascii_part = re.sub(r"[^a-z0-9]+", "_", topic.lower()).strip("_")[:30]
-    digest = hashlib.sha1(topic.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha1(f"{topic}\0{salt}".encode("utf-8")).hexdigest()[:8]
     return f"ugc_{ascii_part or 'topic'}_{digest}"
+
+
+def new_project_id(topic: str) -> str:
+    """One id per start, so two same-topic projects do not share a folder."""
+
+    return _project_id(topic.strip(), salt=uuid.uuid4().hex)
 
 
 def make_brief(

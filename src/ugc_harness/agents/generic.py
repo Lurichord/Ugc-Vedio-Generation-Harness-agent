@@ -1,35 +1,38 @@
-"""The unified agent: one LLM tool loop shared by every stage.
+"""The unified agent: one intake-style decide loop shared by every stage.
 
 Stage differences are data, not code:
 
-- ``TaskEnvelope`` carries the whitelist, budget, and injected instructions;
+- ``TaskEnvelope`` names the current step (``agent`` / narrative ``format_id``);
+  GenericAgent loads that step's markdown as the system prompt;
 - a ``ToolTransport`` serves the stage's tools (stdio MCP subprocess, or an
   in-process registry until that stage grows its own MCP server);
 - a ``CompletionSpec`` (built by the stage's controller, i.e. the harness)
   describes the artifact refs and StatePatch proposal of a completed run;
-- the candidate submitted via the stage's ``*.submit_candidate`` tool is
-  parsed with the stage's candidate schema.
+- the model either calls a whitelisted tool or sets ``tool`` to null and puts
+  the candidate JSON in ``message``. ``*.submit_candidate`` is still accepted.
 
-The loop itself never varies: budget gate -> model chooses one tool ->
-whitelist gate -> execute -> record ActionRecord -> refresh the execution
-board view into messages -> repeat until the model submits. Critics and
-commits stay outside, in the controllers.
+The loop never varies: budget gate -> decide -> optional tool -> append
+JSON exchange -> repeat until a candidate is accepted. Critics and commits
+stay outside, in the controllers. ``skill.activate`` is built into the loop
+so a stage can load a markdown playbook before it chooses tool arguments.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import re
+import os
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field as dataclass_field
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Protocol
 
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..harness.models import (
     ActionRecord,
@@ -38,53 +41,89 @@ from ..harness.models import (
     StatePatch,
     TaskEnvelope,
 )
-from ..harness.state_view import ExecutionBoard
-from ..shared.llm import ModelToolCall
-from ..tools.mcp import StdioMCPServerConfig
+from ..shared.llm import _extract_json
+from ..shared.models import StrictModel
+from ..tools.mcp import StdioMCPServerConfig, forward_child_stderr
 from ..tools.registry import ToolRegistry
+from .instructions import system_prompt_for_task
+from .skills import (
+    SKILL_ACTIVATE,
+    activate_agent_skill,
+    list_agent_skills,
+    skill_activate_spec,
+)
 
 
-class ToolChoosingModel(Protocol):
-    def choose_tool(
+class StepDecision(StrictModel):
+    """One loop step: optional tool, or a candidate JSON in ``message``."""
+
+    tool: str | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    message: str = ""
+
+
+class StepModel(Protocol):
+    def decide(
         self,
-        *,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-    ) -> ModelToolCall: ...
+    ) -> StepDecision: ...
 
 
 class EnvironmentToolModel:
-    """Builds the production tool-choosing model lazily from environment."""
+    """Production step model: JSON ``decide()``, same shape as intake."""
 
-    def __init__(self) -> None:
-        self._model: Any = None
+    def __init__(self, generator: Any | None = None) -> None:
+        self._generator = generator
 
-    def choose_tool(
+    def decide(
         self,
-        *,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-    ) -> ModelToolCall:
-        if self._model is None:
+    ) -> StepDecision:
+        generator = self._generator
+        if generator is None:
             from ..shared.llm import StructuredLLM
             from ..shared.settings import LLMSettings
 
-            self._model = StructuredLLM(LLMSettings.from_environment(None, None))
-        return self._model.choose_tool(messages=messages, tools=tools)
+            generator = StructuredLLM(LLMSettings.from_environment(None, None))
+            self._generator = generator
+        system = ""
+        rendered = messages
+        if messages and messages[0].get("role") == "system":
+            system = str(messages[0].get("content") or "")
+            rendered = messages[1:]
+        catalog = [
+            {
+                "name": item["name"],
+                "description": item.get("description") or "",
+                "parameters": item.get("parameters") or {},
+            }
+            for item in tools
+        ]
+        prompt = (
+            "根据当前上下文决定下一步。"
+            "从可用工具里选一个；事情做完了再提交。"
+            "不要编造工具名。\n\n"
+            f"可用工具：{json.dumps(catalog, ensure_ascii=False)}\n\n"
+            f"{_render_messages(rendered)}"
+        )
+        return generator.generate(prompt, StepDecision, system=system or None)
 
 
-_MAX_LOG_CHARS = 2000
+_LOG_LOCK = threading.Lock()
 
 
 def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
-
-
-def _compact_json(value: Any, *, limit: int = _MAX_LOG_CHARS) -> str:
-    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "…"
+    raw = os.environ.get("AGENT_TOOL_LOG") or os.environ.get("INTAKE_TOOL_LOG")
+    if not raw:
+        return
+    path = Path(raw)
+    with _LOG_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
 
 
 def _log_tool(
@@ -99,7 +138,7 @@ def _log_tool(
 ) -> None:
     parts = [f"[{agent}] {event} {name}"]
     if arguments is not None:
-        parts.append(_compact_json(arguments))
+        parts.append(json.dumps(arguments, ensure_ascii=False, separators=(",", ":")))
     if duration_ms is not None:
         parts.append(f"{duration_ms}ms")
     if error:
@@ -172,18 +211,24 @@ class McpToolTransport:
 
     @asynccontextmanager
     async def open(self) -> AsyncIterator["_McpChannel"]:
-        async with stdio_client(self.server.server_parameters()) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                channel = _McpChannel(session)
-                if self.configure_tool is not None:
-                    listing = await channel.list_tools()
-                    if self.configure_tool not in listing:
-                        raise RuntimeError(
-                            f"MCP server is missing tool: {self.configure_tool}"
+        with forward_child_stderr() as errlog:
+            async with stdio_client(
+                self.server.server_parameters(),
+                errlog=errlog,
+            ) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    channel = _McpChannel(session)
+                    if self.configure_tool is not None:
+                        listing = await channel.list_tools()
+                        if self.configure_tool not in listing:
+                            raise RuntimeError(
+                                f"MCP server is missing tool: {self.configure_tool}"
+                            )
+                        await channel.call(
+                            self.configure_tool, self.configure_payload
                         )
-                    await channel.call(self.configure_tool, self.configure_payload)
-                yield channel
+                    yield channel
 
 
 class _McpChannel:
@@ -289,11 +334,6 @@ class _RegistryChannel:
         raise RuntimeError(f"registry tool {name} returned no structured object")
 
 
-# Unused after the unified loop: transports are concrete classes, not this protocol.
-# class ToolTransport(Protocol):
-#     def open(self) -> Any: ...
-
-
 # ---------------------------------------------------------------------------
 # Stage wiring: harness-owned data describing one stage's contract
 # ---------------------------------------------------------------------------
@@ -321,19 +361,21 @@ class GenericAgent:
     def __init__(
         self,
         *,
-        tool_model: ToolChoosingModel,
+        tool_model: Any,
         transport_factory: Callable[[TaskEnvelope, dict[str, Any]], Any],
         candidate_type: type[BaseModel],
         completion_builder: Callable[[TaskEnvelope, dict[str, Any]], CompletionSpec],
         context_builder: Callable[[TaskEnvelope, dict[str, Any]], dict[str, Any]]
         | None = None,
+        candidate_validator: Callable[[TaskEnvelope, BaseModel], None] | None = None,
         capability_tools: ToolRegistry | None = None,
     ) -> None:
-        self.tool_model = tool_model
+        self.tool_model = _adapt_tool_model(tool_model)
         self.transport_factory = transport_factory
         self.candidate_type = candidate_type
         self.completion_builder = completion_builder
         self.context_builder = context_builder
+        self.candidate_validator = candidate_validator
         # Inventory only: controllers copy these names into ProjectState.
         # The loop never executes this registry; tools run through the transport.
         self.tools = capability_tools or ToolRegistry()
@@ -357,7 +399,7 @@ class GenericAgent:
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": task.agent_instructions or task.goal,
+                "content": system_prompt_for_task(task),
             },
             {
                 "role": "user",
@@ -377,114 +419,79 @@ class GenericAgent:
                     raise RuntimeError(
                         f"tool transport is missing tools: {sorted(missing)}"
                     )
-                exposed: dict[str, str] = {}
-                model_tools: list[dict[str, Any]] = []
-                for allowed_name in task.allowed_tools:
-                    spec = discovered[allowed_name]
-                    safe_name = _model_tool_name(allowed_name)
-                    exposed[safe_name] = allowed_name
-                    exposed[allowed_name] = allowed_name
-                    model_tools.append(
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": safe_name,
-                                "description": spec.description,
-                                "parameters": spec.parameters,
-                            },
-                        }
-                    )
-                board = ExecutionBoard(task)
+                catalog = [
+                    {
+                        "name": name,
+                        "description": discovered[name].description,
+                        "parameters": discovered[name].parameters,
+                    }
+                    for name in task.allowed_tools
+                ]
+                allowed = set(task.allowed_tools)
+                if list_agent_skills(task.agent):
+                    catalog.insert(0, skill_activate_spec(task.agent))
+                    allowed.add(SKILL_ACTIVATE)
                 candidate: BaseModel | None = None
+                steps = 0
                 while candidate is None:
-                    if len(actions) >= task.budget.max_steps:
+                    if steps >= task.budget.max_steps:
                         raise RuntimeError("task step budget exhausted")
-                    _log(f"[{task.agent}] step={len(actions) + 1} choosing tool")
-                    decision = self.tool_model.choose_tool(
-                        messages=messages,
-                        tools=model_tools,
-                    )
-                    active_name = exposed.get(decision.name)
-                    if active_name is None:
-                        raise PermissionError(
-                            f"model selected unavailable tool: {decision.name}"
+                    steps += 1
+                    _log(f"[{task.agent}] step={steps} deciding")
+                    decision = self.tool_model.decide(messages, catalog)
+                    tool_name = (decision.tool or "").strip()
+                    if not tool_name:
+                        candidate = self._accept_message_candidate(
+                            task, decision.message, messages
                         )
-                    arguments = dict(decision.arguments)
-                    _log_tool(task.agent, "call", active_name, arguments=arguments)
-                    messages.append(decision.assistant_message())
+                        continue
+                    if tool_name not in allowed:
+                        raise PermissionError(
+                            f"model selected unavailable tool: {tool_name}"
+                        )
+                    arguments = dict(decision.arguments or {})
+                    _log_tool(task.agent, "call", tool_name, arguments=arguments)
                     started = time.perf_counter()
                     try:
-                        value = await channel.call(active_name, arguments)
+                        if tool_name == SKILL_ACTIVATE:
+                            value = activate_agent_skill(
+                                task.agent, str(arguments.get("name") or "")
+                            )
+                        else:
+                            value = await channel.call(tool_name, arguments)
+                        if tool_name == submit_tool:
+                            parsed = self.candidate_type.model_validate(value)
+                            _validate_candidate(task, parsed)
+                            if self.candidate_validator is not None:
+                                self.candidate_validator(task, parsed)
+                            candidate = parsed
                     except Exception as exc:
-                        actions.append(
-                            _action(task, actions, active_name, "failed", str(exc), started)
-                        )
-                        _log_tool(
-                            task.agent,
-                            "failed",
-                            active_name,
-                            error=str(exc),
-                            duration_ms=round(
-                                (time.perf_counter() - started) * 1000
-                            ),
-                        )
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": decision.call_id,
-                                "content": json.dumps(
-                                    {"error": str(exc)},
-                                    ensure_ascii=False,
-                                    separators=(",", ":"),
-                                ),
-                            }
-                        )
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"工具 {active_name} 调用失败：{exc}。"
-                                    "请根据错误选择下一步。"
-                                ),
-                            }
+                        _feed_tool_failure(
+                            task=task,
+                            actions=actions,
+                            messages=messages,
+                            tool_name=tool_name,
+                            arguments=arguments,
+                            started=started,
+                            exc=exc,
                         )
                         continue
                     actions.append(
-                        _action(task, actions, active_name, "success", None, started)
+                        _action(task, actions, tool_name, "success", None, started)
                     )
                     _log_tool(
                         task.agent,
                         "done",
-                        active_name,
+                        tool_name,
+                        arguments=arguments,
                         result=value,
-                        duration_ms=round((time.perf_counter() - started) * 1000),
+                        duration_ms=round(
+                            (time.perf_counter() - started) * 1000
+                        ),
                     )
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": decision.call_id,
-                            "content": json.dumps(
-                                value,
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        }
-                    )
-                    if active_name == submit_tool:
-                        candidate = self.candidate_type.model_validate(value)
-                        _validate_candidate(task, candidate)
+                    _append_exchange(messages, tool_name, arguments, value)
+                    if tool_name == submit_tool:
                         _log(f"[{task.agent}] candidate submitted")
-                    else:
-                        board.apply_tool_result(active_name, value)
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": board.progress_message(
-                                    active_name,
-                                    steps_used=len(actions),
-                                ),
-                            }
-                        )
         except Exception as exc:
             return GenericAgentExecution(
                 result=failed_result(task, actions, _unwrap_exception(exc)),
@@ -503,6 +510,64 @@ class GenericAgent:
                 evaluation_target=completion.evaluation_target,
             ),
         )
+
+    def _accept_message_candidate(
+        self,
+        task: TaskEnvelope,
+        message: str,
+        messages: list[dict[str, Any]],
+    ) -> BaseModel | None:
+        try:
+            parsed = self.candidate_type.model_validate(_extract_json(message))
+            _validate_candidate(task, parsed)
+            if self.candidate_validator is not None:
+                self.candidate_validator(task, parsed)
+        except Exception as exc:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {"tool": None, "message": message},
+                        ensure_ascii=False,
+                    ),
+                }
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"error": str(exc)},
+                        ensure_ascii=False,
+                    ),
+                }
+            )
+            return None
+        _log(f"[{task.agent}] candidate accepted from message")
+        return parsed
+
+
+def _feed_tool_failure(
+    *,
+    task: TaskEnvelope,
+    actions: list[ActionRecord],
+    messages: list[dict[str, Any]],
+    tool_name: str,
+    arguments: dict[str, Any],
+    started: float,
+    exc: BaseException,
+) -> None:
+    actions.append(
+        _action(task, actions, tool_name, "failed", str(exc), started)
+    )
+    _log_tool(
+        task.agent,
+        "failed",
+        tool_name,
+        arguments=arguments,
+        error=str(exc),
+        duration_ms=round((time.perf_counter() - started) * 1000),
+    )
+    _append_exchange(messages, tool_name, arguments, {"error": str(exc)})
 
 
 def _action(
@@ -557,10 +622,49 @@ def _unwrap_exception(exc: Exception) -> Exception:
     return exc
 
 
-def _model_tool_name(mcp_name: str) -> str:
-    """Map tool names to the conservative subset accepted by LLM APIs."""
+def _append_exchange(
+    messages: list[dict[str, Any]],
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    messages.append(
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {"tool": tool_name, "arguments": arguments},
+                ensure_ascii=False,
+            ),
+        }
+    )
+    messages.append(
+        {
+            "role": "user",
+            "content": json.dumps(
+                {"tool": tool_name, "result": result},
+                ensure_ascii=False,
+            ),
+        }
+    )
 
-    return re.sub(r"[^A-Za-z0-9_-]", "__", mcp_name)
+
+def _adapt_tool_model(model: Any) -> StepModel:
+    if callable(getattr(model, "decide", None)):
+        return model
+    if callable(getattr(model, "generate", None)):
+        return EnvironmentToolModel(generator=model)
+    raise TypeError(
+        "tool_model must provide decide(messages, tools) or generate(prompt, type)"
+    )
+
+
+def _render_messages(messages: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for item in messages:
+        role = item.get("role", "user")
+        content = item.get("content") or ""
+        parts.append(f"[{role}]\n{content}")
+    return "\n\n".join(parts)
 
 
 def _mcp_result_text(result: object) -> str:

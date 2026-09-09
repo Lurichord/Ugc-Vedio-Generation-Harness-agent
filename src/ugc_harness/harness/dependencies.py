@@ -95,6 +95,62 @@ class DependencyGraph:
         self.state.nodes = working_state.nodes
         return update
 
+    def remove_nodes(
+        self,
+        refs: list[str],
+        *,
+        task_id: str = "graph_remove",
+    ) -> GraphUpdateRecord:
+        working_state = self.state.model_copy(deep=True)
+        update = DependencyGraph(working_state)._remove_nodes_in_place(
+            refs,
+            task_id=task_id,
+        )
+        self.state.graph_version = working_state.graph_version
+        self.state.nodes = working_state.nodes
+        return update
+
+    def _remove_nodes_in_place(
+        self,
+        refs: list[str],
+        *,
+        task_id: str,
+    ) -> GraphUpdateRecord:
+        before = self.state.graph_version
+        unique = list(dict.fromkeys(refs))
+        if not unique:
+            raise ValueError("remove_nodes refs 不能为空")
+        missing = [ref for ref in unique if ref not in self.state.nodes]
+        if missing:
+            raise ValueError(f"unknown dependency node: {sorted(missing)}")
+        deleting = set(unique)
+        for ref in unique:
+            node = self.state.nodes[ref]
+            if node.locked:
+                raise ValueError(f"dependency node is locked: {ref}")
+            leftover = [item for item in node.dependents if item not in deleting]
+            if leftover:
+                raise ValueError(f"{ref} 仍被 {leftover} 使用")
+        for ref in unique:
+            node = self.state.nodes[ref]
+            for parent_ref in node.depends_on:
+                parent = self.state.nodes.get(parent_ref)
+                if parent is None:
+                    continue
+                parent.dependents = sorted(set(parent.dependents) - {ref})
+            del self.state.nodes[ref]
+        self.validate_integrity()
+        self.state.graph_version += 1
+        return GraphUpdateRecord(
+            update_id=f"graph_update_{task_id}_{self.state.graph_version}",
+            task_id=task_id,
+            graph_version_before=before,
+            graph_version_after=self.state.graph_version,
+            committed=True,
+            changed_refs=sorted(unique),
+            reason="removed dependency nodes",
+        )
+
     def _commit_batch_in_place(
         self,
         *,

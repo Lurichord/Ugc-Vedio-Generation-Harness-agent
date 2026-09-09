@@ -52,6 +52,41 @@ class AllSuccessAssets:
         )
 
 
+class VideoAssets:
+    def acquire(
+        self,
+        *,
+        project_id: str,
+        visual_request_id: str,
+        beat,
+        direction: ExplorationDirection,
+        project_dir: Path,
+        **kwargs,
+    ) -> ProviderResult:
+        output = project_dir / "assets" / "test" / f"{visual_request_id}.mp4"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(bytes(2048))
+        return ProviderResult(
+            AssetCard(
+                asset_id=f"asset_{visual_request_id}",
+                visual_request_id=visual_request_id,
+                direction_id=direction.direction_id,
+                beat_id=beat.beat_id,
+                modality="ai_video",
+                origin="generated",
+                local_path=output.relative_to(project_dir).as_posix(),
+                mime_type="video/mp4",
+                sha256="0" * 64,
+                duration_ms=2000,
+                generated_media_disclosure_required=True,
+                generator_model="fake-video-model",
+                generation_prompt="test prompt",
+            ),
+            "success",
+            "视频素材成功",
+        )
+
+
 class FakeScreenAnimation:
     def generate(
         self,
@@ -149,3 +184,48 @@ def test_timeline_uses_audio_clock_and_ai_screen_derivative(
     )
     assert "artifact:timeline" not in run.record.project_state.dependency_graph.nodes
     assert run.record.project_state.trajectory.phases["timeline"].tasks
+
+
+def test_timeline_scales_narration_to_video_duration(tmp_path: Path) -> None:
+    narrative = _narrative()
+    voice_run = _voice_run(narrative, tmp_path)
+    voice = voice_run.artifact
+    factual_beat_id = next(
+        beat.beat_id
+        for beat in voice.realized_beats
+        if beat.planned_beat_id == "pb04"
+    )
+    plan = _plan(
+        [beat.beat_id for beat in voice.realized_beats],
+        narrative.brief.project_id,
+        factual_beat_id,
+    )
+    editorial_run = _editorial_run(narrative, voice_run, plan)
+    assets_run = _asset_run(
+        editorial_run, voice_run, VideoAssets(), tmp_path
+    )
+    run = TimelineHarnessController.from_provider(
+        FakeScreenAnimation(), tool_model=_timeline_tool_model()
+    ).run(
+        voice,
+        editorial_run.artifact,
+        assets_run.artifact,
+        tmp_path,
+        assets_run.record.project_state,
+    )
+    artifact = run.artifact
+    expected = 2000 * len(voice.realized_beats)
+    assert artifact.timeline.duration_ms == expected
+    assert artifact.timeline.audio_file == "audio/narration_aligned.wav"
+    assert (tmp_path / artifact.timeline.audio_file).is_file()
+    assert all(
+        clip.timeline_end_ms - clip.timeline_start_ms == 2000
+        for clip in artifact.timeline.clips
+    )
+    assert all(
+        clip.playback_policy == "fit_narration_to_video"
+        for clip in artifact.timeline.clips
+    )
+    assert artifact.captions
+    assert artifact.captions[-1].end_ms <= expected
+    assert artifact.timeline.duration_ms != voice.timed_audio.duration_ms

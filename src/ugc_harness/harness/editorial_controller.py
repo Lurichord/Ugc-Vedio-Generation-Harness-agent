@@ -19,7 +19,6 @@ from ..agents.generic import (
     RegistryTool,
     RegistryToolTransport,
 )
-from ..agents.instructions import load_instructions
 from ..agents.narrative_agent.models import NarrativeArtifact
 from ..agents.voice_agent.models import VoiceArtifact
 from ..evaluators.editorial_critic import EditorialCritic
@@ -145,7 +144,7 @@ class EditorialHarnessController:
 
         return cls(
             GenericAgent(
-                tool_model=tool_model or EnvironmentToolModel(),  # type: ignore[arg-type]
+                tool_model=tool_model or EnvironmentToolModel(),
                 transport_factory=transport_factory,
                 candidate_type=EditorialPlan,
                 completion_builder=_editorial_completion,
@@ -178,7 +177,6 @@ class EditorialHarnessController:
             goal="生成主张映射和逐 Beat 的 A-roll/B-roll 视觉需求",
             scope=TaskScope(project_id=narrative.brief.project_id),
             based_on_state_version=state.context.state_version,
-            agent_instructions=load_instructions("editorial"),
             allowed_tools=[PLAN_TOOL, SUBMIT_TOOL],
             required_outputs=["editorial_plan"],
             forbidden_actions=[

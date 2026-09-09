@@ -11,12 +11,19 @@ from .schemas import ProjectSummary, StageName
 
 
 STAGES: tuple[StageName, ...] = (
+    "narrative", "voice", "editorial", "references", "asset", "timeline", "render"
+)
+EXPLAINER_PIPELINE: tuple[StageName, ...] = (
     "narrative", "voice", "editorial", "asset", "timeline", "render"
+)
+SHOT_PIPELINE: tuple[StageName, ...] = (
+    "narrative", "references", "asset", "timeline", "render"
 )
 ARTIFACT_FILES: dict[StageName, str] = {
     "narrative": "narrative_artifact.json",
     "voice": "voice_artifact.json",
     "editorial": "editorial_artifact.json",
+    "references": "identity_reference_artifact.json",
     "asset": "asset_artifact.json",
     "timeline": "timeline_artifact.json",
     "render": "render_artifact.json",
@@ -82,16 +89,16 @@ class ProjectService:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def current_stage(self, state: ProjectState, storage_key: str) -> StageName:
-        statuses = {
-            stage: getattr(state.evaluation.stages, stage) for stage in STAGES
-        }
+        directory = self.output_root / storage_key
+        pipeline = production_pipeline(
+            state, directory if directory.is_dir() else None
+        )
         approvals = {
             item.stage: item for item in self.app_data.approvals(storage_key)
         }
-        for stage in STAGES:
-            if statuses[stage] == "not_required":
-                continue
-            if statuses[stage] not in {"passed", "stale"}:
+        for stage in pipeline:
+            status = stage_status(state, stage)
+            if status not in {"passed", "stale"}:
                 return stage
             approval = approvals.get(stage)
             if approval is None or any(
@@ -101,7 +108,7 @@ class ProjectService:
                 for ref, version in approval.approved_refs.items()
             ):
                 return stage
-        return "render"
+        return pipeline[-1]
 
     @staticmethod
     def core_status(state: ProjectState, stage: StageName) -> str:
@@ -122,3 +129,61 @@ class ProjectService:
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
+
+
+def stage_status(state: ProjectState, stage: StageName) -> str:
+    return str(getattr(state.evaluation.stages, stage))
+
+
+def production_pipeline(
+    state: ProjectState,
+    project_dir: Path | None = None,
+) -> tuple[StageName, ...]:
+    """Stage order for this project: explainer vs drama/tutorial."""
+
+    if project_dir is not None:
+        narrative_path = project_dir / ARTIFACT_FILES["narrative"]
+        if narrative_path.is_file():
+            try:
+                from ugc_harness.agents.narrative_agent.models import (
+                    NarrativeArtifact,
+                )
+                from ugc_harness.harness.production_routes import (
+                    resolve_production_route,
+                )
+
+                route = resolve_production_route(
+                    NarrativeArtifact.model_validate_json(
+                        narrative_path.read_text(encoding="utf-8")
+                    )
+                )
+                if route.asset_route == "shot_ai_video":
+                    return SHOT_PIPELINE
+                return EXPLAINER_PIPELINE
+            except (OSError, ValueError):
+                pass
+    constraints = state.context.constraints or {}
+    format_id = str(
+        constraints.get("narrative_format")
+        or constraints.get("production_mode")
+        or ""
+    )
+    if format_id in {"drama", "tutorial"}:
+        return SHOT_PIPELINE
+    return EXPLAINER_PIPELINE
+
+
+def pipeline_format_id(
+    state: ProjectState,
+    project_dir: Path | None = None,
+) -> str:
+    pipeline = production_pipeline(state, project_dir)
+    if pipeline == SHOT_PIPELINE:
+        constraints = state.context.constraints or {}
+        format_id = str(
+            constraints.get("narrative_format")
+            or constraints.get("production_mode")
+            or "drama"
+        )
+        return format_id if format_id in {"drama", "tutorial"} else "drama"
+    return "explainer"

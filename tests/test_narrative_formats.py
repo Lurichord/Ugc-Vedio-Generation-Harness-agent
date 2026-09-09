@@ -4,6 +4,10 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from tests.test_quality import sample_plan, sample_script
+from ugc_harness.agents.instructions import (
+    instruction_name_for_task,
+    system_prompt_for_task,
+)
 from ugc_harness.agents.narrative_agent import make_brief
 from ugc_harness.harness.narrative_formats import (
     DRAMA_PACK,
@@ -12,6 +16,7 @@ from ugc_harness.harness.narrative_formats import (
     NarrativeFormatRegistry,
     default_narrative_format_registry,
 )
+from ugc_harness.harness.models import TaskEnvelope, TaskScope
 from ugc_harness.content import (
     AudioRealizationSpec,
     ProductionShot,
@@ -60,8 +65,88 @@ def test_pack_materializes_the_agent_contract_into_task_envelope() -> None:
     assert task.format_id == "explainer"
     assert task.allowed_tools == list(EXPLAINER_PACK.capability_tools())
     assert task.required_outputs == ["planning", "script", "shots"]
-    assert task.agent_instructions
-    assert "person/place/product" in task.agent_instructions
+    prompt = system_prompt_for_task(task)
+    assert "person/place/product" in prompt
+
+
+def test_system_prompt_follows_the_task_step() -> None:
+    explainer = EXPLAINER_PACK.create_task(
+        make_brief(topic="端午节"),
+        state_version=0,
+        input_hash="hash",
+    )
+    assert instruction_name_for_task(explainer) == "narrative_explainer"
+    assert "explainer workflow" in system_prompt_for_task(explainer)
+
+    drama = DRAMA_PACK.create_task(
+        make_brief(topic="端午节", production_mode="drama"),
+        state_version=0,
+        input_hash="hash",
+    )
+    assert instruction_name_for_task(drama) == "narrative_drama"
+
+    tutorial = TUTORIAL_PACK.create_task(
+        make_brief(topic="端午节", production_mode="tutorial"),
+        state_version=0,
+        input_hash="hash",
+    )
+    assert instruction_name_for_task(tutorial) == "narrative_tutorial"
+
+    repair = EXPLAINER_PACK.create_repair_task(
+        task_id="task_repair",
+        scope=TaskScope(
+            project_id=explainer.scope.project_id,
+            target_refs=["shot:s1"],
+        ),
+        state_version=0,
+        input_hash="hash",
+        dependency_snapshot=[],
+    )
+    assert instruction_name_for_task(repair) == "shot_repair"
+    assert "shot 局部修复" in system_prompt_for_task(repair)
+
+    assert (
+        instruction_name_for_task(
+            TaskEnvelope(
+                task_id="t_voice",
+                agent="voice_agent",
+                goal="配音",
+                scope=TaskScope(project_id="p"),
+                based_on_state_version=0,
+                allowed_tools=["voice.submit_candidate"],
+                input_hash="h",
+            )
+        )
+        == "voice"
+    )
+    assert (
+        instruction_name_for_task(
+            TaskEnvelope(
+                task_id="t_refs",
+                agent="references_agent",
+                goal="参考图",
+                scope=TaskScope(project_id="p"),
+                based_on_state_version=0,
+                allowed_tools=["references.submit_candidate"],
+                input_hash="h",
+            )
+        )
+        == "references"
+    )
+    assert (
+        instruction_name_for_task(
+            TaskEnvelope(
+                task_id="t_shot_asset",
+                agent="asset_stage",
+                goal="出镜",
+                scope=TaskScope(project_id="p"),
+                based_on_state_version=0,
+                allowed_tools=["asset.submit_candidate"],
+                input_hash="h",
+            )
+        )
+        == "shot_asset"
+    )
 
 
 @pytest.mark.parametrize(
@@ -100,8 +185,8 @@ def test_future_pack_materializes_a_complete_task_contract(
         name.startswith(tool_prefix) or name == "narrative.submit_candidate"
         for name in task.allowed_tools
     )
-    assert task.agent_instructions
-    assert "world_state.entities" in task.agent_instructions
+    prompt = system_prompt_for_task(task)
+    assert "world_state.entities" in prompt
 
 
 def test_drama_pack_rejects_presenter_led_video_profiles() -> None:

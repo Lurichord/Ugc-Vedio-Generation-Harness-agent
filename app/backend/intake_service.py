@@ -24,7 +24,7 @@ from .production_view import (
     gate_question,
     next_stage_after,
 )
-from .project_service import STAGES, ProjectService
+from .project_service import ProjectService, production_pipeline
 from .review_service import ReviewService
 from .schemas import (
     CreateIntakeSessionResponse,
@@ -131,14 +131,20 @@ class IntakeService:
             return self._turn_payload(session, state, state.notices[-1].content)
         directory = self.projects.project_dir(state.project_key)
         project_state = self.projects.read_state(directory)
-        statuses = _statuses(project_state)
-        stage = (gate.stage if gate else None) or self.projects.current_stage(
+        pipeline = list(production_pipeline(project_state, directory))
+        stage = (
+            gate.stage
+            if gate and gate.kind != "failed" and gate.stage in pipeline
+            else None
+        )
+        stage = stage or self.projects.current_stage(
             project_state, state.project_key
         )
         view = self.beats.stage_view(directory, stage)
-        if view.core_status in {"pending", "failed", "needs_revision", "stale", "blocked"}:
+        status = _runnable_status(view.core_status, stage, pipeline)
+        if status in {"pending", "ready", "failed", "needs_revision", "stale", "blocked"}:
             return self._start_stage_job(session, state, directory, stage)
-        if view.core_status in {"ready", "passed", "locked"} and not view.user_approved:
+        if status in {"passed", "locked"} and not view.user_approved:
             if not view.critic_passed and view.issues:
                 raise ValueError("这一步还不能批准：Critic 未通过")
             if self.reviews.open_feedback(state.project_key, stage):
@@ -164,7 +170,7 @@ class IntakeService:
                     message=f"用户确认 {stage}",
                 ),
             )
-        nxt = next_stage_after(stage, statuses)
+        nxt = next_stage_after(stage, pipeline=pipeline)
         if nxt is None:
             question = gate_question(stage, None)
             state = set_gate(
@@ -375,7 +381,10 @@ class IntakeService:
             raise
         state = self.workspace.load(session_id)
         project_state = self.projects.read_state(directory)
-        nxt = next_stage_after(stage, _statuses(project_state))
+        nxt = next_stage_after(
+            stage,
+            pipeline=list(production_pipeline(project_state, directory)),
+        )
         question = gate_question(stage, nxt)
         state = set_gate(
             state,
@@ -436,10 +445,11 @@ class IntakeService:
         directory: Path,
     ) -> IntakeWorkspaceState:
         project_state = self.projects.read_state(directory)
-        statuses = _statuses(project_state)
+        pipeline = list(production_pipeline(project_state, directory))
         current = self.projects.current_stage(project_state, directory.name)
         view = self.beats.stage_view(directory, current)
-        if view.core_status == "running":
+        status = _runnable_status(view.core_status, current, pipeline)
+        if status == "running":
             return set_gate(
                 state,
                 PendingGate(
@@ -449,8 +459,8 @@ class IntakeService:
                     job_id=state.pending_gate.job_id if state.pending_gate else None,
                 ),
             )
-        if view.core_status in {"ready", "passed", "locked"} and not view.user_approved:
-            nxt = next_stage_after(current, statuses)
+        if status in {"passed", "locked"} and not view.user_approved:
+            nxt = next_stage_after(current, pipeline=pipeline)
             return set_gate(
                 state,
                 PendingGate(
@@ -460,8 +470,8 @@ class IntakeService:
                     question=gate_question(current, nxt),
                 ),
             )
-        if view.core_status in {"pending", "failed", "needs_revision", "stale", "blocked"}:
-            previous = _previous_required(current, statuses)
+        if status in {"pending", "ready", "failed", "needs_revision", "stale", "blocked"}:
+            previous = _previous_required(current, pipeline)
             if previous and self.reviews.valid_approval(
                 directory.name, previous, project_state
             ):
@@ -574,17 +584,20 @@ def _wants_continue(text: str) -> bool:
     return cleaned in {"可以继续", "一样就行", "就这样", "不用改"}
 
 
-def _statuses(project_state) -> dict[StageName, str]:
-    return {
-        stage: str(getattr(project_state.evaluation.stages, stage))
-        for stage in STAGES
-    }
+def _runnable_status(
+    status: str,
+    stage: StageName,
+    pipeline: list[StageName],
+) -> str:
+    if status == "not_required" and stage in pipeline:
+        return "pending"
+    return status
 
 
 def _previous_required(
-    stage: StageName, statuses: dict[StageName, str]
+    stage: StageName,
+    pipeline: list[StageName],
 ) -> StageName | None:
-    pipeline = [item for item in STAGES if statuses.get(item) != "not_required"]
     try:
         index = pipeline.index(stage)
     except ValueError:

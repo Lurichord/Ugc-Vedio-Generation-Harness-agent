@@ -250,3 +250,44 @@ def test_changing_cast_dirties_bound_shot_and_audio() -> None:
 
     assert set(update.invalidated_refs) == {"audio:ss01", "shot:shot_pb01"}
     assert state.nodes["utterance:ss01"].status == "current"
+
+
+def test_remove_nodes_drops_reverse_edges() -> None:
+    state = DependencyGraphState()
+    graph = DependencyGraph(state)
+    graph.commit_batch(
+        task_id="seed",
+        produced_by="test",
+        commits=[
+            NodeCommit("prop:p1", "prop", "oil"),
+            NodeCommit(
+                "shot:s1",
+                "shot",
+                "shot",
+                edges=(DependencyEdge(to="prop:p1", family="identity"),),
+            ),
+        ],
+    )
+    graph.remove_nodes(["shot:s1"], task_id="drop_shot")
+    assert "shot:s1" not in state.nodes
+    assert state.nodes["prop:p1"].dependents == []
+
+
+def test_remove_nodes_refuses_when_dependents_remain() -> None:
+    state = DependencyGraphState()
+    graph = DependencyGraph(state)
+    graph.commit_batch(
+        task_id="seed",
+        produced_by="test",
+        commits=[
+            NodeCommit("prop:p1", "prop", "oil"),
+            NodeCommit(
+                "shot:s1",
+                "shot",
+                "shot",
+                edges=(DependencyEdge(to="prop:p1", family="identity"),),
+            ),
+        ],
+    )
+    with pytest.raises(ValueError, match="仍被"):
+        graph.remove_nodes(["prop:p1"])

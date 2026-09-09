@@ -33,7 +33,7 @@ class TimelineCritic:
         full_coverage = bool(
             clips
             and clips[0].timeline_start_ms == 0
-            and clips[-1].timeline_end_ms == voice.timed_audio.duration_ms
+            and clips[-1].timeline_end_ms == candidate.timeline.duration_ms
             and all(
                 left.timeline_end_ms == right.timeline_start_ms
                 for left, right in zip(clips, clips[1:])
@@ -50,7 +50,7 @@ class TimelineCritic:
         if not full_coverage:
             issues.append((
                 "AUDIO_COVERAGE_INVALID",
-                "Timeline does not cover the complete narration audio clock.",
+                "Timeline does not cover the complete media clock.",
                 target_ref,
             ))
         clip_ids = {item.clip_id for item in clips}

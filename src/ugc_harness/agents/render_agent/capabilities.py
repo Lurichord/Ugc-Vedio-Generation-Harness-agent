@@ -174,6 +174,7 @@ def _build_composition(
                 scale_start=transform.scale_start,
                 scale_end=transform.scale_end,
                 transition_in=item.transition_in,
+                loop=item.playback_policy == "trim_or_loop_to_audio",
             )
         )
 
@@ -205,16 +206,15 @@ def _build_composition(
         )
         for item in timeline_artifact.overlays
     ]
-    audio_path = voice.timed_audio.audio_file
+    audio_path = timeline_artifact.timeline.audio_file or voice.timed_audio.audio_file
     if not (project_dir / audio_path).is_file():
         missing.append(audio_path)
+    duration_ms = timeline_artifact.timeline.duration_ms
     return (
         RenderComposition(
             renderer_version="4.0.499",
-            duration_ms=voice.timed_audio.duration_ms,
-            duration_in_frames=math.ceil(
-                voice.timed_audio.duration_ms * fps / 1000
-            ),
+            duration_ms=duration_ms,
+            duration_in_frames=math.ceil(duration_ms * fps / 1000),
             audio_path=audio_path,
             clips=clips,
             captions=captions,

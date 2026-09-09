@@ -12,12 +12,16 @@ from ugc_harness.intake.models import IntakeSession
 from ugc_harness.intake.tools import (
     DESCRIPTION_GET_ELEMENT,
     DESCRIPTION_LIST_OUTLINE,
+    GRAPH_REMOVE,
+    IDENTITY_CREATE,
     IDENTITY_UPDATE,
     HARNESS_INSPECT,
     HARNESS_LIST_GRAPH,
     HARNESS_REPAIR,
     HARNESS_START_PROJECT,
     INTAKE_MCP_TOOLS,
+    SHOT_BIND,
+    SHOT_CREATE,
 )
 from ugc_harness.mcp_servers import intake as intake_mcp
 
@@ -43,6 +47,28 @@ class DirectIntakeMcpChannel:
             return intake_mcp.description_get_element(str(args.get("ref") or ""))
         if name == IDENTITY_UPDATE:
             return intake_mcp.identity_update(patches=args.get("patches"))
+        if name == IDENTITY_CREATE:
+            return intake_mcp.identity_create(
+                kind=str(args.get("kind") or ""),
+                name=str(args.get("name") or ""),
+                description=str(args.get("description") or ""),
+                appearance=args.get("appearance"),
+                role=str(args.get("role") or "performer"),
+            )
+        if name == SHOT_CREATE:
+            return intake_mcp.shot_create(
+                anchor_ref=str(args.get("anchor_ref") or ""),
+                instruction=str(args.get("instruction") or ""),
+                binds=args.get("binds"),
+                after_ref=args.get("after_ref"),
+            )
+        if name == SHOT_BIND:
+            return intake_mcp.shot_bind(
+                shot_refs=args.get("shot_refs"),
+                identity_ref=str(args.get("identity_ref") or ""),
+            )
+        if name == GRAPH_REMOVE:
+            return intake_mcp.graph_remove(str(args.get("ref") or ""))
         if name == HARNESS_INSPECT:
             return intake_mcp.harness_inspect()
         if name == HARNESS_LIST_GRAPH:

@@ -33,6 +33,7 @@ from .schemas import (
 )
 from .stage_runner import StageRunner
 from .graph_projector import GraphProjector
+from .graph_history import install_hooks
 from .task_projector import TaskProjector
 from .timeline_projector import TimelineProjector
 
@@ -45,6 +46,7 @@ beats = BeatProjector(projects, reviews)
 tasks = TaskProjector(projects, repository)
 timeline = TimelineProjector(projects)
 graph = GraphProjector(projects)
+install_hooks()
 runner = StageRunner(config.output_root)
 repairs = RepairService(projects, repository, runner)
 jobs = JobManager()
@@ -291,8 +293,12 @@ def unified_timeline(project_key: str):
 
 
 @app.get("/api/projects/{project_key}/graph")
-def dependency_graph(project_key: str):
-    return graph.view(project_or_404(project_key))
+def dependency_graph(project_key: str, version: int | None = None):
+    directory = project_or_404(project_key)
+    try:
+        return graph.view(directory, version=version)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/projects/{project_key}/media/{media_path:path}")

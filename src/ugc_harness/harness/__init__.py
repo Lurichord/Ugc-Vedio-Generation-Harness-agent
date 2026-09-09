@@ -31,7 +31,6 @@ from .models import (
 )
 from .description import VideoDescription, element_refs
 from .description_builder import build_video_description, initial_execution_state
-from .state_view import NarrativeExecutionBoard, StateView
 from .dependencies import DependencyGraph
 from .repair import RepairPlan, RepairScheduler
 from .production_routes import ProductionRoute, resolve_production_route
@@ -80,8 +79,6 @@ __all__ = [
     "ExecutionState",
     "ProductionState",
     "ProjectContext",
-    "NarrativeExecutionBoard",
-    "StateView",
     "VideoDescription",
     "build_video_description",
     "element_refs",

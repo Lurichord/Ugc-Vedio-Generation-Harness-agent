@@ -67,6 +67,19 @@ class DependencyGraphState(HarnessModel):
     nodes: dict[str, DependencyNode] = Field(default_factory=dict)
 
 
+class ShotCreateSpec(HarnessModel):
+    """Locked topology for a shot that does not exist in production yet."""
+
+    shot_id: str
+    order: int = Field(ge=1)
+    shot_kind: Literal["explainer", "drama", "tutorial"]
+    source_refs: list[str] = Field(min_length=1)
+    binds: list[str] = Field(default_factory=list)
+    anchor_ref: str
+    after_ref: str | None = None
+    action_id: str | None = None
+
+
 class TaskScope(HarnessModel):
     project_id: str
     shot_ids: list[str] = Field(default_factory=list)
@@ -79,7 +92,7 @@ class TaskScope(HarnessModel):
 
 
 class TaskBudget(HarnessModel):
-    max_steps: int = Field(default=4, ge=2, le=32)
+    max_steps: int = Field(default=4, ge=2, le=128)
     max_retries: int = Field(default=1, ge=0, le=8)
     max_cost_usd: float | None = Field(default=None, ge=0)
     deadline_seconds: int = Field(default=300, ge=1)
@@ -93,7 +106,6 @@ class TaskEnvelope(HarnessModel):
     scope: TaskScope
     based_on_state_version: int = Field(ge=0)
     format_id: str | None = None
-    agent_instructions: str | None = None
     allowed_tools: list[str] = Field(min_length=1)
     required_outputs: list[str] = Field(default_factory=list)
     forbidden_actions: list[str] = Field(default_factory=list)
@@ -101,6 +113,15 @@ class TaskEnvelope(HarnessModel):
     budget: TaskBudget = Field(default_factory=TaskBudget)
     input_hash: str
     dependency_snapshot: list[DependencySnapshot] = Field(default_factory=list)
+    create_shot: ShotCreateSpec | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_agent_instructions(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "agent_instructions" in data:
+            data = dict(data)
+            data.pop("agent_instructions")
+        return data
 
     @model_validator(mode="after")
     def unique_tools(self) -> "TaskEnvelope":
@@ -198,6 +219,7 @@ class VideoState(HarnessModel):
     script_status: ArtifactStatus = "pending"
     voice_status: ArtifactStatus = "pending"
     editorial_status: ArtifactStatus = "pending"
+    references_status: ArtifactStatus = "not_required"
     asset_status: ArtifactStatus = "pending"
     timeline_status: ArtifactStatus = "pending"
     render_status: ArtifactStatus = "pending"
@@ -306,6 +328,7 @@ class StageStatusBoard(HarnessModel):
     script: ArtifactStatus = "pending"
     voice: ArtifactStatus = "pending"
     editorial: ArtifactStatus = "pending"
+    references: ArtifactStatus = "not_required"
     asset: ArtifactStatus = "pending"
     timeline: ArtifactStatus = "pending"
     render: ArtifactStatus = "pending"
@@ -323,6 +346,7 @@ _STAGE_ATTRS = {
     "script_status": "script",
     "voice_status": "voice",
     "editorial_status": "editorial",
+    "references_status": "references",
     "asset_status": "asset",
     "timeline_status": "timeline",
     "render_status": "render",

@@ -11,7 +11,6 @@ from ..agents.narrative_agent.models import (
     PlanningArtifact,
     TutorialPlanningArtifact,
 )
-from ..agents.instructions import load_instructions
 from .models import DependencySnapshot, TaskBudget, TaskEnvelope, TaskScope
 
 
@@ -88,15 +87,6 @@ class ExplainerFormatPack:
             scope=TaskScope(project_id=project_id),
             based_on_state_version=state_version,
             format_id=self.format_id,
-            agent_instructions=(
-                "你正在运行 explainer workflow。目标是产出完整的世界状态、"
-                "Section 骨架、Planned Beats、外部口播 Script 和 ProductionShot。"
-                "建立 world_state 时先立薄身份册：跨镜要认出来的人/物/地写成 "
-                "kind=person/place/product，概念和举例品牌不要进册。"
-                "请根据消息历史自主规划、选择并重复调用任意允许的 MCP tool。"
-                "工具错误会直接返回给你，请自行判断修改哪里。确认候选产物完整后调用"
-                "narrative.submit_candidate；不要伪造工具结果。"
-            ),
             allowed_tools=list(self._TOOLS),
             required_outputs=["planning", "script", "shots"],
             forbidden_actions=[
@@ -189,16 +179,6 @@ class DramaFormatPack:
             state_version=state_version,
             input_hash=input_hash,
             goal="生成角色驱动、可连续生成的剧情规划与 ProductionShot",
-            instructions=(
-                "你正在运行 drama workflow。先建立角色、场景、物品和连续性约束，"
-                "规划故事、表演场景并编译生成式视频 Shot。"
-                "跨镜要认出来的人/地/物必须先写入 world_state.entities"
-                "（person/place/product）并给稳定 id，scene 和 action 只能引用册内 id。"
-                "你可以根据当前消息历史自主"
-                "选择、重复调用或修订任意工具，不存在 Harness 规定的调用顺序。剧情片段"
-                "的声音由视频模型随画面产生，不要生成外部口播。候选完整后主动调用"
-                "narrative.submit_candidate。"
-            ),
             required_outputs=["world_state", "planning", "shots"],
             acceptance_criteria=[
                 "人物目标、行动、反应和情绪变化形成因果链",
@@ -273,17 +253,6 @@ class TutorialFormatPack:
             state_version=state_version,
             input_hash=input_hash,
             goal="生成以制作步骤为主、讲解按需穿插的教程规划与 ProductionShot",
-            instructions=(
-                "你正在运行 tutorial workflow。请自主选择工具来定义目标成品、材料、"
-                "操作步骤、补充讲解和 Procedure Shot。"
-                "成品和反复上手的材料/工具写入 world_state.entities（kind=product），"
-                "与 materials 使用同一套 id；同一件东西只登记一次，"
-                "不要既写 materials 又另开一条同名 entity。"
-                "不要为每颗螺丝建条。"
-                "工具可以重复调用，不存在 Harness"
-                "规定的顺序。不要假设每一个步骤都需要口播。候选完整后主动调用"
-                "narrative.submit_candidate。"
-            ),
             required_outputs=["world_state", "planning", "script", "shots"],
             acceptance_criteria=[
                 "每一步的输入状态能够由前一步输出满足",
@@ -322,7 +291,6 @@ def _create_format_task(
     state_version: int,
     input_hash: str,
     goal: str,
-    instructions: str,
     required_outputs: list[str],
     acceptance_criteria: list[str],
     max_steps: int,
@@ -334,7 +302,6 @@ def _create_format_task(
         scope=TaskScope(project_id=project_id),
         based_on_state_version=state_version,
         format_id=pack.format_id,
-        agent_instructions=instructions,
         allowed_tools=list(pack.capability_tools()),
         required_outputs=required_outputs,
         forbidden_actions=[
@@ -367,7 +334,6 @@ def _create_repair_task(
             "goal": "按 instruction 微调圈中的 shot，不要重做整份规划",
             "scope": scope,
             "dependency_snapshot": dependency_snapshot,
-            "agent_instructions": load_instructions("shot_repair"),
             "allowed_tools": [REPAIR_SUBMIT_TOOL],
             "required_outputs": ["patches"],
             "forbidden_actions": [

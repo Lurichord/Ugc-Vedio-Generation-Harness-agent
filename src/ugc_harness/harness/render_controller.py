@@ -15,7 +15,6 @@ from ..agents.generic import (
     RegistryTool,
     RegistryToolTransport,
 )
-from ..agents.instructions import load_instructions
 from ..agents.render_agent import RenderArtifact
 from ..agents.render_agent.models import RenderCandidate
 from ..agents.timeline_agent.models import TimelineArtifact
@@ -115,7 +114,7 @@ class RenderHarnessController:
 
         return cls(
             GenericAgent(
-                tool_model=tool_model or EnvironmentToolModel(),  # type: ignore[arg-type]
+                tool_model=tool_model or EnvironmentToolModel(),
                 transport_factory=transport_factory,
                 candidate_type=RenderCandidate,
                 completion_builder=_render_completion,
@@ -134,7 +133,6 @@ class RenderHarnessController:
             goal="Render the approved timeline into final and preview MP4 outputs.",
             scope=TaskScope(project_id=voice.project_id, beat_ids=[item.beat_id for item in timeline.timeline.clips]),
             based_on_state_version=state.context.state_version,
-            agent_instructions=load_instructions("render"),
             allowed_tools=[RENDER_TOOL, SUBMIT_TOOL],
             required_outputs=["render_candidate"],
             forbidden_actions=["modify_timeline", "modify_voice", "replace_assets"],

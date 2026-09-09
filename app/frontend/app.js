@@ -1,9 +1,10 @@
 const SESSION_KEY = "ugc-intake-session-id";
-const stages = ["narrative", "voice", "editorial", "asset", "timeline", "render"];
+const stages = ["narrative", "voice", "editorial", "references", "asset", "timeline", "render"];
 const stageLabels = {
   narrative: "脚本",
   voice: "声音",
   editorial: "画面规划",
+  references: "参考图",
   asset: "镜头 / 素材",
   timeline: "时间线",
   render: "成片",
@@ -136,7 +137,12 @@ function renderGate() {
   bar.classList.toggle("hidden", !show);
   if (!show) return;
   $("#gateQuestion").textContent = gate.question || "";
-  $("#continueButton").textContent = gate.kind === "done" ? "就这样" : "可以，继续下一步";
+  const nextLabel = stageLabels[gate.next_stage];
+  $("#continueButton").textContent = gate.kind === "done"
+    ? "就这样"
+    : nextLabel
+      ? `可以，继续做${nextLabel}`
+      : "可以，继续下一步";
   $("#continueButton").classList.toggle("hidden", gate.kind === "failed");
 }
 
@@ -144,13 +150,19 @@ function renderRail() {
   const production = state.payload?.production || { stages: [] };
   const hint = $("#railHint");
   const current = production.current_stage;
+  const pipeline = production.pipeline || [];
+  const visible = (production.stages || []).filter((stage) => stage.required);
   if (!production.project_key) {
-    hint.textContent = "开工之后，脚本、声音、镜头会写在这里。";
+    hint.textContent = "开工之后，会按体裁显示对应步骤。";
     $("#stageRail").innerHTML = `<p class="muted">还没有项目产物。</p>`;
     return;
   }
-  hint.textContent = current ? `当前停在「${stageLabels[current] || current}」。` : "制作进行中。";
-  const blocks = (production.stages || []).map((stage) => {
+  const flow = pipeline.length
+    ? pipeline.map((stage) => stageLabels[stage] || stage).join(" → ")
+    : "";
+  const here = current ? `当前停在「${stageLabels[current] || current}」` : "制作进行中";
+  hint.textContent = flow ? `${flow}。${here}。` : `${here}。`;
+  const blocks = visible.map((stage) => {
     const skipped = !stage.required;
     const isCurrent = stage.stage === current;
     const currentClass = isCurrent ? "current" : "";
@@ -417,6 +429,16 @@ function graphNodeLabel(node) {
   return ref.includes(":") ? ref.slice(ref.indexOf(":") + 1) : ref;
 }
 
+function compareGraphNodes(a, b) {
+  const ao = Number(a.order);
+  const bo = Number(b.order);
+  const aHas = Number.isFinite(ao);
+  const bHas = Number.isFinite(bo);
+  if (aHas && bHas && ao !== bo) return ao - bo;
+  if (aHas !== bHas) return aHas ? -1 : 1;
+  return String(a.ref).localeCompare(String(b.ref));
+}
+
 function layoutGraph(nodes) {
   const columns = GRAPH_COLUMNS.map((column) => ({ ...column, nodes: [] }));
   const other = { id: "other", label: "其他", kinds: [], nodes: [] };
@@ -428,7 +450,11 @@ function layoutGraph(nodes) {
     (byKind.get(node.kind) || other).nodes.push(node);
   }
   for (const column of columns) {
-    column.nodes.sort((a, b) => String(a.ref).localeCompare(String(b.ref)));
+    if (column.id === "visual") {
+      column.nodes.sort(compareGraphNodes);
+    } else {
+      column.nodes.sort((a, b) => String(a.ref).localeCompare(String(b.ref)));
+    }
   }
   other.nodes.sort((a, b) => String(a.ref).localeCompare(String(b.ref)));
   const used = columns.filter((column) => column.nodes.length);
@@ -458,10 +484,30 @@ function graphEdgePath(x1, y1, x2, y2) {
   return `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
 }
 
+function graphVersionLabel(data) {
+  const selected = data.history_version;
+  if (selected == null) return `当前 · graph v${data.graph_version ?? 0}`;
+  return `历史 ${selected} · graph v${data.graph_version ?? 0}`;
+}
+
+function renderGraphVersions(data) {
+  const history = data.history || [];
+  if (!history.length) return "";
+  const selected = data.history_version;
+  const latest = history[history.length - 1]?.version;
+  const active = selected == null ? latest : selected;
+  const chips = history.map((item) => {
+    const isActive = Number(item.version) === Number(active);
+    return `<button type="button" class="graph-version${isActive ? " is-active" : ""}" data-graph-version="${escapeHtml(String(item.version))}">${escapeHtml(String(item.version))}</button>`;
+  }).join("");
+  return `<div class="graph-versions" role="tablist" aria-label="依赖图历史">${chips}</div>`;
+}
+
 function renderGraph(data) {
   const nodes = data.nodes || [];
+  const versionBar = renderGraphVersions(data);
   if (!nodes.length) {
-    return "<p class='muted'>还没有依赖图。开工写出脚本后会出现。</p>";
+    return `<div class="graph-panel">${versionBar}<p class='muted'>还没有依赖图。开工写出脚本后会出现。</p></div>`;
   }
   const layout = layoutGraph(nodes);
   const cy = GRAPH_NODE_H / 2;
@@ -499,8 +545,9 @@ function renderGraph(data) {
     `<span>${escapeHtml(kindLabels[kind] || kind)} ${count}</span>`
   )).join("");
   return `<div class="graph-panel">
+    ${renderGraphVersions(data)}
     <div class="graph-meta">
-      <span>graph v${escapeHtml(String(data.graph_version ?? 0))} · ${nodes.length} 个节点</span>
+      <span>${escapeHtml(graphVersionLabel(data))} · ${nodes.length} 个节点</span>
       <div class="graph-legend">${kindLegend}</div>
     </div>
     <div class="graph-workspace">
@@ -538,7 +585,8 @@ function graphInspectorMarkup(node) {
     <div class="graph-ref-list">${list(node.dependents || [])}</div>`;
 }
 
-function bindGraph(root, data) {
+function bindGraph(root, data, projectKey) {
+  const panel = root.querySelector(".graph-panel") || root;
   const byRef = new Map((data.nodes || []).map((node) => [node.ref, node]));
   const inspector = root.querySelector("#graphInspector");
   const select = (ref) => {
@@ -557,7 +605,23 @@ function bindGraph(root, data) {
     });
     if (inspector) inspector.innerHTML = graphInspectorMarkup(node);
   };
-  root.addEventListener("click", (event) => {
+  panel.addEventListener("click", async (event) => {
+    const versionButton = event.target.closest("[data-graph-version]");
+    if (versionButton && projectKey) {
+      event.preventDefault();
+      const history = data.history || [];
+      const latest = history[history.length - 1]?.version;
+      const version = Number(versionButton.dataset.graphVersion);
+      const query = version === Number(latest) ? "" : `?version=${encodeURIComponent(String(version))}`;
+      try {
+        const next = await api(`/api/projects/${encodeURIComponent(projectKey)}/graph${query}`);
+        root.innerHTML = renderGraph(next);
+        bindGraph(root, next, projectKey);
+      } catch (error) {
+        toast(error.message);
+      }
+      return;
+    }
     const target = event.target.closest("[data-ref]");
     if (target?.dataset.ref) {
       select(target.dataset.ref);
@@ -591,7 +655,7 @@ async function openDrawer(kind) {
     if (kind === "graph") {
       const data = await api(`/api/projects/${encodeURIComponent(key)}/graph`);
       body.innerHTML = renderGraph(data);
-      bindGraph(body, data);
+      bindGraph(body, data, key);
       return;
     }
     const timeline = await api(`/api/projects/${encodeURIComponent(key)}/timeline`);

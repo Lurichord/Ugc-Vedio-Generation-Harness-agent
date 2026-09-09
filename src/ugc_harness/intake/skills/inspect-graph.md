@@ -22,7 +22,9 @@ description: 用户要改已经做出来的内容。先读精简依赖图；换�
 1. `harness.list_graph` 无参：看内容根（`cast` / `prop` / `place` / `beat` / `scene` / `step`）。身份根看 `name` 和 `dependents`（含 `shot:`）。剧情根看 `status` / `locked` / `produced_by`。不要把这次结果当成全图。
 2. 对上用户要动的那一块后，再 `harness.list_graph`，带 `around_ref`（根上的 `beat:…` / `scene:…` / `step:…`，或身份的当前 `name` / `prop:…`）。只看这一跳邻居。
 3. 换人 / 换物 / 换地：先 `identity.update`。`ref` 填当前 `name`（如 `转化糖浆`）。服务端按名字把同名身份一起改字段，id 不变。不要新建节点，不要改 `binds`，不要为同名再写第二条 patch。
-4. 再 `harness.repair`。`target_refs` 用上一步返回的 `changed_refs`（服务端会扩成 shot）。制作 agent 只拿到这些 shot 和一句 instruction。
+4. 再 `harness.repair`。`target_refs` 用上一步返回的 `changed_refs`（服务端会扩成 shot，并按边重出参考图和成片）。制作 agent 只拿到这些 shot 和一句 instruction。不要自己点 references / asset。
+5. 加新人 / 新物 / 新地：`identity.create`。要画进现有镜：`shot.bind` 点名那些镜，再用返回的 `shot_refs` 做 `harness.repair`。要新开一镜：`shot.create`（`binds` 带上新身份）。不要去改已有镜的旧 `binds`。
+6. 删人 / 删物 / 删镜：`graph.remove`。身份还有 `dependents` 时先删那些镜，不要从 `binds` 里摘。
 
 不要把整张图塞进对话：无参一次、around 一次。不要调用 narrative 制作工具。不要为了「多看一点」对同一个坏 ref 重试。
 
@@ -32,6 +34,9 @@ description: 用户要改已经做出来的内容。先读精简依赖图；换�
 
 - 改画面、这一镜的说法或对白：`shot:…`。
 - 换人 / 换物 / 换地：先 `identity.update`，再把返回的 `changed_refs` 交给 `harness.repair`。不要改 `binds`。
+- 加身份进现有镜：`identity.create` → `shot.bind` → `harness.repair`。
+- 加一镜：`shot.create`。
+- 删节点：`graph.remove`。
 - 只重配、不改词：`audio:…`。
 - 用户没说清改词还是改声音、改镜头：先问一句。
 - 节点 `locked=true`：告诉用户这段锁住了，不要 `harness.repair`。
@@ -58,29 +63,69 @@ description: 用户要改已经做出来的内容。先读精简依赖图；换�
 
 ### 调工具时的 arguments
 
+每个 JSON 只属于上面写的那个工具，不要串用。
+
+`skill.activate`：
+
 ```json
 {"name": "inspect-graph"}
 ```
+
+`harness.list_graph` 无参（空对象）：
 
 ```json
 {}
 ```
 
-无参 `harness.list_graph` 用空对象。
+`harness.list_graph` 带焦点：
 
 ```json
 {"around_ref": "beat:b3"}
 ```
 
+也可以 `{"around_ref": "转化糖浆"}` 或 `{"around_ref": "prop:m1"}`。
+
+`identity.update`（换物，id 不变，不换绑）：
+
 ```json
 {"patches": [{"ref": "转化糖浆", "name": "蜂蜜", "description": "液态蜂蜜"}]}
 ```
+
+`identity.create`（新身份根）：
+
+```json
+{"kind": "prop", "name": "小船", "description": "江上的木船"}
+```
+
+`shot.bind`（现有镜只追加身份，接着必须 `harness.repair`）：
+
+```json
+{"shot_refs": ["shot:shot_a4"], "identity_ref": "prop:prop_1"}
+```
+
+`shot.create`（派 generic 写新镜）：
+
+```json
+{"anchor_ref": "scene:s2", "binds": ["cast:e1", "prop:prop_1"], "after_ref": "shot:shot_a3", "instruction": "加一镜对月独白"}
+```
+
+教程锚点用 `step:…`，讲解用 `beat:…`。`after_ref` 可省略，默认插到最后。
+
+`graph.remove`：
+
+```json
+{"ref": "shot:shot_a4"}
+```
+
+删身份时 `ref` 可以是 `prop:prop_1` 或当前名字。还有 `dependents` 会失败。
+
+`harness.repair`（`target_refs` 可以是身份 ref 或 `shot:`，服务端会扩成 shot）：
 
 ```json
 {"target_refs": ["prop:m1"], "instruction": "画面和说法按蜂蜜来"}
 ```
 
-`identity.update` 按当前名字改原身份节点的字段，不换绑。`harness.repair` 的 `target_refs` 可以是身份 ref 或 `shot:`（服务端会解析）。`instruction` 是给制作 agent 的一句话。
+`instruction` 是给制作 agent 的一句话，不是给用户看的。
 
 ### 读图（工具返回，按这些字段判断）
 

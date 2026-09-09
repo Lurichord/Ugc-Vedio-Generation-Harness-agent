@@ -22,6 +22,7 @@ class RenderClip(StrictModel):
     scale_end: float
     transition_in: str
     muted: bool = True
+    loop: bool = False
 
 
 class RenderCaption(StrictModel):

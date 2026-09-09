@@ -3,7 +3,7 @@ name: revise-segment
 description: 用户要改某一段。先对上内容，再读精简依赖图判断改哪些节点，最后派 harness.repair。
 ---
 
-意图层对上段落、圈 shot、派单。换材料/人物先 `identity.update`（`ref` 用当前名字，不要新建节点、不要改 binds）。不要自己改 shot 正文，不要自己算下游要重跑哪些 stage。
+意图层对上段落、圈 shot、派单。换材料/人物先 `identity.update`（`ref` 用当前名字，不要换绑）。加新人/新物用 `identity.create`，进现有镜再 `shot.bind`。不要自己改 shot 正文，不要自己算下游要重跑哪些 stage。
 
 还没有 `project_dir` 时不要走这条 skill，先说明还没开工。用户还没点名哪一段、只说画面/配音/人物不对时，走 `inspect-graph`。
 
@@ -13,7 +13,7 @@ description: 用户要改某一段。先对上内容，再读精简依赖图判�
 2. 标题不够确认时，再 `description.get_element` 只取那一个 ref。不要一次取全部 shots。
 3. `harness.list_graph` 无参：看内容根（`cast` / `prop` / `place` / `beat` / `scene` / `step`）。身份根看 `name` 和 `dependents`。
 4. 对上内容后，再 `harness.list_graph`，带 `around_ref`（可用大纲里的 `beat:…`，服务端会尝试解析成图上的节点）。只看这一跳邻居。
-5. 选定该段对应的 `shot:…`，再 `harness.repair`。换材料/人物先 `identity.update`（`ref` 填当前名字），再用返回的 `changed_refs` 做 `harness.repair`。镜头继续绑原来的 ref。
+5. 选定该段对应的 `shot:…`，再 `harness.repair`。换材料/人物先 `identity.update`（`ref` 填当前名字），再用返回的 `changed_refs` 做 `harness.repair`。镜头继续绑原来的 ref。加新人/新物：`identity.create` → `shot.bind` → `harness.repair`。新开一镜：`shot.create`。
 
 不要把整张图塞进对话：无参不要当全图；around 只调一次。不要调用 narrative 制作工具。
 

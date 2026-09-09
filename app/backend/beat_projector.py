@@ -6,7 +6,7 @@ from typing import Any, Iterable
 
 from ugc_harness.harness.models import ProjectState
 
-from .project_service import ProjectService
+from .project_service import ProjectService, production_pipeline
 from .repository import AppDataRepository
 from .review_service import ReviewService
 from .schemas import ArtifactView, BeatView, StageName, StageView
@@ -16,6 +16,7 @@ STAGE_PREFIXES: dict[StageName, tuple[str, ...]] = {
     "narrative": ("beat:", "utterance:", "shot:", "scene:", "step:"),
     "voice": ("audio:",),
     "editorial": ("beat:", "shot:"),
+    "references": ("cast:", "prop:", "place:"),
     "asset": ("shot:",),
     "timeline": ("shot:", "audio:"),
     "render": ("shot:",),
@@ -63,11 +64,15 @@ class BeatProjector:
         critic_passed = bool(evaluation.get("passed")) if evaluation else core_status == "passed"
         approval = self.reviews.valid_approval(storage_key, stage, state)
         open_feedback = self.reviews.open_feedback(storage_key, stage)
-        stage_index = list(STAGE_PREFIXES).index(stage)
+        pipeline = list(production_pipeline(state, project_dir))
         previous_ok = True
-        if stage_index:
-            previous = list(STAGE_PREFIXES)[stage_index - 1]
-            previous_ok = self.reviews.valid_approval(storage_key, previous, state) is not None
+        if stage in pipeline:
+            stage_index = pipeline.index(stage)
+            if stage_index:
+                previous = pipeline[stage_index - 1]
+                previous_ok = (
+                    self.reviews.valid_approval(storage_key, previous, state) is not None
+                )
         can_run = previous_ok and core_status in {
             "pending", "ready", "failed", "needs_revision", "stale", "blocked"
         }
@@ -192,56 +197,98 @@ class BeatProjector:
 
         assets = self.projects.stage_artifact(project_dir, "asset") or {}
         for asset in assets.get("assets", []):
-            bid = planned_beat_id(asset["beat_id"])
-            add(stage="asset", ref=f"shot:shot_{bid}", kind="shot", beat_id=bid,
+            bid = planned_beat_id(media_unit_id(asset, narrative))
+            if not bid:
+                continue
+            shot_id = str(asset.get("shot_id") or "")
+            ref = f"shot:{shot_id}" if shot_id else f"shot:shot_{bid}"
+            add(stage="asset", ref=ref, kind="shot", beat_id=bid,
                 title="画面素材", summary=asset.get("modality"), payload=asset,
                 media=f"/api/projects/{project_dir.name}/media/{asset.get('local_path', '')}")
         for resolution in assets.get("resolutions", []):
-            bid = planned_beat_id(resolution["beat_id"])
+            bid = planned_beat_id(media_unit_id(resolution, narrative))
+            if not bid:
+                continue
             add(stage="asset", ref=f"shot:shot_{bid}", kind="shot", beat_id=bid,
                 title="素材决策", summary=resolution.get("status"), payload=resolution)
 
         timeline = self.projects.stage_artifact(project_dir, "timeline") or {}
-        clips = timeline.get("timeline", {}).get("clips", [])
-        clip_by_id = {item["clip_id"]: item for item in clips}
+        clips = timeline.get("timeline", {}).get("clips") or timeline.get("clips") or []
+        clip_by_id = {item["clip_id"]: item for item in clips if item.get("clip_id")}
         for clip in clips:
-            raw_bid = clip["beat_id"]
-            bid = planned_beat_id(raw_bid)
-            add(stage="timeline", ref=f"clip:{clip['clip_id']}", kind="clip", beat_id=bid,
-                title="画面剪辑", summary=clip.get("playback_policy"), payload=clip,
+            bid = planned_beat_id(media_unit_id(clip, narrative))
+            if not bid:
+                continue
+            add(stage="timeline", ref=f"clip:{clip.get('clip_id')}", kind="clip", beat_id=bid,
+                title="画面剪辑", summary=clip.get("playback_policy") or clip.get("modality"), payload=clip,
                 media=f"/api/projects/{project_dir.name}/media/{clip.get('playback_path', '')}",
-                start=clip.get("timeline_start_ms"), end=clip.get("timeline_end_ms"))
+                start=clip.get("timeline_start_ms", clip.get("start_ms")),
+                end=clip.get("timeline_end_ms", clip.get("end_ms")))
         for cue in timeline.get("captions", []):
-            bid, cid = planned_beat_id(cue["beat_id"]), cue["cue_id"]
+            bid = planned_beat_id(media_unit_id(cue, narrative))
+            if not bid:
+                continue
+            cid = cue["cue_id"]
             add(stage="timeline", ref=f"caption:{cid}", kind="caption", beat_id=bid,
                 title="字幕", summary=cue.get("text"), payload=cue,
                 start=cue.get("start_ms"), end=cue.get("end_ms"))
         for transform in timeline.get("visual_transforms", []):
             clip = clip_by_id.get(transform["clip_id"], {})
-            raw_bid = clip.get("beat_id", "unknown")
-            bid = planned_beat_id(raw_bid)
-            add(stage="timeline", ref=f"timeline_transform:{raw_bid}", kind="timeline_transform", beat_id=bid,
+            bid = planned_beat_id(media_unit_id(clip, narrative) or "unknown")
+            add(stage="timeline", ref=f"timeline_transform:{bid}", kind="timeline_transform", beat_id=bid,
                 title="展示方式", summary=transform.get("motion_preset"), payload=transform,
-                start=clip.get("timeline_start_ms"), end=clip.get("timeline_end_ms"))
+                start=clip.get("timeline_start_ms", clip.get("start_ms")),
+                end=clip.get("timeline_end_ms", clip.get("end_ms")))
         for overlay in timeline.get("overlays", []):
-            bid, oid = planned_beat_id(overlay["beat_id"]), overlay["overlay_id"]
+            bid = planned_beat_id(media_unit_id(overlay, narrative))
+            if not bid:
+                continue
+            oid = overlay["overlay_id"]
             add(stage="timeline", ref=f"timeline_overlay:{oid}", kind="timeline_overlay", beat_id=bid,
                 title="画面标注", summary=overlay.get("text"), payload=overlay,
                 start=overlay.get("start_ms"), end=overlay.get("end_ms"))
 
         render = self.projects.stage_artifact(project_dir, "render") or {}
+        render_units = list(voice.get("realized_beats") or [])
+        if not render_units:
+            render_units = [
+                {"planned_beat_id": item["planned_beat_id"]}
+                for item in planning_units(narrative)[:1]
+            ]
         for output in render.get("outputs", []):
-            for beat in voice.get("realized_beats", []):
-                bid = beat["planned_beat_id"]
-                add(stage="render", ref=f"rendered_media:{output.get('kind', 'final')}", kind="rendered_media",
-                    beat_id=bid, title="成片对应区间", summary=output.get("local_path"), payload=output,
+            kind = str(output.get("kind") or "final")
+            for beat in render_units:
+                bid = beat.get("planned_beat_id")
+                if not bid:
+                    continue
+                add(
+                    stage="render",
+                    ref=f"rendered_media:{kind}",
+                    kind="rendered_media",
+                    beat_id=str(bid),
+                    title="成片" if kind == "final" else "预览",
+                    summary=output.get("local_path"),
+                    payload=output,
                     media=f"/api/projects/{project_dir.name}/media/{output.get('local_path', '')}",
-                    start=beat.get("start_ms"), end=beat.get("end_ms"))
+                    start=beat.get("start_ms"),
+                    end=beat.get("end_ms"),
+                )
         return result
 
 
 def stage_refs(view: StageView) -> list[str]:
     return sorted({item.ref for beat in view.beats for item in beat.artifacts})
+
+
+def media_unit_id(item: dict[str, Any], narrative: dict[str, Any] | None = None) -> str:
+    """Grouping id for explainer (beat_id) and drama/tutorial (shot_id) media."""
+
+    shot_id = str(item.get("shot_id") or "").strip()
+    if shot_id and narrative:
+        for shot in shot_list(narrative):
+            if str(shot.get("shot_id") or "") == shot_id:
+                return shot_beat_id(shot)
+    return str(item.get("beat_id") or shot_id or "").strip()
 
 
 def shot_list(narrative: dict[str, Any]) -> list[dict[str, Any]]:

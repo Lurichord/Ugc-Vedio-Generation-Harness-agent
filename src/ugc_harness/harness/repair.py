@@ -372,12 +372,17 @@ def invalidate_subgraph(state: ProjectState, seeds: Iterable[str]) -> list[str]:
     return sorted(visited)
 
 
+on_project_state_written = None
+
+
 def write_project_state(project_dir: str | Path, state: ProjectState) -> None:
     path = Path(project_dir) / "harness" / "project_state.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(state.model_dump_json(indent=2), encoding="utf-8")
     temporary.replace(path)
+    if on_project_state_written is not None:
+        on_project_state_written(Path(project_dir), state)
 
 
 def load_project_state(project_dir: str | Path) -> ProjectState:

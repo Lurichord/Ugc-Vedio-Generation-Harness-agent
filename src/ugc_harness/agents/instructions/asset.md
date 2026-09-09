@@ -1,18 +1,25 @@
 # asset_agent 任务指令
 
-你正在执行素材（asset）任务，目标是为任务范围内的每个 VisualRequirement
+你正在执行素材（asset）任务：为任务范围内的每个 VisualRequirement
 获取一份可用素材（first-success，不保留多候选）。
 
-工作方式（游标式）：
+看当前白名单和 `pending`，自己决定下一步。当前任务没给你的工具不要调。
 
-1. 反复调用 `asset.acquire_requirement`：每次自动处理下一个待办的视觉需求，
-   返回本次结果和剩余待办清单（pending）。
-2. 如果任务是图像修复（scope.target_refs 全部为 prepared_image: 或白名单只有
-   prepare 工具），改为反复调用 `asset.prepare_image`，逐个修复图像。
-3. pending 清空后调用 `asset.submit_candidate` 提交候选。
+## 工具
 
-约束：
+这些工具都是游标式，一次处理下一条待办，返回本次结果和剩余 `pending`。
 
-- 某一次调用失败时，该条目会保留在待办里；根据错误信息决定重试或继续。
+- `asset.acquire_requirement`：处理下一个视觉需求。
+- `asset.prepare_image`：只在图像修复任务里出现，修复下一张图。
+- `asset.submit_candidate`：`pending` 为空后再交。未清空会报可修复错误。
+
+某一次失败时该条目会留在待办里，根据错误决定重试还是继续。
+
+## 产物
+
+每个 VisualRequirement 都有且只有一个最终 resolution。图像修复任务还要有对应的 prepared 图。路径由工具写出，不要手编文件。
+
+## 约束
+
+- 严格执行 first-success，不保留 top-k 候选。
 - 不要修改叙事、配音、编辑部计划或时间线。
-- pending 未清空时提交会返回可修复错误。

@@ -13,7 +13,6 @@ from ..agents.generic import (
     RegistryTool,
     RegistryToolTransport,
 )
-from ..agents.instructions import load_instructions
 from ..agents.narrative_agent.models import NarrativeArtifact
 from ..agents.voice_agent.capabilities import TTSProvider, VoiceCapabilities
 from ..agents.voice_agent.models import VoiceArtifact, VoicePlan
@@ -177,7 +176,7 @@ class VoiceHarnessController:
 
         return cls(
             GenericAgent(
-                tool_model=tool_model or EnvironmentToolModel(),  # type: ignore[arg-type]
+                tool_model=tool_model or EnvironmentToolModel(),
                 transport_factory=transport_factory,
                 candidate_type=VoiceArtifact,
                 completion_builder=_voice_completion,
@@ -203,7 +202,6 @@ class VoiceHarnessController:
             goal="生成完整配音、原生字级时间戳与 RealizedBeat",
             scope=TaskScope(project_id=narrative.brief.project_id),
             based_on_state_version=state.context.state_version,
-            agent_instructions=load_instructions("voice"),
             allowed_tools=[PLAN_TOOL, SYNTHESIZE_TOOL, SUBMIT_TOOL],
             required_outputs=["voice_artifact"],
             forbidden_actions=[

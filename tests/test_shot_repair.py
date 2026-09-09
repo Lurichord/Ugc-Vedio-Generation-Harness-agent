@@ -1,5 +1,6 @@
 from pathlib import Path
 from uuid import uuid4
+import json
 
 import pytest
 
@@ -27,19 +28,43 @@ from ugc_harness.harness.shot_repair import (
 )
 from ugc_harness.intake.host import new_session
 from ugc_harness.intake.identity import update_identity
-from ugc_harness.shared.llm import ModelToolCall
+from ugc_harness.agents.generic import StepDecision
 
 
 class _SubmitPatchesModel:
     def __init__(self, patches: list[dict]) -> None:
         self.patches = patches
 
-    def choose_tool(self, *, messages, tools):
-        name = tools[0]["function"]["name"]
-        return ModelToolCall(
-            call_id="call_1",
-            name=name,
+    def decide(self, messages, tools):
+        del messages
+        name = next(
+            str(item["name"])
+            for item in tools
+            if str(item["name"]).endswith("submit_candidate")
+        )
+        return StepDecision(
+            tool=name,
             arguments={"patches": self.patches},
+        )
+
+
+class _SequentialSubmitModel:
+    def __init__(self, rounds: list[list[dict]]) -> None:
+        self.rounds = rounds
+        self.calls = 0
+        self.messages: list[list[dict]] = []
+
+    def decide(self, messages, tools):
+        self.messages.append(list(messages))
+        patches = self.rounds[min(self.calls, len(self.rounds) - 1)]
+        self.calls += 1
+        return StepDecision(
+            tool=next(
+                str(item["name"])
+                for item in tools
+                if str(item["name"]).endswith("submit_candidate")
+            ),
+            arguments={"patches": patches},
         )
 
 
@@ -163,6 +188,34 @@ def test_run_shot_repair_writes_only_circled_shot() -> None:
     assert updated.production.shots[0].spec.purpose == "只改第一镜"
     assert updated.production.shots[1].spec.purpose == before_other
     assert updated.dependency_graph.nodes[ref].status == "current"
+
+
+def test_run_shot_repair_retries_invalid_schema() -> None:
+    project_dir = _project_dir()
+    state = _write_tutorial_project(project_dir)
+    shot = state.production.shots[0]
+    ref = f"shot:{shot.spec.shot_id}"
+    valid = shot.spec.model_dump(mode="json")
+    valid["purpose"] = "只改第一镜"
+    invalid = dict(valid)
+    invalid["purpose"] = 1
+    model = _SequentialSubmitModel(
+        [
+            [{"ref": ref, "value": invalid}],
+            [{"ref": ref, "value": valid}],
+        ]
+    )
+    run_shot_repair(
+        project_dir,
+        _shot_task(state, [ref]),
+        "只改这一镜的目的",
+        tool_model=model,
+    )
+    assert model.calls == 2
+    fed_back = json.dumps(model.messages[1], ensure_ascii=False)
+    assert "purpose" in fed_back
+    updated = load_project_state(project_dir)
+    assert updated.production.shots[0].spec.purpose == "只改第一镜"
 
 
 def test_identity_update_rewrites_prop_then_shots_still_bind() -> None:

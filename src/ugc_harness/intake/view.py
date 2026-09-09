@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..agents.narrative_agent.brief import make_brief
+from ..agents.narrative_agent.brief import make_brief, new_project_id
 from ..agents.narrative_agent.models import CreativeBrief
 from ..content import AudienceSpec, ContentPolicy, TargetSpec
 from ..harness.description import VideoIntent
@@ -20,6 +20,7 @@ def progress_from_video(video: VideoState) -> ProgressSnapshot:
         script=video.script_status,
         voice=video.voice_status,
         editorial=video.editorial_status,
+        references=getattr(video, "references_status", "not_required"),
         asset=video.asset_status,
         timeline=video.timeline_status,
         render=video.render_status,
@@ -35,6 +36,7 @@ def progress_from_state(state: ProjectState) -> ProgressSnapshot:
         script=stages.script,
         voice=stages.voice,
         editorial=stages.editorial,
+        references=getattr(stages, "references", "not_required"),
         asset=stages.asset,
         timeline=stages.timeline,
         render=stages.render,
@@ -115,6 +117,8 @@ def materialize_brief(draft: BriefDraft) -> CreativeBrief:
     }
     if draft.project_id:
         updates["project_id"] = draft.project_id
+    else:
+        updates["project_id"] = new_project_id(topic)
     return brief.model_copy(update=updates)
 
 
@@ -123,8 +127,8 @@ def format_progress(progress: ProgressSnapshot) -> str:
         f"project_id={progress.project_id or '无'} v={progress.state_version} "
         f"narrative={progress.narrative} script={progress.script} "
         f"voice={progress.voice} editorial={progress.editorial} "
-        f"asset={progress.asset} timeline={progress.timeline} "
-        f"render={progress.render}"
+        f"references={progress.references} asset={progress.asset} "
+        f"timeline={progress.timeline} render={progress.render}"
     )
 
 

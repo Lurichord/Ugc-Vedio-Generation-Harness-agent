@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from ..harness.models import TaskEnvelope
+from ..harness.models import TaskBudget, TaskEnvelope, TaskScope
+from ..harness.shot_repair import REPAIR_SUBMIT_TOOL, _stage_produced, resolve_shot_refs
 
 from pydantic import ValidationError
 
@@ -19,7 +20,6 @@ from ..harness.repair import (
 )
 from .description_view import get_element, list_outline
 from .graph_view import list_graph, resolve_graph_ref
-from ..harness.shot_repair import resolve_shot_refs
 from .models import IntakeSession
 from .view import (
     apply_state_to_session,
@@ -174,13 +174,46 @@ def repair_description(
             "error": "；".join(item["reason"] for item in missing),
             "blockers": missing,
         }
-    shot_refs = resolve_shot_refs(state, graph_refs)
-    seeds = shot_refs or graph_refs
+    format_id = state.context.constraints.get(
+        "narrative_format"
+    ) or state.context.constraints.get("production_mode")
+    voice_only = (
+        format_id not in {"drama", "tutorial"}
+        and bool(graph_refs)
+        and all(
+            item.startswith(("utterance:", "audio:", "script_segment:"))
+            for item in graph_refs
+        )
+    )
+    identity_refs = [
+        item for item in graph_refs if item.startswith(("cast:", "prop:", "place:"))
+    ]
+    shot_refs = [] if voice_only else resolve_shot_refs(state, graph_refs)
+    direct_shots = format_id in {"drama", "tutorial"} and not voice_only
+    if voice_only:
+        seeds = _audio_repair_refs(state, graph_refs) or graph_refs
+    elif direct_shots:
+        seeds = list(dict.fromkeys([*identity_refs, *shot_refs]))
+    else:
+        seeds = shot_refs or graph_refs
     try:
         working = state.model_copy(deep=True)
         invalidated = invalidate_subgraph(working, seeds)
     except ValueError as exc:
         return session, {"ok": False, "error": str(exc), "target_refs": graph_refs}
+    if direct_shots:
+        return _repair_direct_shots(
+            session,
+            project_dir,
+            state,
+            graph_refs=graph_refs,
+            identity_refs=identity_refs,
+            shot_refs=shot_refs,
+            invalidated=invalidated,
+            instruction=note,
+            dry_run=dry_run,
+            run_task=run_task,
+        )
     preview = RepairScheduler().plan(working, invalidated)
     if preview.blockers:
         return session, {
@@ -247,6 +280,108 @@ def repair_description(
         payload["error"] = result.error or "repair 未完成"
     return session, payload
 
+
+
+def _repair_direct_shots(
+    session: IntakeSession,
+    project_dir: Path,
+    state,
+    *,
+    graph_refs: list[str],
+    identity_refs: list[str],
+    shot_refs: list[str],
+    invalidated: list[str],
+    instruction: str,
+    dry_run: bool,
+    run_task: Callable[[TaskEnvelope, str], None] | None,
+) -> tuple[IntakeSession, dict[str, Any]]:
+    circled = identity_refs + shot_refs
+    preview_payload = {
+        "target_refs": graph_refs,
+        "shot_refs": shot_refs,
+        "identity_refs": identity_refs,
+        "invalidated": invalidated,
+        "planned_tasks": 1,
+        "complete": False,
+    }
+    if dry_run:
+        return session, {
+            "ok": True,
+            "dry_run": True,
+            **preview_payload,
+            "text": (
+                f"dry-run：将按图改 {', '.join(circled)}，"
+                f"弄脏 {len(invalidated)} 个节点，然后重出"
+                f"{'参考图和成片' if _stage_produced(state, 'asset') else '参考图'}。"
+            ),
+        }
+    if run_task is None:
+        return session, {
+            "ok": False,
+            "error": "harness.repair 执行器未接线",
+            **preview_payload,
+        }
+    invalidate_subgraph(state, circled)
+    write_project_state(project_dir, state)
+    task = TaskEnvelope(
+        task_id=(
+            f"task_repair_direct_{state.context.project_id}_v"
+            f"{state.context.state_version}"
+        ),
+        agent="narrative_agent",
+        goal="按依赖图修镜头规格，并重出圈中身份参考图与成片",
+        scope=TaskScope(
+            project_id=state.context.project_id,
+            shot_ids=[ref.partition(":")[2] for ref in shot_refs],
+            target_refs=circled,
+        ),
+        based_on_state_version=state.context.state_version,
+        allowed_tools=[REPAIR_SUBMIT_TOOL],
+        required_outputs=["patches"],
+        budget=TaskBudget(max_steps=6, max_retries=1),
+        input_hash="repair-direct",
+    )
+    try:
+        run_task(task, instruction)
+    except Exception as exc:
+        session = refresh_session_from_disk(session)
+        return session, {
+            "ok": False,
+            "error": f"repair 执行失败：{exc}",
+            **preview_payload,
+        }
+    session = refresh_session_from_disk(session)
+    return session, {
+        "ok": True,
+        "complete": True,
+        "dry_run": False,
+        **preview_payload,
+        "text": (
+            f"repair 完成。已按指令改 {', '.join(circled)}。"
+            f"{format_progress(session.progress)}"
+        ),
+        "progress": session.progress.model_dump(mode="json"),
+    }
+
+
+def _audio_repair_refs(state, graph_refs: list[str]) -> list[str]:
+    found: list[str] = []
+    nodes = state.dependency_graph.nodes
+    for ref in graph_refs:
+        if ref.startswith("audio:") and ref not in found:
+            found.append(ref)
+            continue
+        node = nodes.get(ref)
+        if node is None:
+            continue
+        for dep in node.dependents:
+            if dep.startswith("audio:") and dep not in found:
+                found.append(dep)
+        for other in nodes.values():
+            if other.ref.startswith("audio:") and ref in other.depends_on:
+                if other.ref not in found:
+                    found.append(other.ref)
+    return found
 
 
 def _already_started(session: IntakeSession) -> bool:

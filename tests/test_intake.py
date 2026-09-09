@@ -43,7 +43,12 @@ from ugc_harness.intake.models import (
 )
 from ugc_harness.intake.mcp_runtime import IntakeMcpRuntime
 from ugc_harness.intake.skills import SKILL_NAME_ERROR, list_skills, load_skill, validate_skill_name
-from ugc_harness.intake.tools import HARNESS_LIST_GRAPH, INTAKE_MCP_TOOLS, activate_skill
+from ugc_harness.intake.tools import (
+    HARNESS_LIST_GRAPH,
+    INTAKE_MCP_TOOLS,
+    activate_skill,
+    mcp_tool_specs,
+)
 from ugc_harness.intake.view import (
     apply_state_to_session,
     intent_draft_from_video_intent,
@@ -729,6 +734,20 @@ def test_repair_resolves_description_ref_to_graph_node() -> None:
     assert unwired["target_refs"] == ["beat:b3"]
 
 
+def test_explainer_utterance_repair_does_not_expand_to_shots() -> None:
+    project_dir = Path(".tmp") / "test_intake_repair_utterance"
+    _write_demo_project(project_dir)
+    session = new_session()
+    session.project_dir = str(project_dir)
+    _, preview = repair_description(
+        session, ["utterance:ss3"], "只重配这一句，不改词", dry_run=True
+    )
+    assert preview["ok"] is True
+    assert preview["shot_refs"] == []
+    assert "shot:shot_b3" not in preview["invalidated"]
+    assert "audio:ss3" in preview["invalidated"]
+
+
 def test_repair_runs_injected_executor_until_current() -> None:
     from tests.test_repair import commit_repair_targets
 
@@ -800,6 +819,30 @@ def test_skill_catalog_and_activate() -> None:
     assert rejected["error"] == SKILL_NAME_ERROR
 
 
+def test_intake_mcp_tools_advertise_descriptions_and_parameters() -> None:
+    specs = {item["name"]: item for item in mcp_tool_specs()}
+    assert list(specs) == list(INTAKE_MCP_TOOLS)
+    for item in specs.values():
+        assert item["description"], item["name"]
+        assert item["parameters"].get("type") == "object", item["name"]
+    assert "structure 大纲" in specs["description.list_outline"]["description"]
+    ref = specs["description.get_element"]["parameters"]["properties"]["ref"]
+    assert "beat:b3" in str(ref.get("description") or "")
+    kind = specs["identity.create"]["parameters"]["properties"]["kind"]
+    enum_values = kind.get("enum") or [
+        option.get("const")
+        for option in kind.get("anyOf") or []
+        if isinstance(option, dict)
+    ]
+    assert "cast" in enum_values
+    assert "prop" in enum_values
+    patches = specs["identity.update"]["parameters"]["properties"]["patches"]
+    assert patches.get("description")
+    repair = specs["harness.repair"]["parameters"]["properties"]
+    assert "身份" in str(repair["target_refs"].get("description") or "")
+    assert repair["instruction"].get("description")
+
+
 def test_intake_mcp_tools_are_isolated_from_narrative() -> None:
     assert "narrative.explainer.plan_sections" not in INTAKE_MCP_TOOLS
     assert "narrative.submit_candidate" not in INTAKE_MCP_TOOLS
@@ -809,6 +852,10 @@ def test_intake_mcp_tools_are_isolated_from_narrative() -> None:
     assert "brief.update" not in INTAKE_MCP_TOOLS
     assert HARNESS_LIST_GRAPH in INTAKE_MCP_TOOLS
     assert hasattr(intake_mcp, "harness_list_graph")
+    assert hasattr(intake_mcp, "identity_create")
+    assert hasattr(intake_mcp, "shot_create")
+    assert hasattr(intake_mcp, "shot_bind")
+    assert hasattr(intake_mcp, "graph_remove")
 
 
 def test_intake_stdio_mcp_exposes_only_intent_tools() -> None:

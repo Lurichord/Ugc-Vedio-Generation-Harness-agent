@@ -4,8 +4,14 @@ import json
 from pathlib import Path
 
 from ugc_harness.agents.narrative_agent.models import NarrativeArtifact
+from ugc_harness.harness.dependencies import DependencyGraph
+from ugc_harness.harness.dependency_builders import narrative_commits
 from ugc_harness.harness.models import ProjectState
 from ugc_harness.harness.shot_asset_controller import ShotAssetHarnessController
+from ugc_harness.harness.shot_reference_controller import (
+    SeedreamIdentityImageProvider,
+    ShotReferenceHarnessController,
+)
 from ugc_harness.harness.shot_render_controller import ShotRenderHarnessController
 from ugc_harness.harness.shot_timeline_controller import ShotTimelineHarnessController
 from ugc_harness.harness.shot_video_provider import SeedanceShotVideoProvider
@@ -41,12 +47,18 @@ def prepare(format_id: str, source: Path) -> tuple[Path, NarrativeArtifact, Proj
     state.evaluation.stages.script = "not_required" if format_id == "drama" else "passed"
     state.evaluation.stages.voice = "not_required"
     state.evaluation.stages.editorial = "not_required"
-    state.evaluation.stages.asset = "ready"
+    state.evaluation.stages.references = "ready"
+    state.evaluation.stages.asset = "pending"
     state.evaluation.stages.timeline = "pending"
     state.evaluation.stages.render = "pending"
     state.dependency_graph.nodes = {}
     state.dependency_graph.graph_version = 0
     state.trajectory.phases = {}
+    DependencyGraph(state.dependency_graph).commit_batch(
+        task_id="seed",
+        produced_by="narrative_agent",
+        commits=narrative_commits(narrative),
+    )
     writer = ArtifactWriter(OUTPUT_ROOT)
     project_dir, _ = writer.write(narrative)
     harness_dir = project_dir / "harness"
@@ -67,9 +79,16 @@ def main() -> None:
             f"[full] {format_id}: {len(narrative.shots.shots)} shots",
             flush=True,
         )
+        with SeedreamIdentityImageProvider(generation) as images:
+            references, reference_run = ShotReferenceHarnessController.from_provider(
+                images
+            ).run(narrative, project_dir, state)
+        writer = ArtifactWriter(OUTPUT_ROOT)
+        writer.write_identity_references(project_dir, references)
+        writer.write_identity_reference_run(project_dir, reference_run)
         with SeedanceShotVideoProvider(generation) as provider:
             assets, asset_run = ShotAssetHarnessController(provider).run(
-                narrative, project_dir, state
+                narrative, project_dir, reference_run.project_state
             )
         writer = ArtifactWriter(OUTPUT_ROOT)
         writer.write_shot_assets(project_dir, assets)

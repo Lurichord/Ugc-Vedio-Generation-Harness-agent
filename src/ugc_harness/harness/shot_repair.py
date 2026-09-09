@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +16,15 @@ from .description import VideoDescription
 from .models import (
     ArtifactRef,
     ProjectState,
+    ShotCreateSpec,
     ShotDescription,
     StatePatch,
     TaskEnvelope,
 )
+from .world_identities import identity_record, missing_identity_images
 
 REPAIR_SUBMIT_TOOL = "repair.submit_candidate"
+_PRODUCED_STAGES = frozenset({"passed", "needs_revision", "stale", "locked"})
 
 _STRUCTURE_PREFIXES = ("beat:", "planned_beat:", "scene:", "step:")
 _IDENTITY_PREFIXES = ("cast:", "prop:", "place:")
@@ -88,34 +92,12 @@ def apply_shot_patches(
     shot_refs: list[str],
 ) -> list[NodeCommit]:
     allowed = set(shot_refs)
-    submitted = [item.ref for item in candidate.patches]
-    extra = [ref for ref in submitted if ref not in allowed]
-    if extra:
-        raise ValueError(f"repair output is outside editable shots: {sorted(extra)}")
-    missing = allowed - set(submitted)
-    if missing:
-        raise ValueError(f"repair output is missing target refs: {sorted(missing)}")
-
+    _validate_repair_candidate(state, candidate, shot_refs)
     by_id = {shot.spec.shot_id: shot for shot in state.production.shots}
     for item in candidate.patches:
         shot_id = item.ref.partition(":")[2]
-        current = by_id.get(shot_id)
-        if current is None:
-            raise ValueError(f"production 里没有 {item.ref}")
-        incoming = ProductionShot.model_validate(item.value)
-        previous = current.spec
-        for field in _LOCKED_SHOT_FIELDS:
-            if getattr(incoming, field) != getattr(previous, field):
-                raise ValueError(f"{item.ref} 不能改 {field}")
-        unknown = [
-            bind
-            for bind in incoming.binds
-            if bind not in state.dependency_graph.nodes
-            and _world_identity(state, bind) is None
-        ]
-        if unknown:
-            raise ValueError(f"{item.ref} binds 指向不存在的身份：{unknown}")
-        current.spec = incoming
+        current = by_id[shot_id]
+        current.spec = ProductionShot.model_validate(item.value)
         current.media = None
 
     document = _document_from_state(state)
@@ -129,6 +111,8 @@ def run_shot_repair(
     instruction: str,
     *,
     tool_model: object | None = None,
+    image_provider: object | None = None,
+    video_provider: object | None = None,
 ) -> None:
     from ..agents.generic import (
         CompletionSpec,
@@ -140,18 +124,44 @@ def run_shot_repair(
     from .repair import (
         load_project_state,
         select_repair_commits,
-        write_project_state,
     )
 
     directory = Path(project_dir)
     state = load_project_state(directory)
+    if task.create_shot is not None:
+        _run_shot_create(directory, state, task, instruction, tool_model)
+        return
+    identity_refs = [
+        ref
+        for ref in task.scope.target_refs
+        if ref.startswith(("cast:", "prop:", "place:"))
+    ]
     shot_refs = [ref for ref in task.scope.target_refs if ref.startswith("shot:")]
     if not shot_refs:
         shot_refs = resolve_shot_refs(state, task.scope.target_refs)
     if not shot_refs:
-        raise ValueError("shot repair 需要 shot target_refs")
+        if not identity_refs:
+            raise ValueError("shot repair 需要 shot 或身份 target_refs")
+        _finish_shot_repair(
+            directory,
+            state,
+            identity_refs=identity_refs,
+            shot_ids=[],
+            shot_commits=[],
+            image_provider=image_provider,
+            video_provider=video_provider,
+        )
+        return
+    if image_provider is not None:
+        identity_refs = _identity_refs_needing_images(state, identity_refs, shot_refs)
 
     pack = build_repair_pack(state, shot_refs, instruction or "")
+    print(
+        f"[narrative_agent] shot_repair start shots={shot_refs} "
+        f"task={task.task_id}",
+        file=sys.stderr,
+        flush=True,
+    )
     envelope = task
     if set(envelope.scope.target_refs) != set(shot_refs):
         envelope = task.model_copy(
@@ -194,6 +204,9 @@ def run_shot_repair(
             ]
         ),
         candidate_type=RepairCandidate,
+        candidate_validator=lambda _task, candidate: _validate_repair_candidate(
+            state, candidate, shot_refs
+        ),
         completion_builder=lambda _task, _kwargs: CompletionSpec(
             artifact_refs=[
                 ArtifactRef(kind="shot", id=ref.partition(":")[2])
@@ -214,20 +227,164 @@ def run_shot_repair(
     commits = apply_shot_patches(state, candidate, shot_refs)
     graph = DependencyGraph(state.dependency_graph)
     commits = select_repair_commits(graph, commits, envelope)
-    graph.commit_batch(
-        task_id=envelope.task_id,
-        produced_by="narrative_agent",
-        commits=commits,
+    _finish_shot_repair(
+        directory,
+        state,
+        identity_refs=identity_refs,
+        shot_ids=[ref.partition(":")[2] for ref in shot_refs],
+        shot_commits=commits,
+        image_provider=image_provider,
+        video_provider=video_provider,
     )
-    state.context.state_version += 1
-    format_id = (
-        state.context.constraints.get("narrative_format")
-        or state.context.constraints.get("production_mode")
+    _sync_narrative_artifact_shots(directory, state)
+
+
+def _identity_refs_needing_images(
+    state: ProjectState,
+    identity_refs: list[str],
+    shot_refs: list[str],
+) -> list[str]:
+    found = list(identity_refs)
+    for ref in shot_refs:
+        description = _shot_description(state, ref)
+        if description is None:
+            continue
+        for bind in description.spec.binds:
+            item = identity_record(state, bind)
+            if item is None or not getattr(item, "reference_image", None):
+                if bind not in found:
+                    found.append(bind)
+    return found
+
+
+def _validate_repair_candidate(
+    state: ProjectState,
+    candidate: BaseModel,
+    shot_refs: list[str],
+) -> None:
+    if not isinstance(candidate, RepairCandidate):
+        raise ValueError("shot repair 返回了错误的候选类型")
+    allowed = set(shot_refs)
+    submitted = [item.ref for item in candidate.patches]
+    extra = [ref for ref in submitted if ref not in allowed]
+    if extra:
+        raise ValueError(f"repair output is outside editable shots: {sorted(extra)}")
+    missing = allowed - set(submitted)
+    if missing:
+        raise ValueError(f"repair output is missing target refs: {sorted(missing)}")
+    by_id = {shot.spec.shot_id: shot for shot in state.production.shots}
+    for item in candidate.patches:
+        shot_id = item.ref.partition(":")[2]
+        current = by_id.get(shot_id)
+        if current is None:
+            raise ValueError(f"production 里没有 {item.ref}")
+        incoming = ProductionShot.model_validate(item.value)
+        previous = current.spec
+        for field in _LOCKED_SHOT_FIELDS:
+            if getattr(incoming, field) != getattr(previous, field):
+                raise ValueError(f"{item.ref} 不能改 {field}")
+        unknown = [
+            bind
+            for bind in incoming.binds
+            if bind not in state.dependency_graph.nodes
+            and _world_identity(state, bind) is None
+        ]
+        if unknown:
+            raise ValueError(f"{item.ref} binds 指向不存在的身份：{unknown}")
+
+
+def _validate_create_candidate(candidate: BaseModel, spec: ShotCreateSpec) -> None:
+    if not isinstance(candidate, RepairCandidate):
+        raise ValueError("shot create 返回了错误的候选类型")
+    shot_ref = f"shot:{spec.shot_id}"
+    if len(candidate.patches) != 1 or candidate.patches[0].ref != shot_ref:
+        raise ValueError(f"shot create 必须只交 {shot_ref}")
+    incoming = ProductionShot.model_validate(candidate.patches[0].value)
+    for field in _LOCKED_SHOT_FIELDS:
+        if getattr(incoming, field) != getattr(spec, field):
+            raise ValueError(f"{shot_ref} 不能改 {field}")
+
+
+def _run_shot_create(
+    directory: Path,
+    state: ProjectState,
+    task: TaskEnvelope,
+    instruction: str,
+    tool_model: object | None,
+) -> None:
+    from ..agents.generic import (
+        CompletionSpec,
+        EnvironmentToolModel,
+        GenericAgent,
+        RegistryTool,
+        RegistryToolTransport,
     )
-    if format_id in {"drama", "tutorial"}:
-        state.evaluation.stages.asset = "ready"
-        state.evaluation.stages.timeline = "pending"
-        state.evaluation.stages.render = "pending"
+    from .graph_edit import apply_created_shot, build_create_pack
+    from .repair import write_project_state
+
+    spec = task.create_shot
+    if spec is None:
+        raise ValueError("shot create 缺少 create_shot")
+    shot_ref = f"shot:{spec.shot_id}"
+    pack = build_create_pack(state, spec, instruction or "")
+    print(
+        f"[narrative_agent] shot_create start {shot_ref} task={task.task_id}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    def submit(patches: list[dict[str, Any]]) -> RepairCandidate:
+        return RepairCandidate.model_validate({"patches": patches})
+
+    agent = GenericAgent(
+        tool_model=tool_model or EnvironmentToolModel(),
+        transport_factory=lambda _task, _kwargs: RegistryToolTransport(
+            [
+                RegistryTool(
+                    name=REPAIR_SUBMIT_TOOL,
+                    description="提交新 shot 的完整 ProductionShot。拓扑字段必须与 create 锁定一致。",
+                    handler=lambda patches: submit(patches),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "patches": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ref": {"type": "string"},
+                                        "value": {"type": "object"},
+                                    },
+                                    "required": ["ref", "value"],
+                                    "additionalProperties": False,
+                                },
+                            }
+                        },
+                        "required": ["patches"],
+                        "additionalProperties": False,
+                    },
+                )
+            ]
+        ),
+        candidate_type=RepairCandidate,
+        candidate_validator=lambda _task, candidate: _validate_create_candidate(
+            candidate, spec
+        ),
+        completion_builder=lambda _task, _kwargs: CompletionSpec(
+            artifact_refs=[ArtifactRef(kind="shot", id=spec.shot_id)],
+            state_patch=StatePatch(),
+            evaluation_target=shot_ref,
+        ),
+        context_builder=lambda _task, _kwargs: {"repair_pack": pack},
+    )
+    execution = agent.run(task)
+    candidate = execution.candidate
+    if execution.result.status != "completed" or candidate is None:
+        raise RuntimeError(execution.result.error or "shot create 没有提交镜头")
+    if not isinstance(candidate, RepairCandidate):
+        raise RuntimeError("shot create 返回了错误的候选类型")
+    incoming = ProductionShot.model_validate(candidate.patches[0].value)
+    apply_created_shot(state, spec, incoming, task_id=task.task_id)
     write_project_state(directory, state)
     _sync_narrative_artifact_shots(directory, state)
 
@@ -396,6 +553,88 @@ def _document_from_state(state: ProjectState) -> VideoDescription:
     )
 
 
+def _stage_produced(state: ProjectState, stage: str) -> bool:
+    return str(getattr(state.evaluation.stages, stage)) in _PRODUCED_STAGES
+
+
+def _realize_after_shot_repair(
+    directory: Path,
+    state: ProjectState,
+    *,
+    identity_refs: list[str],
+    shot_ids: list[str],
+    image_provider: object | None,
+    video_provider: object | None,
+) -> tuple[bool, bool]:
+    from .shot_realize import realize_identity_and_shots
+
+    do_images = bool(identity_refs) and image_provider is not None and _stage_produced(
+        state, "references"
+    )
+    do_videos = bool(shot_ids) and video_provider is not None and _stage_produced(
+        state, "asset"
+    )
+    if not do_images and not do_videos:
+        return False, False
+    realize_identity_and_shots(
+        directory,
+        state,
+        identity_refs=identity_refs if do_images else [],
+        shot_ids=shot_ids if do_videos else [],
+        image_provider=image_provider,
+        video_provider=video_provider,
+    )
+    return do_images, do_videos
+
+
+def _finish_shot_repair(
+    directory: Path,
+    state: ProjectState,
+    *,
+    identity_refs: list[str],
+    shot_ids: list[str],
+    shot_commits: list[NodeCommit],
+    image_provider: object | None,
+    video_provider: object | None,
+) -> None:
+    from .repair import write_project_state
+
+    state.context.state_version += 1
+    format_id = (
+        state.context.constraints.get("narrative_format")
+        or state.context.constraints.get("production_mode")
+    )
+    realized_video = False
+    if format_id in {"drama", "tutorial"}:
+        did_images, realized_video = _realize_after_shot_repair(
+            directory,
+            state,
+            identity_refs=identity_refs,
+            shot_ids=shot_ids,
+            image_provider=image_provider,
+            video_provider=video_provider,
+        )
+        if did_images:
+            state.evaluation.stages.references = (
+                "ready" if missing_identity_images(state) else "passed"
+            )
+        if realized_video:
+            state.evaluation.stages.asset = "passed"
+            if _stage_produced(state, "timeline"):
+                state.evaluation.stages.timeline = "pending"
+            if _stage_produced(state, "render"):
+                state.evaluation.stages.render = "pending"
+        elif did_images and not _stage_produced(state, "asset"):
+            state.evaluation.stages.asset = "ready"
+    if shot_commits and not realized_video:
+        DependencyGraph(state.dependency_graph).commit_batch(
+            task_id="shot_repair_submit",
+            produced_by="narrative_agent",
+            commits=shot_commits,
+        )
+    write_project_state(directory, state)
+
+
 def _sync_narrative_artifact_shots(project_dir: Path, state: ProjectState) -> None:
     path = project_dir / "narrative_artifact.json"
     if not path.is_file():
@@ -405,7 +644,15 @@ def _sync_narrative_artifact_shots(project_dir: Path, state: ProjectState) -> No
         return
     by_id = {shot.spec.shot_id: shot.spec for shot in state.production.shots}
     updated = []
+    seen: set[str] = set()
     for shot in artifact.shots.shots:
-        updated.append(by_id.get(shot.shot_id, shot))
-    artifact.shots.shots = updated
+        spec = by_id.get(shot.shot_id)
+        if spec is None:
+            continue
+        updated.append(spec)
+        seen.add(shot.shot_id)
+    for shot in state.production.shots:
+        if shot.spec.shot_id not in seen:
+            updated.append(shot.spec)
+    artifact.shots.shots = sorted(updated, key=lambda item: item.order)
     path.write_text(artifact.model_dump_json(indent=2), encoding="utf-8")

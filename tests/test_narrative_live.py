@@ -1,4 +1,4 @@
-"""Live generic-agent narrative tests. Real choose_tool and real narrative MCP."""
+"""Live generic-agent narrative tests. Real decide/generate and real narrative MCP."""
 
 from __future__ import annotations
 

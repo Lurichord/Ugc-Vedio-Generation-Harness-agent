@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
@@ -12,33 +11,6 @@ from .llm_prompts import SYSTEM_PROMPT, repair_prompt
 from .settings import LLMSettings
 
 T = TypeVar("T", bound=BaseModel)
-
-
-@dataclass(frozen=True)
-class ModelToolCall:
-    call_id: str
-    name: str
-    arguments: dict[str, Any]
-
-    def assistant_message(self) -> dict[str, Any]:
-        return {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": self.call_id,
-                    "type": "function",
-                    "function": {
-                        "name": self.name,
-                        "arguments": json.dumps(
-                            self.arguments,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                    },
-                }
-            ],
-        }
 
 
 def _extract_json(text: str) -> dict:
@@ -69,7 +41,13 @@ class StructuredLLM:
             max_retries=settings.max_retries,
         )
 
-    def generate(self, prompt: str, output_type: type[T]) -> T:
+    def generate(
+        self,
+        prompt: str,
+        output_type: type[T],
+        *,
+        system: str | None = None,
+    ) -> T:
         schema = json.dumps(
             output_type.model_json_schema(),
             ensure_ascii=False,
@@ -91,7 +69,7 @@ class StructuredLLM:
                 max_tokens=self.settings.max_output_tokens,
                 response_format={"type": "json_object"},
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system or SYSTEM_PROMPT},
                     {"role": "user", "content": active_prompt},
                 ],
             )
@@ -108,61 +86,4 @@ class StructuredLLM:
         raise RuntimeError(
             f"Model output failed validation after repair: {last_error}\n"
             f"Last response preview: {last_text[:500]}"
-        )
-
-    def choose_tool(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-    ) -> ModelToolCall:
-        """Ask the model to select exactly one tool for the next agent step."""
-
-        if not tools:
-            raise ValueError("at least one model tool is required")
-        active_messages = list(messages)
-        calls = []
-        arguments: dict[str, Any] | None = None
-        argument_error: Exception | None = None
-        for attempt in range(2):
-            response = self.client.chat.completions.create(
-                model=self.settings.model,
-                temperature=0.1,
-                max_tokens=min(self.settings.max_output_tokens, 2_048),
-                messages=active_messages,  # type: ignore[arg-type]
-                tools=tools,  # type: ignore[arg-type]
-                tool_choice="required",
-            )
-            calls = response.choices[0].message.tool_calls or []
-            if len(calls) == 1:
-                try:
-                    arguments = _extract_json(calls[0].function.arguments or "{}")
-                    break
-                except (ValueError, json.JSONDecodeError) as exc:
-                    argument_error = exc
-            if attempt == 0:
-                active_messages = [
-                    *messages,
-                    {
-                        "role": "user",
-                        "content": (
-                            "你必须从当前提供的工具中选择且只调用一个工具。"
-                            "不要只返回文字；function.arguments 必须是严格 JSON 对象。"
-                            "请根据现有工具结果决定下一步。"
-                        ),
-                    },
-                ]
-        if len(calls) != 1 or arguments is None:
-            if argument_error is not None:
-                raise RuntimeError(
-                    "agent model returned invalid tool arguments after retry"
-                ) from argument_error
-            raise RuntimeError(
-                f"agent model must choose exactly one tool, received {len(calls)}"
-            )
-        call = calls[0]
-        return ModelToolCall(
-            call_id=call.id,
-            name=call.function.name,
-            arguments=arguments,
         )

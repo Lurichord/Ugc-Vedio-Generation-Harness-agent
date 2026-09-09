@@ -16,7 +16,6 @@ from ..agents.generic import (
     RegistryTool,
     RegistryToolTransport,
 )
-from ..agents.instructions import load_instructions
 from ..agents.timeline_agent import TimelineArtifact
 from ..agents.timeline_agent.capabilities import ScreenAnimationProvider, TimelineCapabilities
 from ..agents.timeline_agent.models import TimelineCandidate
@@ -140,7 +139,7 @@ class TimelineHarnessController:
 
         return cls(
             GenericAgent(
-                tool_model=tool_model or EnvironmentToolModel(),  # type: ignore[arg-type]
+                tool_model=tool_model or EnvironmentToolModel(),
                 transport_factory=transport_factory,
                 candidate_type=TimelineCandidate,
                 completion_builder=_timeline_completion,
@@ -160,7 +159,6 @@ class TimelineHarnessController:
             goal="Compose an audio-clocked clip, caption, transform, and overlay timeline.",
             scope=TaskScope(project_id=voice.project_id, beat_ids=[item.beat_id for item in voice.realized_beats]),
             based_on_state_version=state.context.state_version,
-            agent_instructions=load_instructions("timeline"),
             allowed_tools=[COMPOSE_TOOL, SUBMIT_TOOL],
             required_outputs=["timeline_candidate"],
             forbidden_actions=["modify_voice", "modify_editorial_plan", "replace_assets", "render_video"],

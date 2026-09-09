@@ -51,7 +51,7 @@ const ClipMedia = ({clip}) => {
         src={staticFile(clip.media_path)}
         style={style}
         muted={clip.muted}
-        loop
+        loop={Boolean(clip.loop)}
         pauseWhenBuffering
       />
     );

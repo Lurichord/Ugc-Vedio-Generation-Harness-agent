@@ -19,7 +19,7 @@ from ugc_harness.harness.models import (
     RuntimeContext,
     VideoState,
 )
-from ugc_harness.shared.llm import ModelToolCall
+from ugc_harness.agents.generic import StepDecision
 from ugc_harness.shared.settings import TTSSettings
 from ugc_harness.harness.voice_controller import VoiceHarnessController
 from tests.test_quality import sample_plan, sample_script
@@ -71,14 +71,11 @@ class VoiceToolModel:
     def __init__(self) -> None:
         self.selected: list[str] = []
 
-    def choose_tool(self, *, messages, tools):
+    def decide(self, messages, tools):
+        del messages, tools
         name = self.SEQUENCE[len(self.selected) % len(self.SEQUENCE)]
         self.selected.append(name)
-        return ModelToolCall(
-            call_id=f"call_{len(self.selected)}",
-            name=name,
-            arguments={},
-        )
+        return StepDecision(tool=name)
 
 
 def make_voice_controller() -> VoiceHarnessController:

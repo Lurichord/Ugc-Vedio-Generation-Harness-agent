@@ -17,6 +17,7 @@ from .shot_asset_controller import ShotAssetArtifact
 class ShotTimelineClip(StrictModel):
     clip_id: str
     shot_id: str
+    beat_id: str = ""
     start_ms: int = Field(ge=0)
     end_ms: int = Field(gt=0)
     playback_path: str
@@ -24,6 +25,12 @@ class ShotTimelineClip(StrictModel):
     audio_mode: Literal["embedded_in_video", "mixed"]
     preserve_source_audio: bool
     caption: str | None = None
+
+    @model_validator(mode="after")
+    def unify_beat_id(self) -> "ShotTimelineClip":
+        if not self.beat_id:
+            self.beat_id = self.shot_id
+        return self
 
 
 class ShotTimelineArtifact(StrictModel):
@@ -100,6 +107,7 @@ class ShotTimelineHarnessController:
             clips.append(ShotTimelineClip(
                 clip_id=f"clip_{shot.shot_id}",
                 shot_id=shot.shot_id,
+                beat_id=shot.shot_id,
                 start_ms=cursor,
                 end_ms=end,
                 playback_path=asset.local_path,

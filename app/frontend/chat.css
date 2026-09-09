@@ -308,14 +308,27 @@ dialog#drawer {
   gap: 10px;
 }
 
-.graph-meta {
+.graph-versions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: baseline;
+  gap: 6px;
+}
+
+.graph-version {
+  min-width: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
   font-size: 12px;
-  color: var(--muted);
+  cursor: pointer;
+}
+
+.graph-version.is-active {
+  border-color: #1f6feb;
+  background: #e7f0ff;
+  color: #1f6feb;
 }
 
 .graph-legend {

@@ -98,6 +98,7 @@ class ProgressSnapshot(StrictModel):
     script: ArtifactStatus = "pending"
     voice: ArtifactStatus = "pending"
     editorial: ArtifactStatus = "pending"
+    references: ArtifactStatus = "not_required"
     asset: ArtifactStatus = "pending"
     timeline: ArtifactStatus = "pending"
     render: ArtifactStatus = "pending"

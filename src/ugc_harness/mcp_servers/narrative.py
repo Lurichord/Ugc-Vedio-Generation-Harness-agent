@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
+from pydantic import Field
 
 from ..content import (
     DramaAction,
@@ -68,6 +69,11 @@ TUTORIAL_DEFINITION_TOOL = "narrative.tutorial.define_result"
 TUTORIAL_STEPS_TOOL = "narrative.tutorial.plan_steps"
 TUTORIAL_EXPLANATIONS_TOOL = "narrative.tutorial.plan_explanations"
 TUTORIAL_SHOTS_TOOL = "narrative.tutorial.compile_shots"
+
+ProblemsArg = Annotated[
+    list[str] | None,
+    Field(description="上一轮这层的问题；首次调用不要填。"),
+]
 
 
 @dataclass
@@ -208,14 +214,19 @@ def _decorate_prompt(prompt: str, output_name: str) -> str:
     return "\n\n".join(sections)
 
 
-@mcp.tool(name=CONFIGURE_TOOL, structured_output=True)
+@mcp.tool(
+    name=CONFIGURE_TOOL,
+    description="为本进程配置一次叙事任务。由 harness 调用，模型不要选这个工具。",
+    structured_output=True,
+)
 def configure_task(
-    brief: dict[str, Any],
-    model: str,
-    generation_context: dict[str, Any] | None = None,
+    brief: Annotated[dict[str, Any], Field(description="CreativeBrief JSON。")],
+    model: Annotated[str, Field(description="本任务使用的模型名。")],
+    generation_context: Annotated[
+        dict[str, Any] | None,
+        Field(description="局部修复时的基准和 instruction；首跑不要填。"),
+    ] = None,
 ) -> dict[str, Any]:
-    """Initialize the isolated stdio server process for one narrative task."""
-
     global _session
     parsed_brief = CreativeBrief.model_validate(brief)
     if parsed_brief.production_mode not in {
@@ -252,25 +263,28 @@ def configure_task(
     }
 
 
-@mcp.tool(name=SUBMIT_TOOL, structured_output=True)
+@mcp.tool(
+    name=SUBMIT_TOOL,
+    description=(
+        "当前体裁各层都齐了再交。讲解要章节、节拍、口播和镜头；"
+        "短剧要世界、故事、动作和镜头；教程要成品、步骤、讲解和镜头。"
+        "缺层会返回可修复错误。"
+    ),
+    structured_output=True,
+)
 def submit_candidate() -> NarrativeCandidate:
-    """Submit when the current format candidate is complete.
-
-    Explainer needs section, beat, script, and shots. Drama needs world, story,
-    actions, and shots. Tutorial needs result definition, procedure,
-    explanations, and shots. Incomplete submissions return a repairable error.
-    """
 
     session = _active_session()
     candidate = _candidate_for_submission(session)
     return candidate
 
 
-@mcp.tool(name=DRAMA_WORLD_TOOL, structured_output=True)
-def design_drama_world(
-    problems: list[str] | None = None,
-) -> DramaWorldArtifact:
-    """Establish the authoritative drama world, cast, and visual identity."""
+@mcp.tool(
+    name=DRAMA_WORLD_TOOL,
+    description="建立短剧世界、角色、物品、地点和连续性。",
+    structured_output=True,
+)
+def design_drama_world(problems: ProblemsArg = None) -> DramaWorldArtifact:
 
     session, state = _drama_state()
     state.world = session.generator.generate(
@@ -284,11 +298,12 @@ def design_drama_world(
     return state.world
 
 
-@mcp.tool(name=DRAMA_STORY_TOOL, structured_output=True)
-def plan_drama_story(
-    problems: list[str] | None = None,
-) -> DramaStoryArtifact:
-    """Plan causal scenes from the approved world and cast."""
+@mcp.tool(
+    name=DRAMA_STORY_TOOL,
+    description="按已立的世界和角色规划因果场景。",
+    structured_output=True,
+)
+def plan_drama_story(problems: ProblemsArg = None) -> DramaStoryArtifact:
 
     session, state = _drama_state()
     state.story = session.generator.generate(
@@ -306,11 +321,12 @@ def plan_drama_story(
     return state.story
 
 
-@mcp.tool(name=DRAMA_ACTIONS_TOOL, structured_output=True)
-def expand_drama_scenes(
-    problems: list[str] | None = None,
-) -> DramaActionPlanArtifact:
-    """Expand scenes into continuously generatable performance actions."""
+@mcp.tool(
+    name=DRAMA_ACTIONS_TOOL,
+    description="把场景扩成可连续生成的表演动作。",
+    structured_output=True,
+)
+def expand_drama_scenes(problems: ProblemsArg = None) -> DramaActionPlanArtifact:
 
     session, state = _drama_state()
     if state.story is None:
@@ -337,11 +353,14 @@ def expand_drama_scenes(
     return state.action_plan
 
 
-@mcp.tool(name=DRAMA_SHOTS_TOOL, structured_output=True)
+@mcp.tool(
+    name=DRAMA_SHOTS_TOOL,
+    description="把已批准的动作编译成 generated_scene 镜头，对白声嵌在成片里。",
+    structured_output=True,
+)
 def compile_drama_production_shots(
-    problems: list[str] | None = None,
+    problems: ProblemsArg = None,
 ) -> ShotPlanArtifact:
-    """Compile approved drama actions into generated clips with embedded audio."""
 
     session, _ = _drama_state()
     planning = _assemble_drama_candidate(session)
@@ -350,11 +369,14 @@ def compile_drama_production_shots(
     return session.shots
 
 
-@mcp.tool(name=TUTORIAL_DEFINITION_TOOL, structured_output=True)
+@mcp.tool(
+    name=TUTORIAL_DEFINITION_TOOL,
+    description="定义成品、材料、工具和覆盖要求。",
+    structured_output=True,
+)
 def define_tutorial_result(
-    problems: list[str] | None = None,
+    problems: ProblemsArg = None,
 ) -> TutorialDefinitionArtifact:
-    """Define the finished result, materials, tools, and evidence requirements."""
 
     session, state = _tutorial_state()
     state.definition = session.generator.generate(
@@ -368,11 +390,14 @@ def define_tutorial_result(
     return state.definition
 
 
-@mcp.tool(name=TUTORIAL_STEPS_TOOL, structured_output=True)
+@mcp.tool(
+    name=TUTORIAL_STEPS_TOOL,
+    description="规划可观察的操作步骤和动作。",
+    structured_output=True,
+)
 def plan_tutorial_steps(
-    problems: list[str] | None = None,
+    problems: ProblemsArg = None,
 ) -> TutorialProcedureArtifact:
-    """Plan observable procedure steps and actions."""
 
     session, state = _tutorial_state()
     state.procedure = session.generator.generate(
@@ -395,11 +420,14 @@ def plan_tutorial_steps(
     return state.procedure
 
 
-@mcp.tool(name=TUTORIAL_EXPLANATIONS_TOOL, structured_output=True)
+@mcp.tool(
+    name=TUTORIAL_EXPLANATIONS_TOOL,
+    description="只写比可见动作多出来的讲解，可以很少或没有。",
+    structured_output=True,
+)
 def plan_tutorial_explanations(
-    problems: list[str] | None = None,
+    problems: ProblemsArg = None,
 ) -> TutorialScriptArtifact:
-    """Write only the explanations that add value beyond visible actions."""
 
     session, state = _tutorial_state()
     planning = _assemble_tutorial_candidate(session)
@@ -424,11 +452,14 @@ def plan_tutorial_explanations(
     return session.script
 
 
-@mcp.tool(name=TUTORIAL_SHOTS_TOOL, structured_output=True)
+@mcp.tool(
+    name=TUTORIAL_SHOTS_TOOL,
+    description="把步骤编译成 procedure_demo 镜头，声音为 mixed。",
+    structured_output=True,
+)
 def compile_tutorial_production_shots(
-    problems: list[str] | None = None,
+    problems: ProblemsArg = None,
 ) -> ShotPlanArtifact:
-    """Compile procedure actions into demonstration-led mixed-audio shots."""
 
     session, _ = _tutorial_state()
     planning = _assemble_tutorial_candidate(session)
@@ -439,9 +470,12 @@ def compile_tutorial_production_shots(
     return session.shots
 
 
-@mcp.tool(name=SECTIONS_TOOL, structured_output=True)
-def plan_sections(problems: list[str] | None = None) -> SectionPlanArtifact:
-    """Generate or repair world state, video profile, and the Section skeleton."""
+@mcp.tool(
+    name=SECTIONS_TOOL,
+    description="立世界状态、薄身份册，以及 Hook–Body–Close 三节。",
+    structured_output=True,
+)
+def plan_sections(problems: ProblemsArg = None) -> SectionPlanArtifact:
 
     session, state = _explainer_state()
     if state.section_plan is not None and problems:
@@ -460,9 +494,12 @@ def plan_sections(problems: list[str] | None = None) -> SectionPlanArtifact:
     return state.section_plan
 
 
-@mcp.tool(name=BEATS_TOOL, structured_output=True)
-def expand_beats(problems: list[str] | None = None) -> BeatPlanArtifact:
-    """Expand the approved Section skeleton into Planned Beats."""
+@mcp.tool(
+    name=BEATS_TOOL,
+    description="把各节扩成 PlannedBeat，order 从 1 连续。",
+    structured_output=True,
+)
+def expand_beats(problems: ProblemsArg = None) -> BeatPlanArtifact:
 
     session, state = _explainer_state()
     if state.section_plan is None:
@@ -489,9 +526,12 @@ def expand_beats(problems: list[str] | None = None) -> BeatPlanArtifact:
     return state.beat_plan
 
 
-@mcp.tool(name=SCRIPT_TOOL, structured_output=True)
-def write_script(problems: list[str] | None = None) -> ScriptArtifact:
-    """Write or repair the narration script for the assembled Beat plan."""
+@mcp.tool(
+    name=SCRIPT_TOOL,
+    description="写外部口播，每个 beat 都要被覆盖。",
+    structured_output=True,
+)
+def write_script(problems: ProblemsArg = None) -> ScriptArtifact:
 
     session, _ = _explainer_state()
     if session.planning is None:
@@ -512,9 +552,12 @@ def write_script(problems: list[str] | None = None) -> ScriptArtifact:
     return session.script
 
 
-@mcp.tool(name=SHOTS_TOOL, structured_output=True)
-def compile_shots(problems: list[str] | None = None) -> ShotPlanArtifact:
-    """Deterministically compile the approved plan and script into ProductionShots."""
+@mcp.tool(
+    name=SHOTS_TOOL,
+    description="按已批准的计划和口播编译 ProductionShot，order 从 1 连续。",
+    structured_output=True,
+)
+def compile_shots(problems: ProblemsArg = None) -> ShotPlanArtifact:
 
     session, _ = _explainer_state()
     if (

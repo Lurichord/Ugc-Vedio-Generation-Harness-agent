@@ -41,6 +41,7 @@ class AssetCard(StrictModel):
     local_path: str
     mime_type: str
     sha256: str
+    duration_ms: int | None = Field(default=None, gt=0)
     source: SourceTrace | None = None
     generated_media_disclosure_required: bool = False
     generator_model: str | None = None

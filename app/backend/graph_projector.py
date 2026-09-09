@@ -4,6 +4,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .graph_history import (
+    load_history_index,
+    load_history_snapshot,
+)
+from ugc_harness.harness.models import ProductionState, ProjectState
 from ugc_harness.intake.description_view import get_element
 from ugc_harness.intake.graph_view import candidate_graph_refs, dump_node
 
@@ -52,22 +57,42 @@ class GraphProjector:
     def __init__(self, projects: ProjectService) -> None:
         self.projects = projects
 
-    def view(self, project_dir: Path) -> dict[str, Any]:
-        state = self.projects.read_state(project_dir)
-        graph = state.dependency_graph
-        production = getattr(state, "production", None)
-        nodes = []
-        for ref in sorted(graph.nodes):
-            payload = dump_node(graph.nodes[ref])
-            payload.update(_content_for(production, payload["ref"], payload["kind"]))
-            nodes.append(payload)
-        kinds = Counter(str(node["kind"]) for node in nodes)
-        return {
-            "graph_version": graph.graph_version,
-            "node_count": len(nodes),
-            "kinds": dict(sorted(kinds.items())),
-            "nodes": nodes,
-        }
+    def view(self, project_dir: Path, *, version: int | None = None) -> dict[str, Any]:
+        if version is None:
+            payload = graph_view_from_state(self.projects.read_state(project_dir))
+        else:
+            payload = graph_view_from_snapshot(project_dir, version)
+        payload["history"] = load_history_index(project_dir)["versions"]
+        payload["history_version"] = version
+        return payload
+
+
+def graph_view_from_snapshot(project_dir: Path, version: int) -> dict[str, Any]:
+    snapshot = load_history_snapshot(project_dir, version)
+    state = ProjectState(
+        dependency_graph=snapshot["dependency_graph"],
+        production=ProductionState.model_validate(snapshot.get("production") or {}),
+    )
+    payload = graph_view_from_state(state)
+    payload["recorded_at"] = snapshot.get("recorded_at") or ""
+    return payload
+
+
+def graph_view_from_state(state: Any) -> dict[str, Any]:
+    graph = state.dependency_graph
+    production = getattr(state, "production", None)
+    nodes = []
+    for ref in sorted(graph.nodes):
+        payload = dump_node(graph.nodes[ref])
+        payload.update(_content_for(production, payload["ref"], payload["kind"]))
+        nodes.append(payload)
+    kinds = Counter(str(node["kind"]) for node in nodes)
+    return {
+        "graph_version": graph.graph_version,
+        "node_count": len(nodes),
+        "kinds": dict(sorted(kinds.items())),
+        "nodes": nodes,
+    }
 
 
 def _content_for(production: Any, ref: str, kind: str) -> dict[str, Any]:
@@ -92,7 +117,11 @@ def _content_for(production: Any, ref: str, kind: str) -> dict[str, Any]:
     if not title:
         title = ref.partition(":")[2] or ref
     summary = next((item["text"] for item in details if item["text"] != title), "")
-    return {"title": title, "summary": summary, "details": details}
+    payload = {"title": title, "summary": summary, "details": details}
+    order = fields.get("order")
+    if isinstance(order, int):
+        payload["order"] = order
+    return payload
 
 
 def _lookup_element(production: Any, ref: str, kind: str) -> dict[str, Any] | None:

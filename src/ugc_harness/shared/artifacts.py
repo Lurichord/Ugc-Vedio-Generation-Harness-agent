@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,8 +23,15 @@ from ..harness.voice_controller import VoiceRunRecord
 from ..harness.timeline_controller import TimelineRunRecord
 from ..harness.render_controller import RenderRunRecord
 from ..harness.shot_asset_controller import ShotAssetArtifact, ShotAssetRun
+from ..harness.shot_reference_controller import (
+    IdentityReferenceArtifact,
+    IdentityReferenceRun,
+)
 from ..harness.shot_timeline_controller import ShotTimelineArtifact, ShotTimelineRun
 from ..harness.shot_render_controller import ShotRenderRun
+
+
+on_project_state_written = None
 
 
 _INVALID_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -34,6 +43,45 @@ def safe_project_folder_name(name: str) -> str:
     if not cleaned:
         raise ValueError("project name cannot be empty after path sanitization")
     return cleaned[:80]
+
+
+def folder_token(project_id: str) -> str:
+    tail = project_id.rsplit("_", 1)[-1].lower()
+    if re.fullmatch(r"[0-9a-f]{8}", tail):
+        return tail
+    return hashlib.sha1(project_id.encode("utf-8")).hexdigest()[:8]
+
+
+def project_folder_name(
+    display_name: str,
+    project_id: str,
+    *,
+    extra: str | None = None,
+) -> str:
+    token = folder_token(project_id)
+    suffix = f"_{token}_{extra}" if extra else f"_{token}"
+    base = safe_project_folder_name(display_name or project_id)
+    budget = max(1, 80 - len(suffix))
+    trimmed = base[:budget].rstrip(" ._") or "project"
+    return f"{trimmed}{suffix}"
+
+
+def allocate_project_dir(
+    output_root: Path,
+    display_name: str,
+    project_id: str,
+) -> Path:
+    root = Path(output_root)
+    primary = root / project_folder_name(display_name, project_id)
+    if not primary.exists():
+        return primary
+    for _ in range(8):
+        candidate = root / project_folder_name(
+            display_name, project_id, extra=uuid.uuid4().hex[:4]
+        )
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"could not allocate a unique project folder under {root}")
 
 
 def _json_text(value: BaseModel | dict[str, Any] | list[Any]) -> str:
@@ -58,12 +106,14 @@ class ArtifactWriter:
         self.output_root = Path(output_root)
 
     def write(self, artifact: NarrativeArtifact) -> tuple[Path, list[Path]]:
-        folder_name = safe_project_folder_name(
+        display_name = (
             artifact.brief.project_name
             or artifact.brief.topic
             or artifact.brief.project_id
         )
-        project_dir = self.output_root / folder_name
+        project_dir = allocate_project_dir(
+            self.output_root, display_name, artifact.brief.project_id
+        )
         project_dir.mkdir(parents=True, exist_ok=True)
 
         payloads: list[tuple[str, BaseModel | dict[str, Any] | list[Any]]] = [
@@ -489,6 +539,59 @@ class ArtifactWriter:
         written.append(manifest_path)
         return written
 
+    def write_identity_references(
+        self,
+        project_dir: str | Path,
+        artifact: IdentityReferenceArtifact,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        written = [_write_json(root / "identity_reference_artifact.json", artifact)]
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["stage"] = "identity_references_complete"
+        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed["identity_reference_artifact.json"] = _manifest_entry(
+            written[0], root, "json"
+        )
+        for item in artifact.identities:
+            indexed[item.local_path] = _manifest_entry(
+                root / item.local_path, root, "identity_reference"
+            )
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        return [*written, manifest_path]
+
+    def write_identity_reference_run(
+        self,
+        project_dir: str | Path,
+        record: IdentityReferenceRun,
+    ) -> list[Path]:
+        root = Path(project_dir)
+        harness_dir = root / "harness"
+        written = [
+            _write_json(harness_dir / "identity_reference_task.json", record.task),
+            _write_json(harness_dir / "identity_reference_actions.json", record.actions),
+            _write_json(harness_dir / "project_state.json", record.project_state),
+        ]
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        indexed = {
+            entry["relative_path"]: entry
+            for entry in manifest.get("artifacts", [])
+        }
+        indexed.update({
+            path.relative_to(root).as_posix(): _manifest_entry(path, root, "harness")
+            for path in written
+        })
+        manifest["state_version"] = record.committed_state_version
+        manifest["artifacts"] = list(indexed.values())
+        _write_json(manifest_path, manifest)
+        return [*written, manifest_path]
+
     def write_shot_assets(
         self,
         project_dir: str | Path,
@@ -855,6 +958,8 @@ def _write_json(
     temp_path = path.with_suffix(path.suffix + ".tmp")
     temp_path.write_text(_json_text(payload), encoding="utf-8")
     temp_path.replace(path)
+    if path.name == "project_state.json" and on_project_state_written is not None:
+        on_project_state_written(path.parent.parent, payload)
     return path
 
 

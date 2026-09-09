@@ -5,37 +5,28 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ugc_harness.agents.generic import StepDecision
 from ugc_harness.agents.narrative_agent import make_brief
-from ugc_harness.harness.narrative_formats import DRAMA_PACK, EXPLAINER_PACK
+from ugc_harness.harness.narrative_formats import EXPLAINER_PACK
 from ugc_harness.harness.controller import NarrativeHarnessController
-from ugc_harness.shared.llm import ModelToolCall
-from ugc_harness.tools.mcp import StdioMCPServerConfig
+from ugc_harness.tools.mcp import StdioMCPServerConfig, mcp_tool_catalog
 
-SECTIONS_MODEL_TOOL = "narrative__explainer__plan_sections"
-BEATS_MODEL_TOOL = "narrative__explainer__expand_beats"
-SCRIPT_MODEL_TOOL = "narrative__explainer__write_script"
-SHOTS_MODEL_TOOL = "narrative__explainer__compile_shots"
-SUBMIT_MODEL_TOOL = "narrative__submit_candidate"
-HAPPY_PATH = [
-    SECTIONS_MODEL_TOOL,
-    BEATS_MODEL_TOOL,
-    SCRIPT_MODEL_TOOL,
-    SHOTS_MODEL_TOOL,
-    SUBMIT_MODEL_TOOL,
-]
+HAPPY_PATH = list(EXPLAINER_PACK.capability_tools())
+SCRIPT_MODEL_TOOL = "narrative.explainer.write_script"
+SUBMIT_MODEL_TOOL = "narrative.submit_candidate"
 DRAMA_HAPPY_PATH = [
-    "narrative__drama__plan_story",
-    "narrative__drama__design_world",
-    "narrative__drama__expand_scenes",
-    "narrative__drama__compile_shots",
+    "narrative.drama.plan_story",
+    "narrative.drama.design_world",
+    "narrative.drama.expand_scenes",
+    "narrative.drama.compile_shots",
     SUBMIT_MODEL_TOOL,
 ]
 TUTORIAL_HAPPY_PATH = [
-    "narrative__tutorial__plan_steps",
-    "narrative__tutorial__define_result",
-    "narrative__tutorial__plan_steps",
-    "narrative__tutorial__plan_explanations",
-    "narrative__tutorial__compile_shots",
+    "narrative.tutorial.plan_steps",
+    "narrative.tutorial.define_result",
+    "narrative.tutorial.plan_steps",
+    "narrative.tutorial.plan_explanations",
+    "narrative.tutorial.compile_shots",
     SUBMIT_MODEL_TOOL,
 ]
 
@@ -47,21 +38,17 @@ class SequentialToolModel:
         self.selected: list[str] = []
         self.offered: list[list[str]] = []
 
-    def choose_tool(
+    def decide(
         self,
-        *,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-    ) -> ModelToolCall:
-        names = [tool["function"]["name"] for tool in tools]
+    ) -> StepDecision:
+        del messages
+        names = [str(tool["name"]) for tool in tools]
         self.offered.append(names)
         name = next(step for step in HAPPY_PATH if step not in self.selected)
         self.selected.append(name)
-        return ModelToolCall(
-            call_id=f"call_{len(self.selected)}",
-            name=name,
-            arguments={},
-        )
+        return StepDecision(tool=name)
 
 
 class ScriptedToolModel:
@@ -71,21 +58,17 @@ class ScriptedToolModel:
         self.sequence = list(sequence)
         self.selected: list[str] = []
 
-    def choose_tool(
+    def decide(
         self,
-        *,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-    ) -> ModelToolCall:
+    ) -> StepDecision:
+        del tools
         if len(self.selected) >= len(self.sequence):
             raise RuntimeError(f"scripted tool sequence exhausted: {messages[-1]}")
         name = self.sequence[len(self.selected)]
         self.selected.append(name)
-        return ModelToolCall(
-            call_id=f"call_{len(self.selected)}",
-            name=name,
-            arguments={},
-        )
+        return StepDecision(tool=name)
 
 
 def _fixture_server() -> StdioMCPServerConfig:
@@ -100,6 +83,30 @@ def _fixture_server() -> StdioMCPServerConfig:
         cwd=root,
         env=env,
     )
+
+
+def test_narrative_mcp_tools_advertise_descriptions_and_parameters() -> None:
+    from ugc_harness.mcp_servers.narrative import (
+        CONFIGURE_TOOL,
+        SECTIONS_TOOL,
+        SUBMIT_TOOL,
+        mcp,
+    )
+
+    catalog = {
+        item["name"]: item
+        for item in mcp_tool_catalog(mcp, exclude=frozenset({CONFIGURE_TOOL}))
+    }
+    assert SECTIONS_TOOL in catalog
+    assert SUBMIT_TOOL in catalog
+    sections = catalog[SECTIONS_TOOL]
+    assert "身份册" in sections["description"]
+    problems = sections["parameters"]["properties"]["problems"]
+    assert "首次" in str(problems.get("description") or "")
+    assert catalog[SUBMIT_TOOL]["description"]
+    assert "properties" in catalog[SUBMIT_TOOL]["parameters"]
+    for item in catalog.values():
+        assert item["description"], item["name"]
 
 
 def test_narrative_agent_runs_the_explainer_tool_chain() -> None:
@@ -200,7 +207,7 @@ def test_agent_can_submit_early_then_replan_from_the_tool_error() -> None:
 
 
 def test_narrative_agent_rejects_tools_outside_the_envelope() -> None:
-    model = ScriptedToolModel(["narrative__configure_task"])
+    model = ScriptedToolModel(["narrative.configure_task"])
     run_error: Exception | None = None
     try:
         NarrativeHarnessController.from_mcp(
@@ -226,11 +233,12 @@ def test_narrative_agent_runs_the_drama_tool_chain_with_embedded_audio() -> None
     assert run.artifact.script is None
     assert run.record.evaluation.critic_id == "drama_critic"
     assert run.record.evaluation.passed is True
-    assert run.record.transition.to_agent == "asset_agent"
+    assert run.record.transition.to_agent == "references_agent"
     assert run.record.project_state.evaluation.stages.script == "not_required"
     assert run.record.project_state.evaluation.stages.voice == "not_required"
     assert run.record.project_state.evaluation.stages.editorial == "not_required"
-    assert run.record.project_state.evaluation.stages.asset == "ready"
+    assert run.record.project_state.evaluation.stages.references == "ready"
+    assert run.record.project_state.evaluation.stages.asset == "pending"
     assert model.selected == DRAMA_HAPPY_PATH
     assert [action.tool for action in run.record.agent_result.actions] == [
         "narrative.drama.plan_story",
@@ -270,11 +278,12 @@ def test_narrative_agent_runs_the_tutorial_tools_with_mixed_audio() -> None:
     assert run.artifact.script is not None
     assert run.record.evaluation.critic_id == "tutorial_critic"
     assert run.record.evaluation.passed is True
-    assert run.record.transition.to_agent == "asset_agent"
+    assert run.record.transition.to_agent == "references_agent"
     assert run.record.project_state.evaluation.stages.script == "passed"
     assert run.record.project_state.evaluation.stages.voice == "not_required"
     assert run.record.project_state.evaluation.stages.editorial == "not_required"
-    assert run.record.project_state.evaluation.stages.asset == "ready"
+    assert run.record.project_state.evaluation.stages.references == "ready"
+    assert run.record.project_state.evaluation.stages.asset == "pending"
     assert all(
         action.result == "success"
         for action in run.record.agent_result.actions

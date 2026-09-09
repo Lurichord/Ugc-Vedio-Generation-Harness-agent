@@ -10,6 +10,10 @@ from .skills import list_skills, load_skill
 DESCRIPTION_LIST_OUTLINE = "description.list_outline"
 DESCRIPTION_GET_ELEMENT = "description.get_element"
 IDENTITY_UPDATE = "identity.update"
+IDENTITY_CREATE = "identity.create"
+SHOT_CREATE = "shot.create"
+SHOT_BIND = "shot.bind"
+GRAPH_REMOVE = "graph.remove"
 HARNESS_START_PROJECT = "harness.start_project"
 HARNESS_INSPECT = "harness.inspect"
 HARNESS_LIST_GRAPH = "harness.list_graph"
@@ -22,6 +26,10 @@ INTAKE_MCP_TOOLS = (
     DESCRIPTION_LIST_OUTLINE,
     DESCRIPTION_GET_ELEMENT,
     IDENTITY_UPDATE,
+    IDENTITY_CREATE,
+    SHOT_CREATE,
+    SHOT_BIND,
+    GRAPH_REMOVE,
     HARNESS_START_PROJECT,
     HARNESS_INSPECT,
     HARNESS_LIST_GRAPH,
@@ -30,97 +38,10 @@ INTAKE_MCP_TOOLS = (
 
 
 def mcp_tool_specs() -> list[dict[str, Any]]:
-    return [
-        {
-            "name": DESCRIPTION_LIST_OUTLINE,
-            "description": "列出 structure 大纲：id 与标题/命题，不含正文。",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
-        {
-            "name": DESCRIPTION_GET_ELEMENT,
-            "description": "读取一个 description 元素，ref 如 beat:b3。",
-            "parameters": {
-                "type": "object",
-                "properties": {"ref": {"type": "string"}},
-                "required": ["ref"],
-                "additionalProperties": False,
-            },
-        },
-        {
-            "name": IDENTITY_UPDATE,
-            "description": (
-                "按内容改已有身份节点的字段，id 不变。"
-                "ref 可以是图上的 cast:/prop:/place:，也可以是当前 name（如 转化糖浆）。"
-                "同名身份视为同一件东西，一起改。"
-                "不要新建节点，不要改 shot.binds。"
-                "改完用返回的 changed_refs 做 harness.repair。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "patches": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "ref": {"type": "string"},
-                                "name": {"type": "string"},
-                                "description": {"type": "string"},
-                                "appearance": {"type": "string"},
-                            },
-                            "required": ["ref"],
-                            "additionalProperties": False,
-                        },
-                    },
-                },
-                "required": ["patches"],
-                "additionalProperties": False,
-            },
-        },
-        {
-            "name": HARNESS_START_PROJECT,
-            "description": "按当前 working_brief 开工。缺 topic 或 goal 会失败。",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
-        {
-            "name": HARNESS_INSPECT,
-            "description": "从磁盘刷新 progress 和已落账的 intent。",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
-        {
-            "name": HARNESS_LIST_GRAPH,
-            "description": (
-                "读取精简依赖图。无参返回内容根"
-                "（cast/prop/place/beat/scene/step），身份根带 name 和 dependents（含 shot）。"
-                "around_ref 返回该节点及一跳邻居。不含 hash。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"around_ref": {"type": "string"}},
-                "additionalProperties": False,
-            },
-        },
-        {
-            "name": HARNESS_REPAIR,
-            "description": (
-                "把圈中的 shot 交给 generic agent 按 instruction 微调。"
-                "换身份时先 identity.update；target_refs 可填身份 ref 或 shot。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target_refs": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "instruction": {"type": "string"},
-                },
-                "required": ["target_refs", "instruction"],
-                "additionalProperties": False,
-            },
-        },
-    ]
+    from ..mcp_servers.intake import mcp as intake_server
+    from ..tools.mcp import mcp_tool_catalog
+
+    return mcp_tool_catalog(intake_server, names=INTAKE_MCP_TOOLS)
 
 
 def host_tool_specs() -> list[dict[str, Any]]:

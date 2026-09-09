@@ -99,7 +99,7 @@ class IntentAgent:
                     )
                 _log_tool("call", tool_name, decision.arguments)
                 result = await bound.call(tool_name, decision.arguments)
-                _log_tool("done", tool_name, result=result)
+                _log_tool("done", tool_name, arguments=decision.arguments, result=result)
                 last_text = _tool_text(tool_name, result)
                 messages.append(
                     {
@@ -179,7 +179,7 @@ def _log_tool(
     result: dict[str, Any] | None = None,
 ) -> None:
     parts = [f"[intake] {event} {name}"]
-    if arguments:
+    if arguments is not None:
         parts.append(json.dumps(arguments, ensure_ascii=False))
     if result is not None:
         if result.get("ok") is False and result.get("error"):

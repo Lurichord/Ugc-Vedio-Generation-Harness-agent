@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..agents.narrative_agent.models import NarrativeArtifact
+from ..content import TutorialMaterial, WorldEntity
 from ..harness.dependencies import DependencyGraph
 from ..harness.dependency_builders import content_commits
 from ..harness.description import (
@@ -14,6 +15,7 @@ from ..harness.description import (
     WorldPlace,
     WorldProp,
 )
+from ..harness.graph_edit import add_identity
 from ..harness.models import ProjectState
 from ..harness.repair import (
     load_project_state,
@@ -30,6 +32,47 @@ _ID_FIELDS = {
     "prop": "prop_id",
     "place": "place_id",
 }
+
+
+def create_identity(
+    session: IntakeSession,
+    *,
+    kind: str,
+    name: str,
+    description: str,
+    appearance: str | None = None,
+    role: str = "performer",
+) -> tuple[IntakeSession, dict[str, Any]]:
+    if not session.project_dir:
+        return session, {"ok": False, "error": "还没有项目目录，无法加身份"}
+    project_dir = Path(session.project_dir)
+    state = load_project_state(project_dir)
+    if state is None or state.production.structure is None:
+        return session, {"ok": False, "error": "还没有 production"}
+    try:
+        ref = add_identity(
+            state,
+            kind=kind.strip(),
+            name=name,
+            description=description,
+            appearance=appearance,
+            role=role,
+        )
+    except ValueError as exc:
+        return session, {"ok": False, "error": str(exc)}
+    write_project_state(project_dir, state)
+    _sync_narrative_artifact_identity(project_dir, state)
+    session = refresh_session_from_disk(session)
+    return session, {
+        "ok": True,
+        "ref": ref,
+        "changed_refs": [ref],
+        "text": (
+            f"已新增身份 {ref}。"
+            f"{format_progress(session.progress)}"
+        ),
+        "progress": session.progress.model_dump(mode="json"),
+    }
 
 
 def update_identity(
@@ -210,13 +253,60 @@ def _sync_narrative_artifact_identity(
     )
     world_state = getattr(artifact.planning, "world_state", None)
     if world_state is not None:
+        world_state.entities = [
+            entity for entity in world_state.entities if entity.entity_id in names
+        ]
+        known = {entity.entity_id for entity in world_state.entities}
         for entity in world_state.entities:
             if entity.entity_id in names:
                 entity.name = names[entity.entity_id]
                 entity.description = descriptions[entity.entity_id]
+        for item in state.production.world.cast:
+            if item.character_id not in known:
+                world_state.entities.append(
+                    WorldEntity(
+                        entity_id=item.character_id,
+                        name=item.name,
+                        kind="person",
+                        narrative_role="added",
+                        description=item.description,
+                    )
+                )
+        for item in state.production.world.props:
+            if item.prop_id not in known:
+                world_state.entities.append(
+                    WorldEntity(
+                        entity_id=item.prop_id,
+                        name=item.name,
+                        kind="product",
+                        narrative_role="added",
+                        description=item.description,
+                    )
+                )
+        for item in state.production.world.places:
+            if item.place_id not in known:
+                world_state.entities.append(
+                    WorldEntity(
+                        entity_id=item.place_id,
+                        name=item.name,
+                        kind="place",
+                        narrative_role="added",
+                        description=item.description,
+                    )
+                )
         materials = getattr(artifact.planning, "materials", None)
-        if materials:
+        if materials is not None:
+            prop_ids = {item.prop_id for item in state.production.world.props}
+            kept = [item for item in materials if item.material_id in prop_ids]
+            materials.clear()
+            materials.extend(kept)
+            known_materials = {item.material_id for item in materials}
             for material in materials:
                 if material.material_id in names:
                     material.name = names[material.material_id]
+            for item in state.production.world.props:
+                if item.prop_id not in known_materials:
+                    materials.append(
+                        TutorialMaterial(material_id=item.prop_id, name=item.name)
+                    )
     path.write_text(artifact.model_dump_json(indent=2), encoding="utf-8")

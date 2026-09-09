@@ -21,9 +21,14 @@ from ugc_harness.harness.asset_controller import AssetHarnessController
 from ugc_harness.harness.controller import NarrativeHarnessController
 from ugc_harness.harness.editorial_controller import EditorialHarnessController
 from ugc_harness.harness.models import ProjectState, TaskEnvelope
+from ugc_harness.harness.repair import write_project_state
 from ugc_harness.harness.render_controller import RenderHarnessController
 from ugc_harness.harness.production_routes import resolve_production_route
 from ugc_harness.harness.shot_asset_controller import ShotAssetHarnessController
+from ugc_harness.harness.shot_reference_controller import (
+    SeedreamIdentityImageProvider,
+    ShotReferenceHarnessController,
+)
 from ugc_harness.harness.shot_video_provider import SeedanceShotVideoProvider
 from ugc_harness.harness.shot_asset_controller import ShotAssetArtifact
 from ugc_harness.harness.shot_timeline_controller import ShotTimelineHarnessController
@@ -129,12 +134,28 @@ class StageRunner:
             self._voice(project_dir, options, task)
         elif stage == "editorial":
             self._editorial(project_dir, options, task, feedback)
+        elif stage == "references":
+            self._references(project_dir, options, task)
         elif stage == "asset":
             self._asset(project_dir, options, task)
         elif stage == "timeline":
             self._timeline(project_dir, options, task)
         elif stage == "render":
             self._render(project_dir, task)
+
+    @staticmethod
+    def _prepare_stage(
+        project_dir: Path,
+        state: ProjectState,
+        stage: str,
+    ) -> ProjectState:
+        current = str(getattr(state.evaluation.stages, stage))
+        if current in {"ready", "needs_revision", "stale"}:
+            return state
+        next_state = state.model_copy(deep=True)
+        setattr(next_state.evaluation.stages, stage, "ready")
+        write_project_state(project_dir, next_state)
+        return next_state
 
     @staticmethod
     def _state(project_dir: Path) -> ProjectState:
@@ -148,8 +169,32 @@ class StageRunner:
     ) -> None:
         if task is not None and task.scope.target_refs:
             from ugc_harness.harness.shot_repair import run_shot_repair
+            from ugc_harness.harness.shot_reference_controller import (
+                SeedreamIdentityImageProvider,
+            )
 
-            run_shot_repair(project_dir, task, feedback or "")
+            state = self._state(project_dir)
+            format_id = state.context.constraints.get(
+                "narrative_format"
+            ) or state.context.constraints.get("production_mode")
+            if format_id in {"drama", "tutorial"}:
+                generation = AssetGenerationSettings.from_environment(
+                    None,
+                    image_model=options.image_model,
+                    video_model=options.video_model,
+                )
+                with SeedreamIdentityImageProvider(
+                    generation
+                ) as images, SeedanceShotVideoProvider(generation) as videos:
+                    run_shot_repair(
+                        project_dir,
+                        task,
+                        feedback or "",
+                        image_provider=images,
+                        video_provider=videos,
+                    )
+            else:
+                run_shot_repair(project_dir, task, feedback or "")
             return
         current = NarrativeArtifact.model_validate_json(
             (project_dir / "narrative_artifact.json").read_text(encoding="utf-8")
@@ -208,6 +253,24 @@ class StageRunner:
         writer.write_editorial(project_dir, run.artifact)
         writer.write_editorial_run(project_dir, run.record)
 
+    def _references(
+        self, project_dir: Path, options: RunStageRequest, task: TaskEnvelope | None
+    ) -> None:
+        narrative = NarrativeArtifact.model_validate_json(
+            (project_dir / "narrative_artifact.json").read_text(encoding="utf-8")
+        )
+        state = self._prepare_stage(project_dir, self._state(project_dir), "references")
+        generation = AssetGenerationSettings.from_environment(
+            None, image_model=options.image_model
+        )
+        with SeedreamIdentityImageProvider(generation) as provider:
+            artifact, run = ShotReferenceHarnessController.from_provider(provider).run(
+                narrative, project_dir, state, task
+            )
+        writer = ArtifactWriter(project_dir.parent)
+        writer.write_identity_references(project_dir, artifact)
+        writer.write_identity_reference_run(project_dir, run)
+
     def _asset(
         self, project_dir: Path, options: RunStageRequest, task: TaskEnvelope | None
     ) -> None:
@@ -216,12 +279,12 @@ class StageRunner:
         )
         route = resolve_production_route(narrative)
         if route.asset_route == "shot_ai_video":
-            state = self._state(project_dir)
+            state = self._prepare_stage(project_dir, self._state(project_dir), "asset")
             generation = AssetGenerationSettings.from_environment(
                 None, video_model=options.video_model
             )
             with SeedanceShotVideoProvider(generation) as provider:
-                artifact, run = ShotAssetHarnessController(provider).run(
+                artifact, run = ShotAssetHarnessController.from_provider(provider).run(
                     narrative, project_dir, state, task
                 )
             writer = ArtifactWriter(project_dir.parent)
@@ -252,11 +315,15 @@ class StageRunner:
         if resolve_production_route(narrative).asset_route == "shot_ai_video":
             if task is not None:
                 raise ValueError("direct Shot timeline does not support repair tasks yet")
+            asset_path = project_dir / "shot_asset_artifact.json"
+            if not asset_path.is_file():
+                raise FileNotFoundError("短剧/教程要先完成参考图和出镜，再做时间线")
             assets = ShotAssetArtifact.model_validate_json(
-                (project_dir / "shot_asset_artifact.json").read_text(encoding="utf-8")
+                asset_path.read_text(encoding="utf-8")
             )
+            state = self._prepare_stage(project_dir, self._state(project_dir), "timeline")
             artifact, run = ShotTimelineHarnessController().run(
-                narrative, assets, self._state(project_dir)
+                narrative, assets, state
             )
             writer = ArtifactWriter(project_dir.parent)
             writer.write_shot_timeline(project_dir, artifact)
@@ -286,11 +353,15 @@ class StageRunner:
         if resolve_production_route(narrative).asset_route == "shot_ai_video":
             if task is not None:
                 raise ValueError("direct Shot render does not support repair tasks yet")
+            timeline_path = project_dir / "shot_timeline_artifact.json"
+            if not timeline_path.is_file():
+                raise FileNotFoundError("短剧/教程要先完成时间线，再渲染")
             timeline = ShotTimelineArtifact.model_validate_json(
-                (project_dir / "shot_timeline_artifact.json").read_text(encoding="utf-8")
+                timeline_path.read_text(encoding="utf-8")
             )
+            state = self._prepare_stage(project_dir, self._state(project_dir), "render")
             artifact, run = ShotRenderHarnessController().run(
-                timeline, project_dir, self._state(project_dir)
+                timeline, project_dir, state
             )
             writer = ArtifactWriter(project_dir.parent)
             writer.write_render(project_dir, artifact)

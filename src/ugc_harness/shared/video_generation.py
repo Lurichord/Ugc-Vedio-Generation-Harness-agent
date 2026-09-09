@@ -19,6 +19,7 @@ class GeneratedVideo:
     mime_type: str
     job: dict[str, Any]
     degraded_to_text: bool = False
+    last_frame: bytes | None = None
 
 
 def generate_seedance_video(
@@ -115,7 +116,10 @@ def generate_seedance_video(
     if not content or len(content) > 200 * 1024 * 1024:
         raise RuntimeError("Seedance video is empty or exceeds 200MB")
     mime_type = content_response.headers.get("content-type", "video/mp4").split(";")[0]
-    return GeneratedVideo(job_id, content, mime_type, job, degraded_to_text)
+    last_frame = _download_url_bytes(client, (job.get("content") or {}).get("last_frame_url"))
+    return GeneratedVideo(
+        job_id, content, mime_type, job, degraded_to_text, last_frame
+    )
 
 
 def _resumable_job(
@@ -195,8 +199,9 @@ def _ark_payload(payload: dict[str, object]) -> dict[str, object]:
                 "image_url": {"url": str(image_url["url"])},
             }
             # Ark distinguishes first_frame / last_frame / reference_image via
-            # the "role" field; a role-less single image defaults to first
-            # frame, so omitting the key preserves the legacy behaviour.
+            # the "role" field, and those modes cannot be mixed in one request.
+            # A role-less single image defaults to first frame, so omitting the
+            # key preserves the legacy behaviour.
             role = frame.get("role") or frame.get("frame_type")
             if role:
                 item["role"] = str(role)
@@ -218,6 +223,36 @@ def _has_inline_media(payload: dict[str, object]) -> bool:
         ):
             return True
     return False
+
+
+def last_frame_bytes_from_job(job_path: Path) -> bytes | None:
+    if not job_path.is_file():
+        return None
+    try:
+        record = json.loads(job_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    url = ((record.get("job") or {}).get("content") or {}).get("last_frame_url")
+    if not url:
+        return None
+    with httpx.Client() as client:
+        try:
+            payload = _download_url_bytes(client, url)
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Seedance 尾帧下载失败: {url}") from exc
+    return payload
+
+
+def _download_url_bytes(client: httpx.Client, url: object) -> bytes | None:
+    text = str(url or "").strip()
+    if not text:
+        return None
+    response = client.get(text, timeout=60)
+    response.raise_for_status()
+    payload = response.content
+    if not payload:
+        return None
+    return payload
 
 
 def _auth_headers(api_key: str) -> dict[str, str]:

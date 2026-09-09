@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 StageName = Literal[
-    "narrative", "voice", "editorial", "asset", "timeline", "render"
+    "narrative", "voice", "editorial", "references", "asset", "timeline", "render"
 ]
 ReviewStatus = Literal["pending", "approved", "rejected"]
 
@@ -52,7 +52,9 @@ class StageSnapshot(BaseModel):
 class ProductionSnapshot(BaseModel):
     project_key: str | None = None
     project_id: str | None = None
+    format_id: str | None = None
     current_stage: StageName | None = None
+    pipeline: list[StageName] = Field(default_factory=list)
     stages: list[StageSnapshot] = Field(default_factory=list)
 
 

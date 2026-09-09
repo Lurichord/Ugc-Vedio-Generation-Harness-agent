@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
-from ..asset_agent.models import AssetArtifact, AssetCard
+from ...shared.media_duration import TimeWindow, resolve_media_duration_ms
+from ..asset_agent.models import VIDEO_FILE_SUFFIXES, AssetArtifact, AssetCard
 from ..editorial_agent.models import EditorialArtifact, ExplorationDirection
+from ..voice_agent.audio import fit_wav_to_windows, force_wav_duration
 from ..voice_agent.models import RealizedBeat, VoiceArtifact, WordTimestamp
 from .models import (
     CaptionCue,
@@ -70,6 +72,7 @@ class TimelineCapabilities:
         transforms: list[VisualTransform] = []
         overlays: list[OverlayCue] = []
         beats = voice.realized_beats
+        prepared: list[dict[str, object]] = []
 
         for index, beat in enumerate(beats):
             visual = visuals_by_beat.get(beat.beat_id)
@@ -106,47 +109,128 @@ class TimelineCapabilities:
                 )
                 derivatives.append(derivative)
 
-            clip_start = beat.start_ms if index else 0
-            clip_end = (
+            old_start = beat.start_ms if index else 0
+            old_end = (
                 beats[index + 1].start_ms
                 if index + 1 < len(beats)
                 else voice.timed_audio.duration_ms
             )
-            prepared = prepared_images.get(asset.asset_id)
+            prepared_image = prepared_images.get(asset.asset_id)
             playback_path = (
                 derivative.local_path
                 if derivative
-                else prepared.output_path
-                if prepared
+                else prepared_image.output_path
+                if prepared_image
                 else asset.local_path
             )
             is_video = (
                 derivative is not None
-                or asset.mime_type.startswith("video/")
-                or asset.modality == "ai_video"
+                or str(asset.mime_type).startswith("video/")
+                or Path(playback_path).suffix.lower() in VIDEO_FILE_SUFFIXES
             )
-            clip_id = f"clip_{index + 1:02d}"
+            old_ms = max(1, old_end - old_start)
+            if is_video:
+                declared = (
+                    derivative.duration_ms
+                    if derivative is not None and derivative.duration_ms
+                    else asset.duration_ms
+                )
+                target_ms = resolve_media_duration_ms(
+                    root / playback_path,
+                    declared_ms=declared,
+                    fallback_ms=old_ms,
+                ) or old_ms
+            else:
+                target_ms = old_ms
+            prepared.append(
+                {
+                    "beat": beat,
+                    "visual": visual,
+                    "asset": asset,
+                    "direction": direction,
+                    "derivative": derivative,
+                    "playback_path": playback_path,
+                    "is_video": is_video,
+                    "old_start": old_start,
+                    "old_end": old_end,
+                    "target_ms": max(1, int(target_ms)),
+                }
+            )
+
+        windows: list[TimeWindow] = []
+        cursor = 0
+        for item in prepared:
+            target_ms = int(item["target_ms"])
+            windows.append(
+                TimeWindow(
+                    old_start_ms=int(item["old_start"]),
+                    old_end_ms=int(item["old_end"]),
+                    new_start_ms=cursor,
+                    new_end_ms=cursor + target_ms,
+                )
+            )
+            cursor += target_ms
+
+        audio_file = voice.timed_audio.audio_file
+        if any(
+            window.new_end_ms - window.new_start_ms
+            != window.old_end_ms - window.old_start_ms
+            for window in windows
+        ):
+            aligned = root / "audio" / "narration_aligned.wav"
+            fit_wav_to_windows(
+                root / voice.timed_audio.audio_file,
+                [
+                    (window.old_start_ms, window.old_end_ms, window.new_end_ms - window.new_start_ms)
+                    for window in windows
+                ],
+                aligned,
+            )
+            force_wav_duration(aligned, cursor)
+            audio_file = aligned.relative_to(root).as_posix()
+
+        scaled_beats = [
+            _scale_beat(item["beat"], window)
+            for item, window in zip(prepared, windows)
+        ]
+        window_by_planned = {
+            str(item["beat"].planned_beat_id): window
+            for item, window in zip(prepared, windows)
+        }
+        scaled_words = [
+            _scale_word(word, window_by_planned.get(word.planned_beat_id))
+            for word in voice.word_alignment.words
+        ]
+
+        for item, window, beat in zip(prepared, windows, scaled_beats):
+            clip_id = f"clip_{len(clips) + 1:02d}"
+            is_video = bool(item["is_video"])
+            content_start, content_end = window.map_span(
+                int(item["beat"].start_ms), int(item["beat"].end_ms)
+            )
             clips.append(
                 TimelineClip(
                     clip_id=clip_id,
                     beat_id=beat.beat_id,
-                    visual_request_id=visual.visual_request_id,
-                    source_asset_id=asset.asset_id,
+                    visual_request_id=item["visual"].visual_request_id,
+                    source_asset_id=item["asset"].asset_id,
                     derivative_id=(
-                        derivative.derivative_id if derivative else None
+                        item["derivative"].derivative_id
+                        if item["derivative"] is not None
+                        else None
                     ),
-                    timeline_start_ms=clip_start,
-                    timeline_end_ms=clip_end,
-                    content_start_ms=beat.start_ms,
-                    content_end_ms=beat.end_ms,
-                    playback_path=playback_path,
+                    timeline_start_ms=window.new_start_ms,
+                    timeline_end_ms=window.new_end_ms,
+                    content_start_ms=content_start,
+                    content_end_ms=content_end,
+                    playback_path=str(item["playback_path"]),
                     playback_modality="video" if is_video else "image",
                     playback_policy=(
-                        "trim_or_loop_to_audio" if is_video else "hold_to_audio"
+                        "fit_narration_to_video" if is_video else "hold_to_audio"
                     ),
                     transition_in=(
                         "none"
-                        if index == 0
+                        if not clips
                         else (
                             "punch_cut"
                             if beat.discourse_role in {"question", "reveal", "contrast"}
@@ -156,24 +240,29 @@ class TimelineCapabilities:
                 )
             )
             transforms.append(
-                _build_transform(clip_id, asset, direction, derivative is not None)
+                _build_transform(
+                    clip_id,
+                    item["asset"],
+                    item["direction"],
+                    item["derivative"] is not None,
+                )
             )
             overlays.extend(
                 _build_overlays(
                     beat,
-                    asset,
-                    direction,
+                    item["asset"],
+                    item["direction"],
                     claims_by_beat.get(beat.beat_id, []),
                 )
             )
 
         captions = _build_captions(
-            beats,
-            voice.word_alignment.words,
+            scaled_beats,
+            scaled_words,
         )
         timeline = TimelinePlan(
-            audio_file=voice.timed_audio.audio_file,
-            duration_ms=voice.timed_audio.duration_ms,
+            audio_file=audio_file,
+            duration_ms=cursor,
             clips=clips,
         )
         return TimelineCandidate(
@@ -184,6 +273,27 @@ class TimelineCapabilities:
             visual_transforms=transforms,
             overlays=overlays,
         )
+
+
+def _scale_beat(beat: RealizedBeat, window: TimeWindow) -> RealizedBeat:
+    start, end = window.map_span(beat.start_ms, beat.end_ms)
+    return beat.model_copy(
+        update={
+            "start_ms": start,
+            "end_ms": end,
+            "duration_ms": end - start,
+        }
+    )
+
+
+def _scale_word(
+    word: WordTimestamp,
+    window: TimeWindow | None,
+) -> WordTimestamp:
+    if window is None:
+        return word
+    start, end = window.map_span(word.start_ms, word.end_ms)
+    return word.model_copy(update={"start_ms": start, "end_ms": end})
 
 
 def _build_transform(

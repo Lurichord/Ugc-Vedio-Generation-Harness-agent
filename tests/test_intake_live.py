@@ -24,8 +24,12 @@ from ugc_harness.intake.tools import (
     HARNESS_INSPECT,
     HARNESS_LIST_GRAPH,
     HARNESS_REPAIR,
+    GRAPH_REMOVE,
+    IDENTITY_CREATE,
     IDENTITY_UPDATE,
     HARNESS_START_PROJECT,
+    SHOT_BIND,
+    SHOT_CREATE,
     INTAKE_MCP_TOOLS,
     SKILL_ACTIVATE,
 )
@@ -42,6 +46,10 @@ SKILL_BEFORE = {
     DESCRIPTION_LIST_OUTLINE: frozenset({"inspect-graph", "revise-segment"}),
     DESCRIPTION_GET_ELEMENT: frozenset({"inspect-graph", "revise-segment"}),
     IDENTITY_UPDATE: frozenset({"inspect-graph", "revise-segment"}),
+    IDENTITY_CREATE: frozenset({"inspect-graph", "revise-segment"}),
+    SHOT_CREATE: frozenset({"inspect-graph", "revise-segment"}),
+    SHOT_BIND: frozenset({"inspect-graph", "revise-segment"}),
+    GRAPH_REMOVE: frozenset({"inspect-graph", "revise-segment"}),
 }
 
 

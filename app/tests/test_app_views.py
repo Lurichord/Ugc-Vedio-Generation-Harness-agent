@@ -52,6 +52,7 @@ def test_continue_phrases_and_gate_copy() -> None:
         "narrative": "passed",
         "voice": "pending",
         "editorial": "not_required",
+        "references": "not_required",
         "asset": "pending",
         "timeline": "pending",
         "render": "pending",
@@ -60,10 +61,73 @@ def test_continue_phrases_and_gate_copy() -> None:
         "narrative": "passed",
         "voice": "not_required",
         "editorial": "not_required",
+        "references": "ready",
         "asset": "pending",
         "timeline": "pending",
         "render": "pending",
-    }) == "asset"
+    }) == "references"
+
+
+def test_old_drama_status_still_starts_at_references() -> None:
+    from pathlib import Path
+
+    from ugc_harness.harness.models import (
+        EvaluationState,
+        ProjectContext,
+        ProjectState,
+        StageStatusBoard,
+    )
+
+    from app.backend.project_service import ProjectService, SHOT_PIPELINE
+    from app.backend.repository import AppDataRepository
+
+    root = Path(".tmp") / "pipeline_drama"
+    root.mkdir(parents=True, exist_ok=True)
+    state = ProjectState(
+        context=ProjectContext(
+            constraints={"narrative_format": "drama", "production_mode": "drama"}
+        ),
+        evaluation=EvaluationState(
+            stages=StageStatusBoard(
+                narrative="passed",
+                voice="not_required",
+                editorial="not_required",
+                references="not_required",
+                asset="ready",
+                timeline="pending",
+                render="pending",
+            )
+        ),
+    )
+    projects = ProjectService(root, AppDataRepository(root / "appdata"))
+    assert projects.current_stage(state, "missing") == "narrative"
+    assert next_stage_after("narrative", pipeline=SHOT_PIPELINE) == "references"
+
+
+def test_production_pipeline_follows_format() -> None:
+    from ugc_harness.harness.models import ProjectContext, ProjectState
+
+    from app.backend.project_service import (
+        EXPLAINER_PIPELINE,
+        SHOT_PIPELINE,
+        production_pipeline,
+    )
+
+    drama = ProjectState(
+        context=ProjectContext(
+            constraints={"narrative_format": "drama", "production_mode": "drama"}
+        )
+    )
+    explainer = ProjectState(
+        context=ProjectContext(constraints={"narrative_format": "explainer"})
+    )
+    assert production_pipeline(drama) == SHOT_PIPELINE
+    assert production_pipeline(explainer) == EXPLAINER_PIPELINE
+    assert next_stage_after("narrative", pipeline=SHOT_PIPELINE) == "references"
+    assert next_stage_after("references", pipeline=SHOT_PIPELINE) == "asset"
+    assert next_stage_after("narrative", pipeline=EXPLAINER_PIPELINE) == "voice"
+    assert "voice" not in SHOT_PIPELINE
+    assert "references" not in EXPLAINER_PIPELINE
 
 
 def test_existing_projects_have_beat_task_and_timeline_views() -> None:
@@ -87,6 +151,7 @@ def test_existing_projects_have_beat_task_and_timeline_views() -> None:
     assert graph.status_code == 200
     assert "nodes" in graph.json()
     assert "graph_version" in graph.json()
+    assert "history" in graph.json()
     for node in graph.json()["nodes"]:
         assert "content_hash" not in node
         assert "dependency_hashes" not in node
@@ -232,6 +297,8 @@ def test_graph_projector_lists_nodes_without_hashes() -> None:
     refs = {node["ref"] for node in view["nodes"]}
     assert view["node_count"] == 3
     assert view["kinds"]["beat"] == 1
+    assert view["history"] == []
+    assert view["history_version"] is None
     assert refs == {"prop:e1", "beat:b3", "utterance:ss3"}
     prop = next(node for node in view["nodes"] if node["ref"] == "prop:e1")
     assert prop["title"] == "面粉"
@@ -243,3 +310,23 @@ def test_graph_projector_lists_nodes_without_hashes() -> None:
     for node in view["nodes"]:
         assert "content_hash" not in node
         assert "dependency_hashes" not in node
+
+
+def test_media_unit_id_unifies_shot_id_and_beat_id() -> None:
+    from app.backend.beat_projector import media_unit_id
+
+    assert media_unit_id({"beat_id": "b01"}) == "b01"
+    assert media_unit_id({"shot_id": "shot_a2"}) == "shot_a2"
+    narrative = {
+        "shots": {
+            "shots": [
+                {
+                    "shot_id": "shot_a2",
+                    "source_refs": ["action:a2", "utterance:u2"],
+                    "purpose": "接船",
+                }
+            ]
+        }
+    }
+    assert media_unit_id({"shot_id": "shot_a2"}, narrative) == "a2"
+    assert media_unit_id({"shot_id": "shot_a2", "beat_id": "shot_a2"}, narrative) == "a2"

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 
+from ...shared.media_duration import probe_duration_ms
 from ...shared.settings import AssetGenerationSettings, LLMSettings
 from ...shared.video_generation import generate_seedance_video
 from ..asset_agent.models import AssetCard
@@ -99,6 +100,7 @@ class VolcengineScreenAnimationProvider:
             generation_prompt=prompt,
             generation_job_id=generated.job_id,
             generation_cost_usd=(generated.job.get("usage") or {}).get("cost"),
+            duration_ms=probe_duration_ms(output),
         )
 
         # Legacy OpenAI-style video protocol kept below temporarily for old projects.
