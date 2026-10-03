@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+from uuid import uuid4
 
 from ugc_harness.agents.asset_agent.image_analysis import VolcengineImageAnalyzer
 from ugc_harness.agents.asset_agent.models import AssetArtifact
@@ -26,8 +29,9 @@ from ugc_harness.harness.render_controller import RenderHarnessController
 from ugc_harness.harness.production_routes import resolve_production_route
 from ugc_harness.harness.shot_asset_controller import ShotAssetHarnessController
 from ugc_harness.harness.shot_reference_controller import (
+    IdentityReferenceArtifact,
+    IdentityReferenceRun,
     SeedreamIdentityImageProvider,
-    ShotReferenceHarnessController,
 )
 from ugc_harness.harness.shot_video_provider import SeedanceShotVideoProvider
 from ugc_harness.harness.shot_asset_controller import ShotAssetArtifact
@@ -44,7 +48,25 @@ from ugc_harness.shared.settings import (
     TTSSettings,
 )
 
-from .schemas import CreateProjectRequest, RunStageRequest, StageName
+from .agent_trace import (
+    agent_tool_log_path,
+    clip_log_lines,
+    injected_context,
+    log_offset,
+    merge_action_arguments,
+    read_log_delta,
+    received_task_message,
+    run_opening_messages,
+    skill_name,
+)
+from .repository import AppDataRepository
+from .schemas import (
+    CreateProjectRequest,
+    RunActionView,
+    RunLogRecord,
+    RunStageRequest,
+    StageName,
+)
 
 
 class FeedbackAwareGenerator:
@@ -92,8 +114,13 @@ class FeedbackAwareGenerator:
 
 
 class StageRunner:
-    def __init__(self, output_root: Path) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        repository: AppDataRepository | None = None,
+    ) -> None:
         self.output_root = output_root
+        self.repository = repository
 
     def create_project(self, request: CreateProjectRequest) -> Path:
         brief = make_brief(
@@ -117,6 +144,13 @@ class StageRunner:
         writer = ArtifactWriter(self.output_root)
         project_dir, _ = writer.write(run.artifact)
         writer.write_narrative_run(project_dir, run.record)
+        self._record_completed(
+            project_dir,
+            stage="narrative",
+            source="studio",
+            goal="生成脚本",
+            agent="narrative_agent",
+        )
         return project_dir
 
     def run(
@@ -128,20 +162,29 @@ class StageRunner:
         task: TaskEnvelope | None = None,
         feedback: str | None = None,
     ) -> None:
-        if stage == "narrative":
-            self._narrative(project_dir, options, task, feedback)
-        elif stage == "voice":
-            self._voice(project_dir, options, task)
-        elif stage == "editorial":
-            self._editorial(project_dir, options, task, feedback)
-        elif stage == "references":
-            self._references(project_dir, options, task)
-        elif stage == "asset":
-            self._asset(project_dir, options, task)
-        elif stage == "timeline":
-            self._timeline(project_dir, options, task)
-        elif stage == "render":
-            self._render(project_dir, task)
+        opened = self._open_run(project_dir, stage, task, feedback)
+        log_at = log_offset(agent_tool_log_path())
+        try:
+            if stage == "narrative":
+                self._narrative(project_dir, options, task, feedback)
+            elif stage == "voice":
+                self._voice(project_dir, options, task, feedback)
+            elif stage == "editorial":
+                self._editorial(project_dir, options, task, feedback)
+            elif stage == "references":
+                self._references(project_dir, options, task, feedback)
+            elif stage == "asset":
+                self._asset(project_dir, options, task, feedback)
+            elif stage == "timeline":
+                self._timeline(project_dir, options, task)
+            elif stage == "render":
+                self._render(project_dir, task)
+        except Exception as exc:
+            self._close_run(
+                opened, "failed", project_dir, stage, error=str(exc), log_at=log_at
+            )
+            raise
+        self._close_run(opened, "completed", project_dir, stage, log_at=log_at)
 
     @staticmethod
     def _prepare_stage(
@@ -162,6 +205,185 @@ class StageRunner:
         return ProjectState.model_validate_json(
             (project_dir / "harness" / "project_state.json").read_text(encoding="utf-8")
         )
+
+    def _repo(self) -> AppDataRepository:
+        if self.repository is None:
+            from .config import AppConfig
+
+            self.repository = AppDataRepository(AppConfig.default().data_root)
+        return self.repository
+
+    def _open_run(
+        self,
+        project_dir: Path,
+        stage: StageName,
+        task: TaskEnvelope | None,
+        feedback: str | None,
+    ) -> tuple[RunLogRecord, float] | None:
+        try:
+            try:
+                opened_state = self._state(project_dir)
+                project_id = opened_state.context.project_id
+            except (OSError, ValueError):
+                opened_state = None
+                project_id = project_dir.name
+            record = RunLogRecord(
+                run_id=f"run_{uuid4().hex}",
+                project_id=project_id,
+                source="intake" if task is not None else "studio",
+                stage=stage,
+                task_id=task.task_id if task is not None else None,
+                agent=task.agent if task is not None else None,
+                goal=task.goal if task is not None else f"执行 {stage}",
+                instruction=feedback,
+                status="running",
+                allowed_tools=list(task.allowed_tools) if task is not None else [],
+                target_refs=list(task.scope.target_refs) if task is not None else [],
+                shot_ids=list(task.scope.shot_ids) if task is not None else [],
+                received=(
+                    received_task_message(task, feedback)
+                    if task is not None
+                    else (feedback or f"执行 {stage}")
+                ),
+                context=injected_context(
+                    task,
+                    instruction=feedback,
+                    project_dir=project_dir,
+                    stage=stage,
+                    state=opened_state,
+                ),
+                messages=run_opening_messages(
+                    task,
+                    instruction=feedback,
+                    project_dir=project_dir,
+                    stage=stage,
+                    state=opened_state,
+                ),
+            )
+            self._repo().upsert_run(project_dir.name, record)
+            return record, time.monotonic()
+        except Exception:
+            return None
+
+    def _close_run(
+        self,
+        opened: tuple[RunLogRecord, float] | None,
+        status: str,
+        project_dir: Path,
+        stage: StageName,
+        *,
+        error: str | None = None,
+        log_at: int | None = None,
+    ) -> None:
+        if opened is None:
+            return
+        record, started = opened
+        record.status = status
+        record.error = error
+        record.finished_at = datetime.now(timezone.utc).isoformat()
+        record.duration_ms = int((time.monotonic() - started) * 1000)
+        if log_at is not None:
+            record.lines = read_log_delta(agent_tool_log_path(), log_at)
+        self._enrich_run(record, project_dir, stage)
+        record.lines = clip_log_lines(record.lines)
+        try:
+            self._repo().upsert_run(project_dir.name, record)
+        except Exception:
+            return
+
+    def _record_completed(
+        self,
+        project_dir: Path,
+        *,
+        stage: StageName,
+        source: str,
+        goal: str,
+        agent: str | None = None,
+    ) -> None:
+        try:
+            try:
+                project_id = self._state(project_dir).context.project_id
+            except (OSError, ValueError):
+                project_id = project_dir.name
+            record = RunLogRecord(
+                run_id=f"run_{uuid4().hex}",
+                project_id=project_id,
+                source=source,  # type: ignore[arg-type]
+                stage=stage,
+                agent=agent,
+                goal=goal,
+                status="completed",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self._enrich_run(record, project_dir, stage)
+            self._repo().upsert_run(project_dir.name, record)
+        except Exception:
+            return
+
+    def _enrich_run(
+        self,
+        record: RunLogRecord,
+        project_dir: Path,
+        stage: StageName,
+    ) -> None:
+        match = None
+        state = None
+        try:
+            state = self._state(project_dir)
+        except (OSError, ValueError):
+            state = None
+        if state is not None:
+            phase = state.trajectory.phases.get(stage)
+            if phase is not None and phase.tasks:
+                if record.task_id:
+                    match = next(
+                        (
+                            item
+                            for item in reversed(phase.tasks)
+                            if item.task.task_id == record.task_id
+                        ),
+                        None,
+                    )
+                if match is None:
+                    match = phase.tasks[-1]
+                if not record.actions:
+                    record.actions = [
+                        RunActionView(
+                            tool=item.tool,
+                            result=item.result,
+                            duration_ms=item.duration_ms,
+                            reason=item.reason,
+                            skill=skill_name(item.tool, None),
+                        )
+                        for item in match.agent_result.actions
+                    ]
+                if record.critic_passed is None:
+                    record.critic_passed = match.evaluation.passed
+                if not record.goal:
+                    record.goal = match.task.goal
+                if not record.agent:
+                    record.agent = match.task.agent
+                if not record.error:
+                    record.error = match.agent_result.error
+        if record.lines:
+            record.actions = merge_action_arguments(record.actions, record.lines)
+        record.context = injected_context(
+            match.task if match is not None else None,
+            instruction=record.instruction,
+            project_dir=project_dir,
+            stage=stage,
+            existing=record.context,
+            state=state,
+        )
+        if not record.messages:
+            record.messages = run_opening_messages(
+                match.task if match is not None else None,
+                instruction=record.instruction,
+                project_dir=project_dir,
+                stage=stage,
+                state=state,
+                existing=record.context,
+            )
 
     def _narrative(
         self, project_dir: Path, options: RunStageRequest,
@@ -217,18 +439,29 @@ class StageRunner:
         writer.write_narrative_run(project_dir, run.record)
 
     def _voice(
-        self, project_dir: Path, options: RunStageRequest, task: TaskEnvelope | None
+        self,
+        project_dir: Path,
+        options: RunStageRequest,
+        task: TaskEnvelope | None,
+        feedback: str | None,
     ) -> None:
         narrative = NarrativeArtifact.model_validate_json(
             (project_dir / "narrative_artifact.json").read_text(encoding="utf-8")
         )
-        state = self._state(project_dir)
+        state = self._prepare_stage(project_dir, self._state(project_dir), "voice")
         settings = TTSSettings.from_environment(None)
-        if options.voice_id:
-            settings.voice_id = options.voice_id
+        override = options.voice_id
+        if override:
+            settings.voice_id = override
         with VolcengineTTS(settings) as provider:
-            run = VoiceHarnessController.from_provider(provider, settings.voice_id).run(
-                narrative, project_dir, state, task
+            run = VoiceHarnessController.from_provider(
+                provider, voice_id=override
+            ).run(
+                narrative,
+                project_dir,
+                state,
+                task,
+                instruction=feedback,
             )
         writer = ArtifactWriter(project_dir.parent)
         writer.write_voice(project_dir, run.artifact)
@@ -254,7 +487,11 @@ class StageRunner:
         writer.write_editorial_run(project_dir, run.record)
 
     def _references(
-        self, project_dir: Path, options: RunStageRequest, task: TaskEnvelope | None
+        self,
+        project_dir: Path,
+        options: RunStageRequest,
+        task: TaskEnvelope | None,
+        feedback: str | None,
     ) -> None:
         narrative = NarrativeArtifact.model_validate_json(
             (project_dir / "narrative_artifact.json").read_text(encoding="utf-8")
@@ -264,30 +501,90 @@ class StageRunner:
             None, image_model=options.image_model
         )
         with SeedreamIdentityImageProvider(generation) as provider:
-            artifact, run = ShotReferenceHarnessController.from_provider(provider).run(
-                narrative, project_dir, state, task
+            artifact, run = ShotAssetHarnessController.from_provider(
+                None,
+                image_provider=provider,
+            ).run(
+                narrative,
+                project_dir,
+                state,
+                task,
+                instruction=feedback,
+                identity_only=True,
             )
+        identity_artifact = IdentityReferenceArtifact(
+            project_id=artifact.project_id,
+            identities=artifact.identities,
+        )
         writer = ArtifactWriter(project_dir.parent)
-        writer.write_identity_references(project_dir, artifact)
-        writer.write_identity_reference_run(project_dir, run)
+        writer.write_identity_references(project_dir, identity_artifact)
+        writer.write_identity_reference_run(
+            project_dir,
+            IdentityReferenceRun(
+                task=run.task,
+                actions=run.actions,
+                committed_state_version=run.committed_state_version,
+                project_state=run.project_state,
+            ),
+        )
 
     def _asset(
-        self, project_dir: Path, options: RunStageRequest, task: TaskEnvelope | None
+        self,
+        project_dir: Path,
+        options: RunStageRequest,
+        task: TaskEnvelope | None,
+        feedback: str | None,
     ) -> None:
         narrative = NarrativeArtifact.model_validate_json(
             (project_dir / "narrative_artifact.json").read_text(encoding="utf-8")
         )
         route = resolve_production_route(narrative)
         if route.asset_route == "shot_ai_video":
+            identity_only = bool(
+                task is not None
+                and str(task.input_hash).startswith("repair-")
+                and not task.scope.shot_ids
+            )
             state = self._prepare_stage(project_dir, self._state(project_dir), "asset")
             generation = AssetGenerationSettings.from_environment(
-                None, video_model=options.video_model
+                None,
+                image_model=options.image_model,
+                video_model=options.video_model,
             )
-            with SeedanceShotVideoProvider(generation) as provider:
-                artifact, run = ShotAssetHarnessController.from_provider(provider).run(
-                    narrative, project_dir, state, task
+            with (
+                SeedanceShotVideoProvider(generation) as video_provider,
+                SeedreamIdentityImageProvider(generation) as image_provider,
+            ):
+                artifact, run = ShotAssetHarnessController.from_provider(
+                    None if identity_only else video_provider,
+                    image_provider=image_provider,
+                ).run(
+                    narrative,
+                    project_dir,
+                    state,
+                    task,
+                    instruction=feedback,
+                    identity_only=identity_only,
                 )
             writer = ArtifactWriter(project_dir.parent)
+            if identity_only:
+                writer.write_identity_references(
+                    project_dir,
+                    IdentityReferenceArtifact(
+                        project_id=artifact.project_id,
+                        identities=artifact.identities,
+                    ),
+                )
+                writer.write_identity_reference_run(
+                    project_dir,
+                    IdentityReferenceRun(
+                        task=run.task,
+                        actions=run.actions,
+                        committed_state_version=run.committed_state_version,
+                        project_state=run.project_state,
+                    ),
+                )
+                return
             writer.write_shot_assets(project_dir, artifact)
             writer.write_shot_asset_run(project_dir, run)
             return
@@ -360,8 +657,16 @@ class StageRunner:
                 timeline_path.read_text(encoding="utf-8")
             )
             state = self._prepare_stage(project_dir, self._state(project_dir), "render")
+            voice_path = project_dir / "voice_artifact.json"
+            voice = (
+                VoiceArtifact.model_validate_json(
+                    voice_path.read_text(encoding="utf-8")
+                )
+                if voice_path.is_file()
+                else None
+            )
             artifact, run = ShotRenderHarnessController().run(
-                timeline, project_dir, state
+                timeline, project_dir, state, voice=voice, narrative=narrative
             )
             writer = ArtifactWriter(project_dir.parent)
             writer.write_render(project_dir, artifact)

@@ -5,30 +5,51 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from ugc_harness.agents.generic import StepDecision
 from ugc_harness.agents.narrative_agent import make_brief
-from ugc_harness.harness.narrative_formats import EXPLAINER_PACK
+from ugc_harness.agents.skills import SKILL_ACTIVATE
+from ugc_harness.harness.narrative_formats import (
+    EXPLAINER_PACK,
+    SUBMIT_CANDIDATE_TOOL,
+    WRITE_ACTIONS_TOOL,
+    WRITE_BEATS_TOOL,
+    WRITE_DEFINITION_TOOL,
+    WRITE_EXPLANATIONS_TOOL,
+    WRITE_PROCEDURE_TOOL,
+    WRITE_SCRIPT_TOOL,
+    WRITE_SECTIONS_TOOL,
+    WRITE_SHOTS_TOOL,
+    WRITE_STORY_TOOL,
+    WRITE_WORLD_TOOL,
+)
 from ugc_harness.harness.controller import NarrativeHarnessController
 from ugc_harness.tools.mcp import StdioMCPServerConfig, mcp_tool_catalog
 
-HAPPY_PATH = list(EXPLAINER_PACK.capability_tools())
-SCRIPT_MODEL_TOOL = "narrative.explainer.write_script"
-SUBMIT_MODEL_TOOL = "narrative.submit_candidate"
+SUBMIT_MODEL_TOOL = SUBMIT_CANDIDATE_TOOL
+HAPPY_PATH = [
+    WRITE_SECTIONS_TOOL,
+    WRITE_BEATS_TOOL,
+    WRITE_SCRIPT_TOOL,
+    WRITE_SHOTS_TOOL,
+    SUBMIT_MODEL_TOOL,
+]
 DRAMA_HAPPY_PATH = [
-    "narrative.drama.plan_story",
-    "narrative.drama.design_world",
-    "narrative.drama.expand_scenes",
-    "narrative.drama.compile_shots",
+    WRITE_WORLD_TOOL,
+    WRITE_STORY_TOOL,
+    WRITE_ACTIONS_TOOL,
+    WRITE_SHOTS_TOOL,
     SUBMIT_MODEL_TOOL,
 ]
 TUTORIAL_HAPPY_PATH = [
-    "narrative.tutorial.plan_steps",
-    "narrative.tutorial.define_result",
-    "narrative.tutorial.plan_steps",
-    "narrative.tutorial.plan_explanations",
-    "narrative.tutorial.compile_shots",
+    WRITE_DEFINITION_TOOL,
+    WRITE_PROCEDURE_TOOL,
+    WRITE_EXPLANATIONS_TOOL,
+    WRITE_SHOTS_TOOL,
     SUBMIT_MODEL_TOOL,
 ]
+ALLOWED = list(EXPLAINER_PACK.capability_tools())
 
 
 class SequentialToolModel:
@@ -88,7 +109,9 @@ def _fixture_server() -> StdioMCPServerConfig:
 def test_narrative_mcp_tools_advertise_descriptions_and_parameters() -> None:
     from ugc_harness.mcp_servers.narrative import (
         CONFIGURE_TOOL,
-        SECTIONS_TOOL,
+        WRITE_IDENTITIES_TOOL,
+        WRITE_SECTIONS_TOOL as PROD_WRITE_SECTIONS,
+        WRITE_SHOTS_TOOL as PROD_WRITE_SHOTS,
         SUBMIT_TOOL,
         mcp,
     )
@@ -97,12 +120,16 @@ def test_narrative_mcp_tools_advertise_descriptions_and_parameters() -> None:
         item["name"]: item
         for item in mcp_tool_catalog(mcp, exclude=frozenset({CONFIGURE_TOOL}))
     }
-    assert SECTIONS_TOOL in catalog
+    assert WRITE_IDENTITIES_TOOL in catalog
+    assert PROD_WRITE_SECTIONS in catalog
+    assert PROD_WRITE_SHOTS in catalog
     assert SUBMIT_TOOL in catalog
-    sections = catalog[SECTIONS_TOOL]
-    assert "身份册" in sections["description"]
-    problems = sections["parameters"]["properties"]["problems"]
-    assert "首次" in str(problems.get("description") or "")
+    identities = catalog[WRITE_IDENTITIES_TOOL]
+    assert "身份册" in identities["description"]
+    shots = catalog[PROD_WRITE_SHOTS]
+    assert "identities" in shots["parameters"]["properties"]
+    assert "shots" in shots["parameters"]["properties"]
+    assert "前置" in catalog[PROD_WRITE_SECTIONS]["description"]
     assert catalog[SUBMIT_TOOL]["description"]
     assert "properties" in catalog[SUBMIT_TOOL]["parameters"]
     for item in catalog.values():
@@ -126,11 +153,10 @@ def test_narrative_agent_runs_the_explainer_tool_chain() -> None:
     ]
     # The model saw the full allowed tool set on every step, not a forced
     # single-tool menu.
-    assert model.offered == [HAPPY_PATH] * 5
+    offered = [SKILL_ACTIVATE, *ALLOWED]
+    assert model.offered == [offered] * len(HAPPY_PATH)
     assert model.selected == HAPPY_PATH
-    assert [action.tool for action in run.record.agent_result.actions] == [
-        *EXPLAINER_PACK.capability_tools(),
-    ]
+    assert [action.tool for action in run.record.agent_result.actions] == HAPPY_PATH
     assert all(
         action.result == "success"
         for action in run.record.agent_result.actions
@@ -158,10 +184,7 @@ def test_narrative_agent_runs_the_explainer_tool_chain() -> None:
 
 
 def test_narrative_agent_feeds_tool_errors_back_to_the_model() -> None:
-    # The model first calls write_script before any plan exists. The MCP
-    # server rejects it; the error is fed back into the conversation and the
-    # model recovers instead of the harness aborting the task.
-    model = ScriptedToolModel([SCRIPT_MODEL_TOOL, *HAPPY_PATH])
+    model = ScriptedToolModel(["narrative.write_identities", SUBMIT_MODEL_TOOL, *HAPPY_PATH])
     run = NarrativeHarnessController.from_mcp(
         model,
         "fixture-model",
@@ -169,18 +192,14 @@ def test_narrative_agent_feeds_tool_errors_back_to_the_model() -> None:
     ).run(make_brief(topic="stdio MCP narrative agent recovery test"))
 
     assert run.artifact.quality.passed is True
-    assert model.selected == [SCRIPT_MODEL_TOOL, *HAPPY_PATH]
     results = [
         (action.tool, action.result)
         for action in run.record.agent_result.actions
     ]
     assert results == [
-        (EXPLAINER_PACK.capability_tools()[2], "failed"),
-        (EXPLAINER_PACK.capability_tools()[0], "success"),
-        (EXPLAINER_PACK.capability_tools()[1], "success"),
-        (EXPLAINER_PACK.capability_tools()[2], "success"),
-        (EXPLAINER_PACK.capability_tools()[3], "success"),
-        (EXPLAINER_PACK.capability_tools()[4], "success"),
+        ("narrative.write_identities", "success"),
+        (SUBMIT_MODEL_TOOL, "failed"),
+        *[(name, "success") for name in HAPPY_PATH],
     ]
 
 
@@ -198,11 +217,7 @@ def test_agent_can_submit_early_then_replan_from_the_tool_error() -> None:
         for action in run.record.agent_result.actions
     ] == [
         ("narrative.submit_candidate", "failed"),
-        ("narrative.explainer.plan_sections", "success"),
-        ("narrative.explainer.expand_beats", "success"),
-        ("narrative.explainer.write_script", "success"),
-        ("narrative.explainer.compile_shots", "success"),
-        ("narrative.submit_candidate", "success"),
+        *[(name, "success") for name in HAPPY_PATH],
     ]
 
 
@@ -241,11 +256,7 @@ def test_narrative_agent_runs_the_drama_tool_chain_with_embedded_audio() -> None
     assert run.record.project_state.evaluation.stages.asset == "pending"
     assert model.selected == DRAMA_HAPPY_PATH
     assert [action.tool for action in run.record.agent_result.actions] == [
-        "narrative.drama.plan_story",
-        "narrative.drama.design_world",
-        "narrative.drama.expand_scenes",
-        "narrative.drama.compile_shots",
-        "narrative.submit_candidate",
+        *DRAMA_HAPPY_PATH,
     ]
     shots = run.artifact.shots
     assert shots is not None
@@ -280,7 +291,7 @@ def test_narrative_agent_runs_the_tutorial_tools_with_mixed_audio() -> None:
     assert run.record.evaluation.passed is True
     assert run.record.transition.to_agent == "references_agent"
     assert run.record.project_state.evaluation.stages.script == "passed"
-    assert run.record.project_state.evaluation.stages.voice == "not_required"
+    assert run.record.project_state.evaluation.stages.voice == "pending"
     assert run.record.project_state.evaluation.stages.editorial == "not_required"
     assert run.record.project_state.evaluation.stages.references == "ready"
     assert run.record.project_state.evaluation.stages.asset == "pending"
@@ -307,15 +318,7 @@ def test_narrative_agent_runs_the_tutorial_tools_with_mixed_audio() -> None:
 
 
 def test_agent_accepts_allow_listed_original_mcp_tool_names() -> None:
-    model = ScriptedToolModel(
-        [
-            "narrative.tutorial.define_result",
-            "narrative.tutorial.plan_steps",
-            "narrative.tutorial.plan_explanations",
-            "narrative.tutorial.compile_shots",
-            "narrative.submit_candidate",
-        ]
-    )
+    model = ScriptedToolModel(list(TUTORIAL_HAPPY_PATH))
 
     run = NarrativeHarnessController.from_mcp(
         model,
@@ -325,3 +328,38 @@ def test_agent_accepts_allow_listed_original_mcp_tool_names() -> None:
 
     assert run.record.evaluation.passed is True
     assert [item.tool for item in run.record.agent_result.actions] == model.selected
+
+
+def test_write_shots_requires_prior_layer_on_first_run() -> None:
+    from tests.fixtures.narrative_mcp_server import (
+        _canned_beat_plan,
+        _canned_script,
+        _canned_section_plan,
+        _canned_shots,
+    )
+    from ugc_harness.mcp_servers import narrative as narrative_mcp
+
+    brief = make_brief(topic="首跑必须先写上一层")
+    shots = [item.model_dump(mode="json") for item in _canned_shots("explainer").shots]
+    narrative_mcp.configure_task(brief.model_dump(mode="json"), model="test")
+    try:
+        with pytest.raises(ValueError, match="前置未满足：先 narrative.write_script"):
+            narrative_mcp.write_shots(shots=shots)
+        with pytest.raises(ValueError, match="前置未满足：先 narrative.write_sections"):
+            narrative_mcp.write_beats(
+                beats=_canned_beat_plan().model_dump(mode="json")
+            )
+        narrative_mcp.write_sections(
+            sections=_canned_section_plan().model_dump(mode="json")
+        )
+        narrative_mcp.write_beats(beats=_canned_beat_plan().model_dump(mode="json"))
+        narrative_mcp.write_script(script=_canned_script().model_dump(mode="json"))
+        result = narrative_mcp.write_shots(shots=shots)
+        assert result["ok"] is True
+        assert narrative_mcp._session is not None
+        assert narrative_mcp._session.identities is not None
+        assert narrative_mcp._session.script is not None
+        assert narrative_mcp._session.shots is not None
+        assert len(narrative_mcp._session.shots.shots) == len(shots)
+    finally:
+        narrative_mcp._session = None

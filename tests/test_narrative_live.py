@@ -31,21 +31,21 @@ _FORMATS = (
         "为什么单元测试能减少返工",
         "单元测试",
         EXPLAINER_PACK,
-        "narrative.explainer.compile_shots",
+        "narrative.write_shots",
     ),
     (
         "drama",
         "实习生第一天加班",
         "加班",
         DRAMA_PACK,
-        "narrative.drama.compile_shots",
+        "narrative.write_shots",
     ),
     (
         "tutorial",
         "家里包粽子",
         "粽子",
         TUTORIAL_PACK,
-        "narrative.tutorial.compile_shots",
+        "narrative.write_shots",
     ),
 )
 
@@ -107,7 +107,9 @@ def test_generic_agent_runs_narrative_format(
     except Exception as exc:
         pytest.fail(_dump(run, str(exc)))
 
-    allowed = set(pack.capability_tools())
+    from ugc_harness.agents.skills import SKILL_ACTIVATE
+
+    allowed = set(pack.capability_tools()) | {SKILL_ACTIVATE}
     used = [item.tool for item in run.record.agent_result.actions]
     context = _dump(run)
     assert run.record.agent_result.status == "completed", context

@@ -152,6 +152,11 @@ def content_commits(document: VideoDescription) -> list[NodeCommit]:
         edges.extend(
             DependencyEdge(to=ref, family="identity") for ref in shot.spec.binds
         )
+        previous_id = shot.continuity.previous_shot_id
+        if shot.continuity.uses_previous_tail() and previous_id:
+            edges.append(
+                DependencyEdge(to=f"shot:{previous_id}", family="element")
+            )
         commits.append(
             NodeCommit(
                 f"shot:{shot.spec.shot_id}",

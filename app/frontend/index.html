@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="用对话做 UGC 视频，右侧实时看到脚本、声音和镜头" />
     <title>UGC Beat Studio</title>
-    <link rel="stylesheet" href="/styles.css?v=20260907a" />
-    <link rel="stylesheet" href="/editorial.css?v=20260907a" />
-    <link rel="stylesheet" href="/media.css?v=20260907a" />
-    <link rel="stylesheet" href="/chat.css?v=20260907a" />
+    <link rel="stylesheet" href="/styles.css?v=20260912a" />
+    <link rel="stylesheet" href="/editorial.css?v=20260912a" />
+    <link rel="stylesheet" href="/media.css?v=20260912a" />
+    <link rel="stylesheet" href="/chat.css?v=20260912c" />
   </head>
   <body>
     <div class="studio">
@@ -27,7 +27,13 @@
         </div>
       </header>
 
-      <div class="studio-body">
+      <nav class="studio-nav" aria-label="栏目">
+        <button class="nav-tab active" type="button" data-pane="chat" aria-current="page">对话</button>
+        <button class="nav-tab" type="button" data-pane="state">ProjectState</button>
+        <button class="nav-tab" type="button" data-pane="runs">Agent 运行记录</button>
+      </nav>
+
+      <div id="pane-chat" class="studio-body">
         <section class="chat-pane" aria-label="制作对话">
           <div id="chatThread" class="chat-thread"></div>
           <div class="chat-dock">
@@ -59,6 +65,37 @@
           </div>
         </aside>
       </div>
+
+      <section id="pane-state" class="studio-page hidden" aria-label="ProjectState">
+        <div class="page-header">
+          <p class="eyebrow">PROJECT STATE</p>
+          <h1>ProjectState</h1>
+          <p id="stateHint" class="muted">开工之后，这里列出 ProjectState 各层字段。视频和图片只显示 id。</p>
+        </div>
+        <div id="stateBoard"></div>
+      </section>
+
+      <section id="pane-runs" class="studio-page hidden" aria-label="Agent 运行记录">
+        <div class="runs-layout">
+          <div class="runs-main">
+            <div class="page-header">
+              <p class="eyebrow">AGENT RUNS</p>
+              <h1>Agent 运行记录</h1>
+              <p id="runHint" class="muted">上面是 Generic 的 task，底下是 intake 这一轮的消息上下文、调用的工具 / skill，以及终端原文。</p>
+            </div>
+            <div id="runFilters" class="run-filters"></div>
+            <div id="runBoard"></div>
+          </div>
+          <aside class="catalog-rail" aria-label="技能与工具">
+            <div class="page-header">
+              <p class="eyebrow">CATALOG</p>
+              <h1>技能与工具</h1>
+              <p class="muted">点开 skill 看全文。Tool 仍显示描述与参数，对照左边运行记录即可。</p>
+            </div>
+            <div id="catalogBoard"></div>
+          </aside>
+        </div>
+      </section>
     </div>
 
     <dialog id="drawer">
@@ -86,6 +123,6 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="/app.js?v=20260907a"></script>
+    <script type="module" src="/app.js?v=20260914b"></script>
   </body>
 </html>

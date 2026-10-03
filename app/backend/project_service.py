@@ -19,6 +19,9 @@ EXPLAINER_PIPELINE: tuple[StageName, ...] = (
 SHOT_PIPELINE: tuple[StageName, ...] = (
     "narrative", "references", "asset", "timeline", "render"
 )
+TUTORIAL_PIPELINE: tuple[StageName, ...] = (
+    "narrative", "references", "asset", "voice", "timeline", "render"
+)
 ARTIFACT_FILES: dict[StageName, str] = {
     "narrative": "narrative_artifact.json",
     "voice": "voice_artifact.json",
@@ -158,6 +161,8 @@ def production_pipeline(
                     )
                 )
                 if route.asset_route == "shot_ai_video":
+                    if "voice" in route.stages:
+                        return TUTORIAL_PIPELINE
                     return SHOT_PIPELINE
                 return EXPLAINER_PIPELINE
             except (OSError, ValueError):
@@ -168,7 +173,9 @@ def production_pipeline(
         or constraints.get("production_mode")
         or ""
     )
-    if format_id in {"drama", "tutorial"}:
+    if format_id == "tutorial":
+        return TUTORIAL_PIPELINE
+    if format_id == "drama":
         return SHOT_PIPELINE
     return EXPLAINER_PIPELINE
 
@@ -178,6 +185,8 @@ def pipeline_format_id(
     project_dir: Path | None = None,
 ) -> str:
     pipeline = production_pipeline(state, project_dir)
+    if pipeline == TUTORIAL_PIPELINE:
+        return "tutorial"
     if pipeline == SHOT_PIPELINE:
         constraints = state.context.constraints or {}
         format_id = str(

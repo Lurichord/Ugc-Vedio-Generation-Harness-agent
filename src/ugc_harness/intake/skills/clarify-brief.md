@@ -13,6 +13,8 @@ description: 用户还在说要做什么片子。看 working_brief 缺什么，�
 4. `target.platform`
 5. `target.duration_target_ms`
 
+`production_mode` 不在这张问询清单里：用户没点名体裁时，根据已经收齐的 topic / goal 自己选一个写入，不要问「要不要做成短剧」。
+
 已经非空但太薄、后续制作会漂的，也只修这一项，不要同时补别的。语气、出镜、画幅、语言没提就不要问。
 
 ## 怎么把用户的话收成能用的字段
@@ -58,9 +60,21 @@ description: 用户还在说要做什么片子。看 working_brief 缺什么，�
 
 合法区间 60000–120000。「一分半」= 90000，「一分钟」= 60000，「两分钟」= 120000。超出区间时告诉用户只能做 1–2 分钟，让他改口，不要自己夹到边界上却不说。只说了平台、没说时长时 JSON 里 duration 仍是 null，再问多久。
 
+### production_mode
+
+体裁决定后面整条制作线。用户明说了就按原话写：讲解/科普=`explainer`，短剧/剧情=`drama`，教程/步骤=`tutorial`。没明说时根据 topic 和 goal 选最贴的一种，用 `brief.update` 写入即可，不必问用户确认。
+
+怎么选：
+
+- 观众看完要**跟着做出一件具体的事**（制作、包、做、步骤、上手）：`tutorial`。例如「制作粽子」「教包四角粽」「手冲咖啡怎么做」。
+- 观众看完要**看一段故事或人物情境**：`drama`。例如「屈原投江的故事」「演一段中秋团圆」。
+- 观众看完要**明白一个道理、原因或知识**，而不是动手：`explainer`。例如「为什么天空是蓝色的」「粽子和端午节的关系」。
+
+topic 还太薄、两种体裁都说得通时，先把 topic / goal 问清楚，再选；选的时候仍自己写入，不要把体裁当成单独一道题。
+
 ## 可以不问的
 
-`tone`、`creator_persona`、`aspect_ratio`、`language`、`video_profile` 没提就空着。`production_mode` 只在用户话已经能对上体裁时写入：讲解=`explainer`，短剧/剧情=`drama`，教程/步骤=`tutorial`；说不清保持空或 `auto`，不要为了填满而问「要不要做成短剧」。
+`tone`、`creator_persona`、`aspect_ratio`、`language`、`video_profile` 没提就空着。
 
 ## 对用户说话
 
@@ -76,7 +90,8 @@ description: 用户还在说要做什么片子。看 working_brief 缺什么，�
   "arguments": {
     "communication": {
       "goal": "让第一次包粽子的新手看完，能跟着步骤在家包出一个不散的好吃粽子"
-    }
+    },
+    "production_mode": "tutorial"
   },
   "message": "",
   "done": false

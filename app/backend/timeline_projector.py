@@ -31,10 +31,11 @@ class TimelineProjector:
 
         def planned_beat_id(beat_id: str) -> str:
             return realized_to_planned.get(beat_id, beat_id)
-        scripts = {
-            item["planned_beat_id"]: item
-            for item in (narrative.get("script") or {}).get("segments", [])
-        }
+        scripts: dict[str, dict[str, Any]] = {}
+        for item in (narrative.get("script") or {}).get("segments", []):
+            key = item.get("planned_beat_id") or item.get("step_id")
+            if key:
+                scripts[key] = item
         for beat in realized:
             bid = beat["planned_beat_id"]
             start, end = beat["start_ms"], beat["end_ms"]
@@ -43,9 +44,12 @@ class TimelineProjector:
                 start, end, beat.get("proposition") or bid, beat,
             ))
             script = scripts.get(bid, {})
-            if script:
+            script_id = script.get("script_segment_id") or script.get(
+                "explanation_segment_id"
+            )
+            if script and script_id:
                 tracks["text"].append(self._item(
-                    f"text-{bid}", f"utterance:{script['script_segment_id']}", "text", bid,
+                    f"text-{bid}", f"utterance:{script_id}", "text", bid,
                     start, end, script.get("text", "口播"), script,
                 ))
         for audio in voice.get("timed_audio", {}).get("segments", []):

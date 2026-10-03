@@ -31,6 +31,7 @@ class AssetProvider(Protocol):
         character_description: str | None = None,
         continuity_group_id: str | None = None,
         previous_character_asset: AssetCard | None = None,
+        **kwargs: object,
     ) -> AcquisitionResult: ...
 
 
@@ -82,4 +83,59 @@ class AssetCapabilities:
             selected_direction_id=selected.direction_id if selected else None,
             asset_id=selected.asset_id if selected else None,
             attempts=attempts,
+        )
+
+    def generate_talking_head(
+        self,
+        *,
+        project_id: str,
+        visual: VisualRequirement,
+        beat: RealizedBeat,
+        project_dir: str | Path,
+        prompt: str,
+        references: list[dict[str, str]] | None,
+        reference_audio_path: str | Path,
+        character_description: str | None = None,
+        continuity_group_id: str | None = None,
+        previous_character_asset: AssetCard | None = None,
+    ) -> tuple[AssetCard | None, VisualResolution]:
+        talking = next(
+            (
+                direction
+                for direction in visual.directions
+                if direction.asset_type == "talking_head"
+            ),
+            None,
+        )
+        if talking is None:
+            raise RuntimeError("该 VisualRequirement 没有 talking_head 方向")
+        result = self.provider.acquire(
+            project_id=project_id,
+            visual_request_id=visual.visual_request_id,
+            beat=beat,
+            direction=talking,
+            project_dir=Path(project_dir),
+            character_id=visual.character_id,
+            character_description=character_description,
+            continuity_group_id=continuity_group_id,
+            previous_character_asset=previous_character_asset,
+            generation_prompt=prompt,
+            generation_references=references,
+            reference_audio_path=str(reference_audio_path),
+        )
+        selected = result.asset
+        return selected, VisualResolution(
+            visual_request_id=visual.visual_request_id,
+            beat_id=visual.beat_id,
+            status="resolved" if selected else "unresolved",
+            selected_direction_id=selected.direction_id if selected else None,
+            asset_id=selected.asset_id if selected else None,
+            attempts=[
+                DirectionAttempt(
+                    direction_id=talking.direction_id,
+                    order=talking.order,
+                    status=result.status,
+                    reason=result.reason,
+                )
+            ],
         )

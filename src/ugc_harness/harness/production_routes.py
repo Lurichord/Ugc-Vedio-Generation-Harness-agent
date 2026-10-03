@@ -26,7 +26,7 @@ def resolve_production_route(narrative: NarrativeArtifact) -> ProductionRoute:
 
     shots = narrative.shots.shots if narrative.shots is not None else []
     if not shots:
-        if narrative.brief.production_mode not in {"auto", "explainer"}:
+        if narrative.brief.production_mode != "explainer":
             raise ValueError("non-explainer Narrative requires ProductionShots")
         return ProductionRoute(
             format_id="explainer",
@@ -58,8 +58,22 @@ def resolve_production_route(narrative: NarrativeArtifact) -> ProductionRoute:
         raise ValueError(
             f"{format_id} shots must use {expected_visual}: {', '.join(invalid)}"
         )
+    stages: tuple[str, ...] = ("references", "asset", "timeline", "render")
+    if format_id == "tutorial" and tutorial_needs_voice(narrative):
+        stages = ("references", "asset", "voice", "timeline", "render")
     return ProductionRoute(
         format_id=format_id,
         asset_route="shot_ai_video",
-        stages=("references", "asset", "timeline", "render"),
+        stages=stages,
+    )
+
+
+def tutorial_needs_voice(narrative: NarrativeArtifact) -> bool:
+    """Tutorial explanations are spoken by the Voice agent, not Seedance."""
+
+    script = narrative.script
+    return (
+        narrative.brief.production_mode == "tutorial"
+        and getattr(script, "script_type", None) == "tutorial"
+        and bool(getattr(script, "segments", None))
     )

@@ -87,6 +87,24 @@ def test_content_graph_uses_identity_and_typed_edges() -> None:
     assert any(edge.family == "identity" for edge in node.edges)
 
 
+def test_continue_shots_get_element_edges() -> None:
+    artifact = _drama_artifact()
+    document = build_video_description(artifact)
+    commits = content_commits(document)
+    continued = next(
+        item
+        for item in commits
+        if item.ref.startswith("shot:")
+        and any(edge.family == "element" for edge in item.edges)
+    )
+    assert any(
+        edge.family == "element" and edge.to.startswith("shot:")
+        for edge in continued.edges
+    )
+    first = next(item for item in commits if item.ref.startswith("shot:"))
+    assert all(edge.family != "element" for edge in first.edges)
+
+
 def test_tutorial_props_become_bind_targets() -> None:
     artifact = _tutorial_artifact()
     document = build_video_description(artifact)

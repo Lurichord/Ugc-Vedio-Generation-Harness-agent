@@ -12,10 +12,12 @@ from typing import TYPE_CHECKING
 
 from .description import (
     AlignmentSummary,
+    ShotGenerationReference,
     AudioSegmentBinding,
     ClipDescription,
     Deliverable,
     NarrationAudio,
+    ShotGenerationReference,
     ShotMedia,
     TimelineCaption,
     TimelineDescription,
@@ -165,6 +167,12 @@ def apply_shot_media(state: ProjectState, assets: "ShotAssetArtifact") -> None:
             duration_ms=asset.duration_ms,
             generator_model=asset.generator_model,
             generation_prompt=asset.generation_prompt,
+            generation_references=[
+                ShotGenerationReference.model_validate(item)
+                if not isinstance(item, ShotGenerationReference)
+                else item
+                for item in getattr(asset, "generation_references", []) or []
+            ],
             generation_job_id=asset.generation_job_id,
             generation_cost_usd=asset.generation_cost_usd,
         )

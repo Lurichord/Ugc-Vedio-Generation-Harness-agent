@@ -286,6 +286,30 @@ def test_drive_repair_runs_frontiers_until_desired_are_current() -> None:
     )
 
 
+def test_drive_repair_replans_after_each_task_so_voice_sees_new_state_version() -> None:
+    state = _tiny_project_state()
+    invalidated = invalidate_subgraph(state, ["beat:b3"])
+    seen_versions: list[int] = []
+
+    def run_task(task: TaskEnvelope, instruction: str) -> None:
+        del instruction
+        assert task.based_on_state_version == state.context.state_version
+        seen_versions.append(task.based_on_state_version)
+        _commit_task_targets(state, task)
+        state.context.state_version += 1
+
+    result = drive_repair(
+        desired_refs=invalidated,
+        instruction="收成两句",
+        load_state=lambda: state,
+        run_task=run_task,
+    )
+    assert result.ok is True
+    assert seen_versions == [2, 3]
+    assert result.tasks_run[0].startswith("task_repair_narrative_agent_")
+    assert result.tasks_run[1].startswith("task_repair_voice_agent_")
+
+
 def test_editorial_run_does_not_add_legacy_graph_nodes(
     tmp_path: Path,
 ) -> None:

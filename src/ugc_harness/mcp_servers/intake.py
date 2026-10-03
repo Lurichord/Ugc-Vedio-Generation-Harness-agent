@@ -157,7 +157,8 @@ def description_get_element(
         "同名身份视为同一件东西，一起改。"
         "不要新建节点，不要改 shot.binds。"
         "换物用这个，加新人/新物用 identity.create。"
-        "改完用返回的 changed_refs 做 harness.repair。"
+        "改完用返回的 changed_refs 做画面那一次 harness.repair；"
+        "还要换声音时再圈 audio: 派给 voice。"
     ),
     structured_output=True,
 )
@@ -303,15 +304,16 @@ def harness_inspect() -> dict[str, Any]:
     name=HARNESS_LIST_GRAPH,
     description=(
         "读取精简依赖图。无参返回内容根"
-        "（cast/prop/place/beat/scene/step），身份根带 name 和 dependents（含 shot）。"
-        "around_ref 返回该节点及一跳邻居。不含 hash。"
+        "（cast/prop/place/beat/scene/step），身份根带 name、dependents、"
+        "dependents_by_agent（narrative 下列 shot，voice 下列 audio）。"
+        "around_ref 返回该节点、一跳邻居，以及下游两跳内的 shot/audio。不含 hash。"
     ),
     structured_output=True,
 )
 def harness_list_graph(
     around_ref: Annotated[
         str | None,
-        Field(description="聚焦到这个节点及其一跳邻居；不填则返回内容根。"),
+        Field(description="聚焦到这个节点、一跳邻居，以及下游两跳内的 shot/audio；不填则返回内容根。"),
     ] = None,
 ) -> dict[str, Any]:
     focus = (around_ref or "").strip() or None
@@ -340,17 +342,23 @@ def harness_start_project() -> dict[str, Any]:
 @mcp.tool(
     name=HARNESS_REPAIR,
     description=(
-        "把圈中的 shot 交给 generic agent 按 instruction 微调。"
-        "换身份时先 identity.update；target_refs 可填身份 ref 或 shot。"
+        "把圈中节点交给一个制作 agent 按 instruction 微调。"
+        "layer=spec 改规格：画面圈 shot 或身份，配音圈 audio。"
+        "layer=asset 只重出参考图或成片；layer=voice 只重配。"
+        "一次不要混 shot 和 audio。换身份文案时先 identity.update。"
     ),
     structured_output=True,
 )
 def harness_repair(
     target_refs: Annotated[
         list[str],
-        Field(description="要修的节点，身份 ref 或 shot:…。"),
+        Field(description="要修的节点。规格用身份/shot 或 audio；实现层同样用这些地址。"),
     ],
     instruction: Annotated[str, Field(description="这一轮要改成什么样。")],
+    layer: Annotated[
+        str,
+        Field(description="spec 改叙事规格；asset 改参考图/成片；voice 改音色。默认 spec。"),
+    ] = "spec",
 ) -> dict[str, Any]:
     session = _load_session()
     executor = None
@@ -364,6 +372,7 @@ def harness_repair(
         session,
         target_refs,
         instruction,
+        layer=layer,
         dry_run=_dry_run,
         run_task=executor,
     )

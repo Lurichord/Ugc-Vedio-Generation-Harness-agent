@@ -11,6 +11,7 @@ from pydantic import Field
 
 from ..shared.models import StrictModel
 
+from ..agents.narrative_agent.models import NarrativeArtifact, TutorialScriptArtifact
 from ..agents.render_agent.capabilities import (
     RenderCapabilities,
     _find_remotion_binaries,
@@ -26,13 +27,16 @@ from ..agents.render_agent.models import (
     RenderComposition,
     RenderQuality,
 )
+from ..agents.voice_agent.audio import overlay_wavs
+from ..agents.voice_agent.models import AudioSegment, VoiceArtifact
+from ..content import MixedAudioSpec, TutorialVisualSpec
 from .description_realization import apply_render_realization
 from .models import ActionRecord, ProjectState, TaskBudget, TaskEnvelope, TaskScope
 from .shot_timeline_controller import ShotTimelineArtifact
 
 
 class ShotRenderHarnessController:
-    """Renders native-audio AI video clips without a VoiceArtifact."""
+    """Renders AI video clips, mixing tutorial TTS over native operation audio."""
 
     TOOL = "render.native_audio_shot_timeline"
 
@@ -44,6 +48,8 @@ class ShotRenderHarnessController:
         timeline: ShotTimelineArtifact,
         project_dir: str | Path,
         state: ProjectState,
+        voice: VoiceArtifact | None = None,
+        narrative: NarrativeArtifact | None = None,
     ) -> tuple[RenderArtifact, "ShotRenderRun"]:
         if state.evaluation.stages.timeline != "passed" or state.evaluation.stages.render != "ready":
             raise ValueError("shot render stage is not ready")
@@ -57,11 +63,32 @@ class ShotRenderHarnessController:
         if not (renderer_dir / "node_modules").is_dir():
             raise RuntimeError("renderer dependencies are not installed")
         fps = 30
+        overlay_path = None
+        source_voice = None
+        if (
+            voice is not None
+            and timeline.format_id == "tutorial"
+            and voice.timed_audio.segments
+        ):
+            script = narrative
+            if script is None:
+                narrative_path = root / "narrative_artifact.json"
+                if not narrative_path.is_file():
+                    raise FileNotFoundError(
+                        "tutorial mixed render needs narrative_artifact.json"
+                    )
+                script = NarrativeArtifact.model_validate_json(
+                    narrative_path.read_text(encoding="utf-8")
+                )
+            overlay_path = layout_tutorial_narration(
+                root, timeline, voice, script
+            )
+            source_voice = "voice_artifact.json"
         composition = RenderComposition(
             renderer_version="4.0.499",
             duration_ms=timeline.duration_ms,
             duration_in_frames=math.ceil(timeline.duration_ms * fps / 1000),
-            audio_path=None,
+            audio_path=overlay_path,
             clips=[
                 RenderClip(
                     clip_id=clip.clip_id,
@@ -149,7 +176,7 @@ class ShotRenderHarnessController:
         )
         artifact = RenderArtifact(
             project_id=timeline.project_id,
-            source_voice=None,
+            source_voice=source_voice,
             source_timeline="shot_timeline_artifact.json",
             composition=composition,
             outputs=outputs,
@@ -192,3 +219,73 @@ class ShotRenderRun(StrictModel):
     actions: list[ActionRecord]
     committed_state_version: int = Field(ge=1)
     project_state: ProjectState
+
+
+def layout_tutorial_narration(
+    project_dir: Path,
+    timeline: ShotTimelineArtifact,
+    voice: VoiceArtifact,
+    narrative: NarrativeArtifact,
+) -> str:
+    """Write a timeline-length overlay WAV; Remotion mixes it with clip audio."""
+
+    starts = tutorial_narration_starts(narrative, timeline, voice)
+    dest = project_dir / "audio" / "tutorial_overlay.wav"
+    overlay_wavs(
+        [(project_dir / segment.file, start_ms) for segment, start_ms in starts],
+        timeline.duration_ms,
+        dest,
+    )
+    return dest.relative_to(project_dir).as_posix()
+
+
+def tutorial_narration_starts(
+    narrative: NarrativeArtifact,
+    timeline: ShotTimelineArtifact,
+    voice: VoiceArtifact,
+) -> list[tuple[AudioSegment, int]]:
+    shots = {
+        shot.shot_id: shot
+        for shot in (narrative.shots.shots if narrative.shots is not None else [])
+    }
+    clips_by_shot = {clip.shot_id: clip for clip in timeline.clips}
+    shot_for_narration: dict[str, str] = {}
+    clips_by_step: dict[str, list] = {}
+    for shot in shots.values():
+        audio = shot.audio
+        if isinstance(audio, MixedAudioSpec):
+            for nid in audio.narration_segment_ids:
+                shot_for_narration.setdefault(nid, shot.shot_id)
+        visual = shot.visual
+        if isinstance(visual, TutorialVisualSpec):
+            clip = clips_by_shot.get(shot.shot_id)
+            if clip is not None:
+                clips_by_step.setdefault(visual.step_id, []).append(clip)
+    explanations = (
+        {
+            item.explanation_segment_id: item
+            for item in narrative.script.segments
+        }
+        if isinstance(narrative.script, TutorialScriptArtifact)
+        else {}
+    )
+    placed: list[tuple[AudioSegment, int]] = []
+    for segment in voice.timed_audio.segments:
+        expl = explanations.get(segment.script_segment_id)
+        placement = expl.placement if expl is not None else "during_action"
+        clip = None
+        shot_id = shot_for_narration.get(segment.script_segment_id)
+        if shot_id is not None:
+            clip = clips_by_shot.get(shot_id)
+        if clip is None:
+            step_clips = clips_by_step.get(segment.planned_beat_id, [])
+            if step_clips:
+                clip = step_clips[-1] if placement == "after_action" else step_clips[0]
+            else:
+                clip = timeline.clips[0]
+        if placement == "after_action":
+            start_ms = max(clip.start_ms, clip.end_ms - segment.duration_ms)
+        else:
+            start_ms = clip.start_ms
+        placed.append((segment, start_ms))
+    return placed

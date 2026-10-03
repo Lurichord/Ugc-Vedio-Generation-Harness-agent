@@ -47,8 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--production-mode",
-        choices=["auto", "explainer", "drama", "tutorial"],
-        default="auto",
+        choices=["explainer", "drama", "tutorial"],
+        default="explainer",
         help="Narrative Format Pack；当前已安装 explainer、drama、tutorial",
     )
     parser.add_argument(

@@ -106,7 +106,7 @@ def materialize_brief(draft: BriefDraft) -> CreativeBrief:
         goal=communication.goal,
         tone=communication.tone,
         creator_persona=communication.creator_persona,
-        production_mode=draft.production_mode or "auto",
+        production_mode=draft.production_mode,
         video_profile=draft.video_profile or "auto",
     )
     updates: dict[str, object] = {
@@ -133,11 +133,7 @@ def format_progress(progress: ProgressSnapshot) -> str:
 
 
 def _sync_brief_from_intent(current: BriefDraft, intent: VideoIntent) -> BriefDraft:
-    production_mode = (
-        intent.format_id
-        if intent.format_id in {"explainer", "drama", "tutorial"}
-        else current.production_mode
-    )
+    production_mode = intent.format_id or current.production_mode
     return current.model_copy(
         update={
             "topic": intent.topic,

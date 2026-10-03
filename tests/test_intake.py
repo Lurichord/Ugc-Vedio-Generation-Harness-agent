@@ -344,6 +344,7 @@ def test_brief_update_then_start_project_sees_new_goal() -> None:
                     "communication": {"goal": "让观众理解测试能降低返工成本"},
                     "audience": {"description": "业务开发"},
                     "target": {"platform": "douyin", "duration_target_ms": 90_000},
+                    "production_mode": "explainer",
                 },
             ),
             AgentDecision(tool="harness.start_project"),
@@ -682,7 +683,7 @@ def test_list_graph_returns_content_roots_without_hashes() -> None:
     assert "shot:shot_b3" not in refs
 
 
-def test_list_graph_around_ref_is_one_hop_and_resolves_beat_alias() -> None:
+def test_list_graph_around_ref_includes_downstream_audio() -> None:
     around = list_graph(_tiny_graph(), around_ref="beat:b3")
     assert around["ok"] is True
     assert around["resolved_ref"] == "beat:b3"
@@ -691,7 +692,16 @@ def test_list_graph_around_ref_is_one_hop_and_resolves_beat_alias() -> None:
         "beat:b3",
         "utterance:ss3",
         "shot:shot_b3",
+        "audio:ss3",
     }
+    by_ref = {item["ref"]: item for item in around["nodes"]}
+    assert by_ref["beat:b3"]["dependents_by_agent"]["narrative_agent"] == [
+        "shot:shot_b3",
+        "utterance:ss3",
+    ]
+    assert by_ref["utterance:ss3"]["dependents_by_agent"]["voice_agent"] == [
+        "audio:ss3"
+    ]
     assert "section:sec_body" not in refs
     assert "clip:clip_b3" not in refs
     missing = list_graph(_tiny_graph(), around_ref="beat:missing")
@@ -700,6 +710,7 @@ def test_list_graph_around_ref_is_one_hop_and_resolves_beat_alias() -> None:
     around_refs = {item["ref"] for item in shot_around["nodes"]}
     assert around_refs == {"shot:shot_b3", "beat:b3"}
     assert "clip:clip_b3" not in around_refs
+    assert "audio:ss3" not in around_refs
 
 
 def test_list_graph_and_repair_require_a_project() -> None:
@@ -723,7 +734,7 @@ def test_repair_resolves_description_ref_to_graph_node() -> None:
     assert preview["dry_run"] is True
     assert preview["target_refs"] == ["beat:b3"]
     assert preview["shot_refs"] == ["shot:shot_b3"]
-    assert preview["invalidated"] == ["shot:shot_b3"]
+    assert set(preview["invalidated"]) == {"shot:shot_b3"}
     assert preview["planned_tasks"] >= 1
     assert (project_dir / "harness" / "project_state.json").read_text(
         encoding="utf-8"
@@ -746,6 +757,88 @@ def test_explainer_utterance_repair_does_not_expand_to_shots() -> None:
     assert preview["shot_refs"] == []
     assert "shot:shot_b3" not in preview["invalidated"]
     assert "audio:ss3" in preview["invalidated"]
+
+
+def test_explainer_cast_repair_only_runs_narrative_on_shots() -> None:
+    from ugc_harness.harness.repair import load_project_state, write_project_state
+    from tests.test_repair import commit_repair_targets
+
+    project_dir = Path(".tmp") / "test_intake_repair_cast"
+    _write_demo_project(project_dir)
+    state = load_project_state(project_dir)
+    graph = DependencyGraph(state.dependency_graph)
+    graph.commit_batch(
+        task_id="attach_host_shot",
+        produced_by="narrative_agent",
+        commits=[
+            NodeCommit(
+                "shot:shot_b3",
+                "shot",
+                "shot three",
+                edges=(
+                    DependencyEdge(to="beat:b3", family="plot"),
+                    DependencyEdge(to="cast:host", family="identity"),
+                ),
+            )
+        ],
+    )
+    graph.commit_batch(
+        task_id="attach_host_audio",
+        produced_by="voice_agent",
+        commits=[
+            NodeCommit(
+                "audio:ss3",
+                "audio",
+                "audio three",
+                edges=(
+                    DependencyEdge(to="utterance:ss3", family="element"),
+                    DependencyEdge(to="cast:host", family="element"),
+                ),
+            )
+        ],
+    )
+    write_project_state(project_dir, state)
+    overview = list_graph(state)
+    host = next(item for item in overview["nodes"] if item["ref"] == "cast:host")
+    assert host["dependents_by_agent"]["narrative_agent"] == ["shot:shot_b3"]
+    assert host["dependents_by_agent"]["voice_agent"] == ["audio:ss3"]
+    session = new_session()
+    session.project_dir = str(project_dir)
+    _, preview = repair_description(
+        session, ["cast:host"], "将主持人改为男性并重配", dry_run=True
+    )
+    assert preview["ok"] is True
+    assert set(preview["invalidated"]) == {"shot:shot_b3"}
+    ran: list[str] = []
+
+    def run_task(task, instruction: str) -> None:
+        ran.append(task.agent)
+        assert instruction == "将主持人改为男性并重配"
+        commit_repair_targets(project_dir, task)
+
+    _, result = repair_description(
+        session, ["cast:host"], "将主持人改为男性并重配", run_task=run_task
+    )
+    assert result["ok"] is True
+    assert result["complete"] is True
+    assert ran == ["narrative_agent"]
+    final = load_project_state(project_dir)
+    assert final.dependency_graph.nodes["shot:shot_b3"].status == "current"
+    assert final.dependency_graph.nodes["audio:ss3"].status == "current"
+
+
+def test_explainer_repair_rejects_mixed_shot_and_audio() -> None:
+    project_dir = Path(".tmp") / "test_intake_repair_mixed"
+    _write_demo_project(project_dir)
+    session = new_session()
+    session.project_dir = str(project_dir)
+    _, result = repair_description(
+        session,
+        ["shot:shot_b3", "audio:ss3"],
+        "画面和配音一起改",
+    )
+    assert result["ok"] is False
+    assert "一个制作 agent" in result["error"]
 
 
 def test_repair_runs_injected_executor_until_current() -> None:
@@ -776,6 +869,7 @@ def test_repair_runs_injected_executor_until_current() -> None:
     for ref in result["invalidated"]:
         assert state.dependency_graph.nodes[ref].status == "current"
     assert state.dependency_graph.nodes["beat:b3"].status == "current"
+    assert state.dependency_graph.nodes["audio:ss3"].status == "current"
 
 
 def test_skill_catalog_and_activate() -> None:
@@ -786,18 +880,29 @@ def test_skill_catalog_and_activate() -> None:
         "start-project",
         "inspect-graph",
         "revise-segment",
+        "revise-media",
         "inspect-progress",
     }
     body = load_skill("inspect-graph")
     assert "harness.list_graph" in body
     assert "harness.repair" in body
+    assert "dependents_by_agent" in body
     assert "输出格式" in body
     assert '"target_refs"' in body
     assert "cast" in body and "utterance" in body and "shot" in body
+    clarify = load_skill("clarify-brief")
+    assert "制作粽子" in clarify
+    assert "production_mode" in clarify
+    start = load_skill("start-project")
+    assert "production_mode" in start
     revise = load_skill("revise-segment")
     assert "harness.repair" in revise
     assert "harness.list_graph" in revise
     assert "inspect-graph" in revise
+    media = load_skill("revise-media")
+    assert "layer" in media
+    assert "asset" in media
+    assert "voice" in media
     from ugc_harness.intake.skills import SKILLS_ROOT
 
     instructions = (SKILLS_ROOT.parent / "agent.md").read_text(encoding="utf-8")
@@ -841,6 +946,7 @@ def test_intake_mcp_tools_advertise_descriptions_and_parameters() -> None:
     repair = specs["harness.repair"]["parameters"]["properties"]
     assert "身份" in str(repair["target_refs"].get("description") or "")
     assert repair["instruction"].get("description")
+    assert "layer" in repair
 
 
 def test_intake_mcp_tools_are_isolated_from_narrative() -> None:
@@ -904,6 +1010,247 @@ def test_new_session_starts_waiting_user() -> None:
     assert session.last_message
     assert session.working_brief.topic is None
     assert session.working_intent.presentation is None
+
+
+def test_asset_layer_does_not_invalidate_spec() -> None:
+    from tests.test_shot_graph_production import (
+        _plant_identity_images,
+        _plant_shot_videos,
+    )
+    from tests.test_shot_repair import _write_tutorial_project
+    from ugc_harness.harness.repair import load_project_state, write_project_state
+
+    project_dir = Path(".tmp") / f"intake_asset_layer_{uuid4().hex}"
+    state = _write_tutorial_project(project_dir)
+    _plant_identity_images(state, project_dir)
+    _plant_shot_videos(state, project_dir)
+    state.evaluation.stages.references = "passed"
+    state.evaluation.stages.asset = "passed"
+    write_project_state(project_dir, state)
+    shot_id = state.production.shots[0].spec.shot_id
+    shot_ref = f"shot:{shot_id}"
+    before = state.dependency_graph.nodes[shot_ref].status
+    assert before == "current"
+    session = new_session()
+    session.project_dir = str(project_dir)
+    ran: list[str] = []
+
+    def run_task(task, instruction: str) -> None:
+        ran.append(task.agent)
+        assert task.input_hash == "repair-asset"
+        assert instruction == "机位再近一点"
+
+    _, result = repair_description(
+        session,
+        [shot_ref],
+        "机位再近一点",
+        layer="asset",
+        run_task=run_task,
+    )
+    assert result["ok"] is True
+    assert result["layer"] == "asset"
+    assert result["invalidated"] == []
+    assert shot_id in result["regenerated_shot_ids"]
+    assert ran == ["asset_stage"]
+    final = load_project_state(project_dir)
+    assert final.dependency_graph.nodes[shot_ref].status == "current"
+
+
+def test_asset_layer_expands_bound_shots_and_rejects_audio() -> None:
+    from tests.test_shot_graph_production import (
+        _plant_identity_images,
+        _plant_shot_videos,
+    )
+    from tests.test_shot_repair import _write_tutorial_project
+    from ugc_harness.harness.repair import write_project_state
+    from ugc_harness.harness.shot_repair import resolve_shot_refs
+
+    project_dir = Path(".tmp") / f"intake_asset_expand_{uuid4().hex}"
+    state = _write_tutorial_project(project_dir)
+    _plant_identity_images(state, project_dir)
+    _plant_shot_videos(state, project_dir)
+    state.evaluation.stages.references = "passed"
+    state.evaluation.stages.asset = "passed"
+    write_project_state(project_dir, state)
+    shot = next(item for item in state.production.shots if item.spec.binds)
+    prop_ref = next(bind for bind in shot.spec.binds if bind.startswith("prop:"))
+    dependent = [
+        ref.partition(":")[2] for ref in resolve_shot_refs(state, [prop_ref])
+    ]
+    session = new_session()
+    session.project_dir = str(project_dir)
+    _, preview = repair_description(
+        session, [prop_ref], "脸再清楚，衣服不要变", layer="asset", dry_run=True
+    )
+    assert preview["ok"] is True
+    assert preview["invalidated"] == []
+    assert preview["regenerated_identity_refs"] == [prop_ref]
+    assert set(preview["regenerated_shot_ids"]) >= set(dependent)
+    demo = Path(".tmp") / f"intake_asset_audio_{uuid4().hex}"
+    _write_demo_project(demo)
+    session.project_dir = str(demo)
+    _, rejected = repair_description(
+        session, ["audio:ss3"], "重出成片", layer="asset"
+    )
+    assert rejected["ok"] is False
+    assert "不能圈配音" in rejected["error"]
+
+
+def test_asset_layer_rejects_explainer_and_missing_realization() -> None:
+    project_dir = Path(".tmp") / f"intake_asset_explainer_{uuid4().hex}"
+    _write_demo_project(project_dir)
+    session = new_session()
+    session.project_dir = str(project_dir)
+    _, explainer = repair_description(
+        session, ["shot:shot_b3"], "图不好看", layer="asset"
+    )
+    assert explainer["ok"] is False
+    assert "短剧" in explainer["error"]
+    from tests.test_shot_repair import _write_tutorial_project
+
+    empty = Path(".tmp") / f"intake_asset_empty_{uuid4().hex}"
+    state = _write_tutorial_project(empty)
+    session.project_dir = str(empty)
+    shot_ref = f"shot:{state.production.shots[0].spec.shot_id}"
+    _, missing = repair_description(
+        session, [shot_ref], "重出这一镜", layer="asset"
+    )
+    assert missing["ok"] is False
+    assert "还没有参考图或成片" in missing["error"]
+
+
+def test_voice_layer_does_not_invalidate_and_rejects_shots() -> None:
+    project_dir = Path(".tmp") / f"intake_voice_layer_{uuid4().hex}"
+    _write_demo_project(project_dir)
+    session = new_session()
+    session.project_dir = str(project_dir)
+    before = (
+        (project_dir / "harness" / "project_state.json").read_text(encoding="utf-8")
+    )
+    _, preview = repair_description(
+        session,
+        ["audio:ss3"],
+        "只重配这一句，不改音色",
+        layer="voice",
+        dry_run=True,
+    )
+    assert preview["ok"] is True
+    assert preview["layer"] == "voice"
+    assert preview["invalidated"] == []
+    assert preview["audio_refs"] == ["audio:ss3"]
+    assert (project_dir / "harness" / "project_state.json").read_text(
+        encoding="utf-8"
+    ) == before
+    _, rejected = repair_description(
+        session, ["shot:shot_b3"], "换个声音", layer="voice"
+    )
+    assert rejected["ok"] is False
+    assert "不能圈 shot" in rejected["error"]
+    _, bad_layer = repair_description(
+        session, ["audio:ss3"], "换声", layer="image"
+    )
+    assert bad_layer["ok"] is False
+    assert "layer 只能是" in bad_layer["error"]
+
+
+def test_asset_layer_expands_continue_shots() -> None:
+    from tests.test_description import _drama_artifact
+    from tests.test_shot_graph_production import (
+        _plant_identity_images,
+        _plant_shot_videos,
+    )
+    from ugc_harness.harness.dependencies import DependencyGraph
+    from ugc_harness.harness.dependency_builders import narrative_commits
+    from ugc_harness.harness.description_builder import apply_narrative_document
+    from ugc_harness.harness.models import ProjectContext
+    from ugc_harness.harness.repair import write_project_state
+
+    project_dir = Path(".tmp") / f"intake_asset_continue_{uuid4().hex}"
+    artifact = _drama_artifact()
+    state = ProjectState(
+        context=ProjectContext(
+            project_id=artifact.brief.project_id,
+            state_version=1,
+            constraints={"narrative_format": "drama"},
+        )
+    )
+    apply_narrative_document(state, artifact)
+    DependencyGraph(state.dependency_graph).commit_batch(
+        task_id="seed",
+        produced_by="narrative_agent",
+        commits=narrative_commits(artifact),
+    )
+    project_dir.mkdir(parents=True, exist_ok=True)
+    write_project_state(project_dir, state)
+    (project_dir / "narrative_artifact.json").write_text(
+        artifact.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    _plant_identity_images(state, project_dir)
+    _plant_shot_videos(state, project_dir)
+    state.evaluation.stages.references = "passed"
+    state.evaluation.stages.asset = "passed"
+    write_project_state(project_dir, state)
+    follow = next(
+        item
+        for item in state.production.shots
+        if item.continuity.join == "continue_from_previous"
+    )
+    previous_id = follow.continuity.previous_shot_id
+    assert previous_id
+    session = new_session()
+    session.project_dir = str(project_dir)
+    _, preview = repair_description(
+        session,
+        [f"shot:{previous_id}"],
+        "重出这一镜",
+        layer="asset",
+        dry_run=True,
+    )
+    assert preview["ok"] is True
+    assert previous_id in preview["regenerated_shot_ids"]
+    assert follow.spec.shot_id in preview["regenerated_shot_ids"]
+    bridge = next(
+        item
+        for item in state.production.shots
+        if item.continuity.join == "bridge_from_previous"
+    )
+    _, bridge_preview = repair_description(
+        session,
+        [f"shot:{bridge.spec.shot_id}"],
+        "重出这一镜",
+        layer="asset",
+        dry_run=True,
+    )
+    assert bridge_preview["ok"] is True
+    assert bridge.spec.shot_id in bridge_preview["regenerated_shot_ids"]
+    for item in state.production.shots:
+        if (
+            item.continuity.join in {"continue_from_previous", "bridge_from_previous"}
+            and item.continuity.previous_shot_id == bridge.spec.shot_id
+        ):
+            assert item.spec.shot_id in bridge_preview["regenerated_shot_ids"]
+
+
+def test_list_graph_marks_realization_flags() -> None:
+    from tests.test_shot_graph_production import (
+        _plant_identity_images,
+        _plant_shot_videos,
+    )
+    from tests.test_shot_repair import _write_tutorial_project
+    from ugc_harness.harness.repair import write_project_state
+
+    project_dir = Path(".tmp") / f"intake_graph_flags_{uuid4().hex}"
+    state = _write_tutorial_project(project_dir)
+    _plant_identity_images(state, project_dir)
+    _plant_shot_videos(state, project_dir)
+    write_project_state(project_dir, state)
+    shot = state.production.shots[0]
+    identity = next(iter(shot.spec.binds))
+    around = list_graph(state, around_ref=f"shot:{shot.spec.shot_id}")
+    by_ref = {item["ref"]: item for item in around["nodes"]}
+    assert by_ref[f"shot:{shot.spec.shot_id}"]["has_media"] is True
+    assert by_ref[identity]["has_reference_image"] is True
 
 
 def test_duration_patch_keeps_existing_topic() -> None:

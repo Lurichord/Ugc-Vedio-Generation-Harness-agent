@@ -174,6 +174,7 @@ def _build_composition(
                 scale_start=transform.scale_start,
                 scale_end=transform.scale_end,
                 transition_in=item.transition_in,
+                muted=not item.preserve_source_audio,
                 loop=item.playback_policy == "trim_or_loop_to_audio",
             )
         )

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ugc_harness.intake.agent import IntentAgent
+from ugc_harness.intake.agent import _AGENT_MD, IntentAgent, build_agent_messages
 from ugc_harness.intake.brief_sync import HeuristicBriefSync
 from ugc_harness.intake.host import IntentHost, append_message, new_session, record_user_text
 from ugc_harness.intake.mcp_runtime import IntakeMcpRuntime
@@ -24,17 +25,21 @@ from .production_view import (
     gate_question,
     next_stage_after,
 )
+from .agent_trace import capture_intake_log, parse_intake_events
 from .project_service import ProjectService, production_pipeline
 from .review_service import ReviewService
+from .run_log_projector import RunLogProjector, empty_run_log
 from .schemas import (
     CreateIntakeSessionResponse,
     IntakeMessageResponse,
+    IntakeTurnRecord,
     IntakeWorkspaceState,
     PendingGate,
     RunStageRequest,
     StageName,
     TaskEvent,
 )
+from .state_projector import StateProjector, empty_project_state_view
 from .stage_runner import StageRunner
 
 _CONTINUE = re.compile(
@@ -94,14 +99,27 @@ class IntakeService:
 
     def handle_message(self, session_id: str, message: str) -> IntakeMessageResponse:
         session = self.store.load(session_id)
+        state = self._sync_workspace(session)
+        if state.pending_gate and state.pending_gate.kind == "running":
+            raise ValueError("这一步还在制作，先等它做完。")
         text = message.strip()
         session = record_user_text(session, text)
         self.store.save(session)
-        result = self._host(session_id).respond(session, Inbound(text=text))
+        log_path = self.store.root / f"{session_id}.tools.jsonl"
+        with capture_intake_log(log_path) as events:
+            result = self._host(session_id).respond(session, Inbound(text=text))
         self.store.save(result.session)
         state = self._sync_workspace(result.session)
         if state.project_key:
             self.project_sessions.bind(state.project_key, result.session.session_id)
+        self._record_intake_turn(
+            session_id,
+            state.project_key,
+            received=text,
+            reply=result.message,
+            events=events,
+            session=result.session,
+        )
         return self._turn_payload(
             result.session,
             state,
@@ -118,6 +136,8 @@ class IntakeService:
         session = self.store.load(session_id)
         state = self._sync_workspace(session)
         if user_text:
+            session = record_user_text(session, user_text)
+            self.store.save(session)
             state = self.workspace.add_notice(state, user_text, role="user")
         if not state.project_key:
             raise ValueError("还没有项目，不能进入下一阶段")
@@ -315,7 +335,18 @@ class IntakeService:
     ) -> IntakeMessageResponse:
         project_id = self.projects.read_state(directory).context.project_id
         label = STAGE_LABELS[stage]
-        started = self.workspace.add_notice(state, f"开始做{label}，完成后会停下来问你。")
+        note = f"开始制作{label}，做完后会停下来问你。"
+        session, started = self._append_progress(session, state, note)
+        self._record_intake_turn(
+            session.session_id,
+            started.project_key,
+            received=session.messages[-2].content
+            if len(session.messages) >= 2 and session.messages[-2].role == "user"
+            else "可以",
+            reply=note,
+            events=[],
+            session=session,
+        )
         job = self.jobs.submit(
             f"执行 {stage}",
             lambda sid=started.session_id, d=directory, s=stage, pid=project_id: (
@@ -367,7 +398,7 @@ class IntakeService:
             )
             state = set_gate(state, failed)
             self.workspace.save(state)
-            self.workspace.add_notice(state, failed.question)
+            self._announce(session_id, failed.question)
             self.repository.add_event(
                 directory.name,
                 TaskEvent(
@@ -396,7 +427,7 @@ class IntakeService:
             ),
         )
         self.workspace.save(state)
-        self.workspace.add_notice(state, question)
+        self._announce(session_id, question)
         self.repository.add_event(
             directory.name,
             TaskEvent(
@@ -408,6 +439,29 @@ class IntakeService:
             ),
         )
         return {"project_id": project_id, "stage": stage}
+
+    def _announce(self, session_id: str, content: str) -> None:
+        session = self.store.load(session_id)
+        state = self.workspace.load(session_id)
+        self._append_progress(session, state, content)
+
+    def _append_progress(
+        self,
+        session: IntakeSession,
+        state: IntakeWorkspaceState,
+        content: str,
+    ) -> tuple[IntakeSession, IntakeWorkspaceState]:
+        if (
+            session.messages
+            and session.messages[-1].role == "agent"
+            and session.messages[-1].content == content
+        ):
+            return session, state
+        session = append_message(session, "agent", content)
+        session = session.model_copy(update={"last_message": content})
+        self.store.save(session)
+        state = self.workspace.add_notice(state, content)
+        return session, state
 
     def _sync_workspace(self, session: IntakeSession) -> IntakeWorkspaceState:
         state = self.workspace.load(session.session_id)
@@ -524,6 +578,8 @@ class IntakeService:
             "production": self.production.snapshot(state.project_key).model_dump(
                 mode="json"
             ),
+            "project_state": self._project_state_view(state.project_key),
+            "run_log": self._run_log_view(state.project_key, session.session_id),
             "gate": (
                 state.pending_gate.model_dump(mode="json")
                 if state.pending_gate
@@ -531,6 +587,102 @@ class IntakeService:
             ),
             "notices": [item.model_dump(mode="json") for item in state.notices],
         }
+
+    def _project_state_view(self, project_key: str | None) -> dict[str, Any]:
+        if not project_key:
+            return empty_project_state_view().model_dump(mode="json")
+        try:
+            directory = self.projects.project_dir(project_key)
+        except FileNotFoundError:
+            return empty_project_state_view(project_key).model_dump(mode="json")
+        return StateProjector(self.projects).view(directory).model_dump(mode="json")
+
+    def _run_log_view(
+        self, project_key: str | None, session_id: str
+    ) -> dict[str, Any]:
+        turns = self._merge_intake_turns(session_id, project_key)
+        if not project_key:
+            return empty_run_log(intake_turns=turns).model_dump(mode="json")
+        try:
+            directory = self.projects.project_dir(project_key)
+        except FileNotFoundError:
+            return empty_run_log(project_key, turns).model_dump(mode="json")
+        view = RunLogProjector(self.projects, self.repository).view(directory)
+        return view.model_copy(update={"intake_turns": turns}).model_dump(mode="json")
+
+    def _record_intake_turn(
+        self,
+        session_id: str,
+        project_key: str | None,
+        *,
+        received: str,
+        reply: str,
+        events: list[dict[str, Any]],
+        session: IntakeSession | None = None,
+    ) -> None:
+        tools, lines = parse_intake_events(events)
+        record = IntakeTurnRecord(
+            turn_id=f"turn_{uuid4().hex}",
+            session_id=session_id,
+            project_key=project_key,
+            received=received,
+            reply=reply,
+            tools=tools,
+            lines=lines,
+            messages=_message_context(session, reply),
+        )
+        self._save_session_turn(session_id, record)
+        if project_key:
+            try:
+                self.repository.add_intake_turn(project_key, record)
+            except Exception:
+                return
+
+    def _session_turns_path(self, session_id: str) -> Path:
+        return self.store.root / f"{session_id}.turns.json"
+
+    def _load_session_turns(self, session_id: str) -> list[IntakeTurnRecord]:
+        path = self._session_turns_path(session_id)
+        if not path.is_file():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        items = payload.get("items") if isinstance(payload, dict) else payload
+        if not isinstance(items, list):
+            return []
+        return [IntakeTurnRecord.model_validate(item) for item in items]
+
+    def _save_session_turn(self, session_id: str, record: IntakeTurnRecord) -> None:
+        items = [
+            item.model_dump(mode="json")
+            for item in self._load_session_turns(session_id)
+        ]
+        dumped = record.model_dump(mode="json")
+        for index, item in enumerate(items):
+            if item.get("turn_id") == record.turn_id:
+                items[index] = dumped
+                break
+        else:
+            items.append(dumped)
+        path = self._session_turns_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"items": items}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _merge_intake_turns(
+        self, session_id: str, project_key: str | None
+    ) -> list[IntakeTurnRecord]:
+        merged: dict[str, IntakeTurnRecord] = {}
+        for item in self._load_session_turns(session_id):
+            merged[item.turn_id] = item
+        if project_key:
+            for item in self.repository.intake_turns(project_key):
+                merged[item.turn_id] = item
+        return sorted(merged.values(), key=lambda item: item.created_at or "")
 
     def _turn_payload(
         self,
@@ -573,6 +725,20 @@ class IntakeService:
         if self._llm is None:
             self._llm = StructuredLLM(LLMSettings.from_environment(None, None))
         return self._llm
+
+
+def _message_context(
+    session: IntakeSession | None, reply: str
+) -> list[dict[str, Any]]:
+    if session is None:
+        return []
+    messages = list(session.messages)
+    if messages and messages[-1].role == "agent" and messages[-1].content == reply:
+        session = session.model_copy(update={"messages": messages[:-1]})
+    return [
+        {"role": item["role"], "content": item.get("content") or ""}
+        for item in build_agent_messages(session, _AGENT_MD)
+    ]
 
 
 def _wants_continue(text: str) -> bool:

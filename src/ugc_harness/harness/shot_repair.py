@@ -21,7 +21,7 @@ from .models import (
     StatePatch,
     TaskEnvelope,
 )
-from .world_identities import identity_record, missing_identity_images
+from .world_identities import identity_record
 
 REPAIR_SUBMIT_TOOL = "repair.submit_candidate"
 _PRODUCED_STAGES = frozenset({"passed", "needs_revision", "stale", "locked"})
@@ -113,6 +113,7 @@ def run_shot_repair(
     tool_model: object | None = None,
     image_provider: object | None = None,
     video_provider: object | None = None,
+    asset_tool_model: object | None = None,
 ) -> None:
     from ..agents.generic import (
         CompletionSpec,
@@ -150,6 +151,8 @@ def run_shot_repair(
             shot_commits=[],
             image_provider=image_provider,
             video_provider=video_provider,
+            instruction=instruction,
+            asset_tool_model=asset_tool_model,
         )
         return
     if image_provider is not None:
@@ -235,6 +238,8 @@ def run_shot_repair(
         shot_commits=commits,
         image_provider=image_provider,
         video_provider=video_provider,
+        instruction=instruction,
+        asset_tool_model=asset_tool_model,
     )
     _sync_narrative_artifact_shots(directory, state)
 
@@ -565,8 +570,10 @@ def _realize_after_shot_repair(
     shot_ids: list[str],
     image_provider: object | None,
     video_provider: object | None,
+    instruction: str = "",
+    asset_tool_model: object | None = None,
 ) -> tuple[bool, bool]:
-    from .shot_realize import realize_identity_and_shots
+    from .shot_asset_controller import ShotAssetHarnessController
 
     do_images = bool(identity_refs) and image_provider is not None and _stage_produced(
         state, "references"
@@ -576,14 +583,32 @@ def _realize_after_shot_repair(
     )
     if not do_images and not do_videos:
         return False, False
-    realize_identity_and_shots(
+    narrative_path = directory / "narrative_artifact.json"
+    if not narrative_path.is_file():
+        raise FileNotFoundError("spec 修完后重出需要 narrative_artifact.json")
+    narrative = NarrativeArtifact.model_validate_json(
+        narrative_path.read_text(encoding="utf-8")
+    )
+    identity_only = do_images and not do_videos
+    artifact, run = ShotAssetHarnessController.from_provider(
+        video_provider if do_videos else None,
+        tool_model=asset_tool_model,
+        image_provider=image_provider if do_images else None,
+    ).run(
+        narrative,
         directory,
         state,
-        identity_refs=identity_refs if do_images else [],
-        shot_ids=shot_ids if do_videos else [],
-        image_provider=image_provider,
-        video_provider=video_provider,
+        instruction=instruction,
+        regenerate_identity_refs=identity_refs if do_images else [],
+        regenerate_shot_ids=shot_ids if do_videos else [],
+        identity_only=identity_only,
     )
+    _copy_project_state(state, run.project_state)
+    if not identity_only:
+        (directory / "shot_asset_artifact.json").write_text(
+            artifact.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
     return do_images, do_videos
 
 
@@ -596,15 +621,17 @@ def _finish_shot_repair(
     shot_commits: list[NodeCommit],
     image_provider: object | None,
     video_provider: object | None,
+    instruction: str = "",
+    asset_tool_model: object | None = None,
 ) -> None:
     from .repair import write_project_state
 
-    state.context.state_version += 1
     format_id = (
         state.context.constraints.get("narrative_format")
         or state.context.constraints.get("production_mode")
     )
     realized_video = False
+    did_images = False
     if format_id in {"drama", "tutorial"}:
         did_images, realized_video = _realize_after_shot_repair(
             directory,
@@ -613,19 +640,11 @@ def _finish_shot_repair(
             shot_ids=shot_ids,
             image_provider=image_provider,
             video_provider=video_provider,
+            instruction=instruction,
+            asset_tool_model=asset_tool_model,
         )
-        if did_images:
-            state.evaluation.stages.references = (
-                "ready" if missing_identity_images(state) else "passed"
-            )
-        if realized_video:
-            state.evaluation.stages.asset = "passed"
-            if _stage_produced(state, "timeline"):
-                state.evaluation.stages.timeline = "pending"
-            if _stage_produced(state, "render"):
-                state.evaluation.stages.render = "pending"
-        elif did_images and not _stage_produced(state, "asset"):
-            state.evaluation.stages.asset = "ready"
+    if not did_images and not realized_video:
+        state.context.state_version += 1
     if shot_commits and not realized_video:
         DependencyGraph(state.dependency_graph).commit_batch(
             task_id="shot_repair_submit",
@@ -633,6 +652,16 @@ def _finish_shot_repair(
             commits=shot_commits,
         )
     write_project_state(directory, state)
+
+
+def _copy_project_state(target: ProjectState, source: ProjectState) -> None:
+    target.schema_version = source.schema_version
+    target.context = source.context
+    target.creative = source.creative
+    target.production = source.production
+    target.evaluation = source.evaluation
+    target.dependency_graph = source.dependency_graph
+    target.trajectory = source.trajectory
 
 
 def _sync_narrative_artifact_shots(project_dir: Path, state: ProjectState) -> None:

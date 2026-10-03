@@ -5,7 +5,13 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from .schemas import ApprovalRecord, FeedbackRecord, TaskEvent
+from .schemas import (
+    ApprovalRecord,
+    FeedbackRecord,
+    IntakeTurnRecord,
+    RunLogRecord,
+    TaskEvent,
+)
 
 
 class AppDataRepository:
@@ -56,6 +62,40 @@ class AppDataRepository:
             payload = self._read(project_id, "job_events.json", {"events": []})
             payload["events"].append(event.model_dump(mode="json"))
             self._write(project_id, "job_events.json", payload)
+
+    def run_log(self, project_id: str) -> list[RunLogRecord]:
+        payload = self._read(project_id, "run_log.json", {"items": []})
+        return [RunLogRecord.model_validate(item) for item in payload["items"]]
+
+    def upsert_run(self, project_id: str, record: RunLogRecord) -> None:
+        with self._lock:
+            payload = self._read(project_id, "run_log.json", {"items": []})
+            dumped = record.model_dump(mode="json")
+            items = payload["items"]
+            for index, item in enumerate(items):
+                if item.get("run_id") == record.run_id:
+                    items[index] = dumped
+                    break
+            else:
+                items.append(dumped)
+            self._write(project_id, "run_log.json", payload)
+
+    def intake_turns(self, project_id: str) -> list[IntakeTurnRecord]:
+        payload = self._read(project_id, "intake_turns.json", {"items": []})
+        return [IntakeTurnRecord.model_validate(item) for item in payload["items"]]
+
+    def add_intake_turn(self, project_id: str, record: IntakeTurnRecord) -> None:
+        with self._lock:
+            payload = self._read(project_id, "intake_turns.json", {"items": []})
+            items = payload["items"]
+            dumped = record.model_dump(mode="json")
+            for index, item in enumerate(items):
+                if item.get("turn_id") == record.turn_id:
+                    items[index] = dumped
+                    break
+            else:
+                items.append(dumped)
+            self._write(project_id, "intake_turns.json", payload)
 
     def _read(self, project_id: str, filename: str, default: Any) -> Any:
         path = self.root / project_id / filename

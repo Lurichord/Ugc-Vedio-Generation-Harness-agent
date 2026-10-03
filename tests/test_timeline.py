@@ -144,7 +144,17 @@ def test_timeline_uses_audio_clock_and_ai_screen_derivative(
             grounding_requirement="contextual",
             generated_media_disclosure_required=False,
             must_not_imply=["不是实际产品录屏"],
-        )
+        ),
+        ExplorationDirection(
+            direction_id="vr01_d02",
+            order=2,
+            description="屏幕方向失败后的 AI 说明图",
+            visual_role="illustration",
+            asset_type="ai_image",
+            grounding_requirement="contextual",
+            generated_media_disclosure_required=True,
+            must_not_imply=["不是实际产品录屏"],
+        ),
     ]
     editorial_run = _editorial_run(narrative, voice_run, plan)
     editorial = editorial_run.artifact
@@ -175,6 +185,11 @@ def test_timeline_uses_audio_clock_and_ai_screen_derivative(
         voice.timed_audio.duration_ms
     )
     assert artifact.captions
+    assert all(
+        item.overlay_type != "generated_media_disclosure"
+        and item.text != "AI 生成画面"
+        for item in artifact.overlays
+    )
     assert any(path.name == "timeline_artifact.json" for path in written)
     assert run.record.transition.to_agent == "render_agent"
     assert run.record.project_state.evaluation.stages.render == "ready"
@@ -227,5 +242,78 @@ def test_timeline_scales_narration_to_video_duration(tmp_path: Path) -> None:
         for clip in artifact.timeline.clips
     )
     assert artifact.captions
+    assert all(
+        item.overlay_type != "generated_media_disclosure"
+        for item in artifact.overlays
+    )
     assert artifact.captions[-1].end_ms <= expected
     assert artifact.timeline.duration_ms != voice.timed_audio.duration_ms
+
+
+def test_explainer_overlays_keep_source_without_ai_label() -> None:
+    from ugc_harness.agents.asset_agent.models import AssetUsabilityReview, SourceTrace
+    from ugc_harness.agents.timeline_agent.capabilities import _build_overlays
+    from ugc_harness.agents.voice_agent.models import RealizedBeat
+
+    beat = RealizedBeat(
+        beat_id="beat_1",
+        planned_beat_id="pb01",
+        start_ms=0,
+        end_ms=4000,
+        duration_ms=4000,
+        script_segment_ids=["seg_1"],
+        audio_segment_ids=["audio_1"],
+        narration="这是一个例子。",
+        proposition="这是一个例子。",
+        discourse_role="explanation",
+        relation_to_previous="opening",
+    )
+    generated = AssetCard(
+        asset_id="asset_ai",
+        visual_request_id="visual_1",
+        direction_id="dir_ai",
+        beat_id=beat.beat_id,
+        modality="ai_image",
+        origin="generated",
+        local_path="assets/ai.png",
+        mime_type="image/png",
+        sha256="0" * 64,
+        generated_media_disclosure_required=True,
+        generator_model="fake-image-model",
+        generation_prompt="test prompt",
+    )
+    sourced = AssetCard(
+        asset_id="asset_web",
+        visual_request_id="visual_1",
+        direction_id="dir_web",
+        beat_id=beat.beat_id,
+        modality="real_image",
+        origin="downloaded",
+        local_path="assets/web.png",
+        mime_type="image/png",
+        sha256="1" * 64,
+        source=SourceTrace(
+            source_url="https://example.com/article",
+            publisher="示例出版社",
+        ),
+        usability_review=AssetUsabilityReview(
+            reviewer_model="test",
+            usable=True,
+            login_or_auth_overlay=False,
+            obstruction_level="none",
+            reason="ok",
+        ),
+    )
+
+    generated_overlays = _build_overlays(beat, generated, ["推断内容"])
+    sourced_overlays = _build_overlays(beat, sourced, [])
+
+    assert all(
+        item.overlay_type != "generated_media_disclosure"
+        and item.text != "AI 生成画面"
+        for item in generated_overlays + sourced_overlays
+    )
+    assert [item.text for item in generated_overlays] == ["观点 / 推断"]
+    assert [item.text for item in sourced_overlays] == ["来源：示例出版社"]
+    assert sourced_overlays[0].overlay_type == "source_attribution"
+    assert sourced_overlays[0].position == "bottom_left"

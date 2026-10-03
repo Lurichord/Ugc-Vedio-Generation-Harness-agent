@@ -42,6 +42,7 @@ AssetModality = Literal[
     "screen_recording",
     "talking_head",
 ]
+AI_FALLBACK_TYPES = frozenset({"ai_image", "ai_video"})
 
 
 class ClaimRecord(StrictModel):
@@ -116,6 +117,13 @@ class VisualRequirement(StrictModel):
                 raise ValueError("a_roll must start with a talking_head host direction")
         elif self.speaker_visible or self.character_id:
             raise ValueError("b_roll cannot claim a visible host character")
+        last = self.directions[-1]
+        if last.asset_type not in AI_FALLBACK_TYPES:
+            raise ValueError(
+                "last direction must be an AI fallback (ai_image or ai_video)"
+            )
+        if last.visual_role == "evidence":
+            raise ValueError("AI fallback cannot be an evidence direction")
         return self
 
 

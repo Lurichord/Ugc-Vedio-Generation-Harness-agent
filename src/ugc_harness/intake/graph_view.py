@@ -99,6 +99,7 @@ def dump_node(
     *,
     edge_refs: set[str] | None = None,
     production: Any | None = None,
+    nodes: dict[str, DependencyNode] | None = None,
 ) -> dict[str, Any]:
     depends_on = list(node.depends_on)
     dependents = list(node.dependents)
@@ -114,6 +115,8 @@ def dump_node(
         "depends_on": depends_on,
         "dependents": dependents,
     }
+    if dependents:
+        payload["dependents_by_agent"] = _dependents_by_agent(nodes, dependents)
     if node.edges:
         payload["edges"] = [
             {"to": edge.to, "family": edge.family}
@@ -123,7 +126,63 @@ def dump_node(
     name = _identity_name(production, node.ref)
     if name:
         payload["name"] = name
+    payload.update(_realization_flags(production, node.ref))
     return payload
+
+
+def _realization_flags(production: Any | None, ref: str) -> dict[str, bool]:
+    if production is None:
+        return {}
+    if ref.startswith(_IDENTITY_PREFIXES):
+        current = get_element(production, ref)
+        element = (current or {}).get("element")
+        path = element.get("reference_image") if isinstance(element, dict) else None
+        return {"has_reference_image": bool(isinstance(path, str) and path.strip())}
+    if ref.startswith("shot:"):
+        shot_id = ref.partition(":")[2]
+        for item in getattr(production, "shots", []) or []:
+            spec = getattr(item, "spec", None)
+            if spec is None or spec.shot_id != shot_id:
+                continue
+            media = getattr(item, "media", None)
+            path = getattr(media, "local_path", None) if media is not None else None
+            return {"has_media": bool(path)}
+        return {"has_media": False}
+    return {}
+
+
+def _dependents_by_agent(
+    nodes: dict[str, DependencyNode] | None,
+    dependents: list[str],
+) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for dep in dependents:
+        child = None if nodes is None else nodes.get(dep)
+        agent = (child.produced_by if child is not None else "") or ""
+        grouped.setdefault(agent, []).append(dep)
+    return grouped
+
+
+def _downstream_refs(
+    nodes: dict[str, DependencyNode],
+    start_refs: list[str],
+    *,
+    hops: int,
+) -> set[str]:
+    found: set[str] = set()
+    frontier = list(start_refs)
+    for _ in range(hops):
+        nxt: list[str] = []
+        for ref in frontier:
+            node = nodes.get(ref)
+            if node is None:
+                continue
+            for dep in node.dependents:
+                if dep not in found:
+                    found.add(dep)
+                    nxt.append(dep)
+        frontier = nxt
+    return found
 
 
 def list_graph(
@@ -178,13 +237,14 @@ def _content_root_overview(
     dumped = []
     for ref in sorted(root_refs):
         if ref.startswith(_IDENTITY_PREFIXES):
-            dumped.append(dump_node(nodes[ref], production=production))
+            dumped.append(dump_node(nodes[ref], production=production, nodes=nodes))
         else:
             dumped.append(
                 dump_node(
                     nodes[ref],
                     edge_refs=root_refs,
                     production=production,
+                    nodes=nodes,
                 )
             )
     return {
@@ -215,12 +275,16 @@ def _neighborhood(
         resolved = centers[0]
     neighbor_refs: set[str] = set()
     for ref in centers:
-        center = nodes[ref]
-        neighbor_refs.update(center.depends_on)
-        neighbor_refs.update(center.dependents)
+        neighbor_refs.update(nodes[ref].depends_on)
+    neighbor_refs.update(_downstream_refs(nodes, centers, hops=2))
     selected = list(dict.fromkeys([*centers, *sorted(neighbor_refs)]))
     dumped = [
-        dump_node(nodes[ref], edge_refs=set(selected), production=production)
+        dump_node(
+            nodes[ref],
+            edge_refs=set(selected),
+            production=production,
+            nodes=nodes,
+        )
         for ref in selected
         if ref in nodes
     ]

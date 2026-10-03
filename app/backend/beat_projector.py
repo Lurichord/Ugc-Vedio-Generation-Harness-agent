@@ -73,7 +73,10 @@ class BeatProjector:
                 previous_ok = (
                     self.reviews.valid_approval(storage_key, previous, state) is not None
                 )
-        can_run = previous_ok and core_status in {
+        runnable_status = core_status
+        if runnable_status == "not_required" and stage in pipeline:
+            runnable_status = "pending"
+        can_run = previous_ok and runnable_status in {
             "pending", "ready", "failed", "needs_revision", "stale", "blocked"
         }
         can_approve = critic_passed and not open_feedback and bool(beats)

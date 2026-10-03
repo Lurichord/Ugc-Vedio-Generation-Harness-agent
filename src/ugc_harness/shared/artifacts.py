@@ -26,6 +26,7 @@ from ..harness.shot_asset_controller import ShotAssetArtifact, ShotAssetRun
 from ..harness.shot_reference_controller import (
     IdentityReferenceArtifact,
     IdentityReferenceRun,
+    merge_identity_reference_artifact,
 )
 from ..harness.shot_timeline_controller import ShotTimelineArtifact, ShotTimelineRun
 from ..harness.shot_render_controller import ShotRenderRun
@@ -545,7 +546,18 @@ class ArtifactWriter:
         artifact: IdentityReferenceArtifact,
     ) -> list[Path]:
         root = Path(project_dir)
-        written = [_write_json(root / "identity_reference_artifact.json", artifact)]
+        path = root / "identity_reference_artifact.json"
+        merged = artifact
+        if path.is_file():
+            try:
+                existing = IdentityReferenceArtifact.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                existing = None
+            if existing is not None:
+                merged = merge_identity_reference_artifact(existing, artifact)
+        written = [_write_json(path, merged)]
         manifest_path = root / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["stage"] = "identity_references_complete"
@@ -557,7 +569,7 @@ class ArtifactWriter:
         indexed["identity_reference_artifact.json"] = _manifest_entry(
             written[0], root, "json"
         )
-        for item in artifact.identities:
+        for item in merged.identities:
             indexed[item.local_path] = _manifest_entry(
                 root / item.local_path, root, "identity_reference"
             )

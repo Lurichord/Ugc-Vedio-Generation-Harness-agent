@@ -237,6 +237,7 @@ class TimelineCapabilities:
                             else "hard_cut"
                         )
                     ),
+                    preserve_source_audio=item["asset"].modality == "talking_head",
                 )
             )
             transforms.append(
@@ -251,7 +252,6 @@ class TimelineCapabilities:
                 _build_overlays(
                     beat,
                     item["asset"],
-                    item["direction"],
                     claims_by_beat.get(beat.beat_id, []),
                 )
             )
@@ -344,27 +344,10 @@ def _build_transform(
 def _build_overlays(
     beat: RealizedBeat,
     asset: AssetCard,
-    direction: ExplorationDirection,
     interpretations: list[str],
 ) -> list[OverlayCue]:
     result: list[OverlayCue] = []
     short_end = min(beat.end_ms, beat.start_ms + 2_000)
-    if asset.generated_media_disclosure_required or direction.asset_type in {
-        "ai_image",
-        "ai_video",
-        "screen_recording",
-    }:
-        result.append(
-            OverlayCue(
-                overlay_id=f"overlay_{beat.beat_id}_ai",
-                beat_id=beat.beat_id,
-                overlay_type="generated_media_disclosure",
-                text="AI 生成画面",
-                start_ms=beat.start_ms,
-                end_ms=short_end,
-                position="top_right",
-            )
-        )
     if asset.source is not None:
         parsed = urlparse(asset.source.source_url)
         source_name = asset.source.publisher or parsed.hostname or "Web 来源"

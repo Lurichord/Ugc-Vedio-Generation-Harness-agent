@@ -15,7 +15,54 @@ from .models import DependencySnapshot, TaskBudget, TaskEnvelope, TaskScope
 
 
 SUBMIT_CANDIDATE_TOOL = "narrative.submit_candidate"
+WRITE_IDENTITIES_TOOL = "narrative.write_identities"
+WRITE_SECTIONS_TOOL = "narrative.write_sections"
+WRITE_BEATS_TOOL = "narrative.write_beats"
+WRITE_SCRIPT_TOOL = "narrative.write_script"
+WRITE_WORLD_TOOL = "narrative.write_world"
+WRITE_STORY_TOOL = "narrative.write_story"
+WRITE_ACTIONS_TOOL = "narrative.write_actions"
+WRITE_DEFINITION_TOOL = "narrative.write_definition"
+WRITE_PROCEDURE_TOOL = "narrative.write_procedure"
+WRITE_EXPLANATIONS_TOOL = "narrative.write_explanations"
+WRITE_SHOTS_TOOL = "narrative.write_shots"
+LIST_STATE_TOOL = "narrative.list_state"
 REPAIR_SUBMIT_TOOL = "repair.submit_candidate"
+
+SHARED_NARRATIVE_TOOLS = (
+    WRITE_IDENTITIES_TOOL,
+    WRITE_SHOTS_TOOL,
+    LIST_STATE_TOOL,
+    SUBMIT_CANDIDATE_TOOL,
+)
+EXPLAINER_TOOLS = (
+    WRITE_IDENTITIES_TOOL,
+    WRITE_SECTIONS_TOOL,
+    WRITE_BEATS_TOOL,
+    WRITE_SCRIPT_TOOL,
+    WRITE_SHOTS_TOOL,
+    LIST_STATE_TOOL,
+    SUBMIT_CANDIDATE_TOOL,
+)
+DRAMA_TOOLS = (
+    WRITE_IDENTITIES_TOOL,
+    WRITE_WORLD_TOOL,
+    WRITE_STORY_TOOL,
+    WRITE_ACTIONS_TOOL,
+    WRITE_SHOTS_TOOL,
+    LIST_STATE_TOOL,
+    SUBMIT_CANDIDATE_TOOL,
+)
+TUTORIAL_TOOLS = (
+    WRITE_IDENTITIES_TOOL,
+    WRITE_DEFINITION_TOOL,
+    WRITE_PROCEDURE_TOOL,
+    WRITE_EXPLANATIONS_TOOL,
+    WRITE_SHOTS_TOOL,
+    LIST_STATE_TOOL,
+    SUBMIT_CANDIDATE_TOOL,
+)
+NARRATIVE_TOOLS = EXPLAINER_TOOLS
 
 
 class NarrativeFormatPack(Protocol):
@@ -49,13 +96,7 @@ class ExplainerFormatPack:
     format_id: NarrativeFormatId = "explainer"
     planning_schema: type[BaseModel] = PlanningArtifact
 
-    _TOOLS = (
-        "narrative.explainer.plan_sections",
-        "narrative.explainer.expand_beats",
-        "narrative.explainer.write_script",
-        "narrative.explainer.compile_shots",
-        SUBMIT_CANDIDATE_TOOL,
-    )
+    _TOOLS = EXPLAINER_TOOLS
 
     def capability_tools(self) -> tuple[str, ...]:
         return self._TOOLS
@@ -83,7 +124,7 @@ class ExplainerFormatPack:
         return TaskEnvelope(
             task_id=f"task_narrative_{project_id}_v{state_version}",
             agent="narrative_agent",
-            goal="生成可验收的 Section、PlannedBeat、口播 Script 与 ProductionShot",
+            goal="按层写出三节、节拍、口播和 ProductionShot",
             scope=TaskScope(project_id=project_id),
             based_on_state_version=state_version,
             format_id=self.format_id,
@@ -97,13 +138,13 @@ class ExplainerFormatPack:
                 "render_video",
             ],
             acceptance_criteria=[
-                "Section 顺序为 hook、body、close",
-                "每个 PlannedBeat 均有口播覆盖",
+                "至少六镜，口播写在每镜 narration_text",
+                "跨镜身份只使用身份册里的 binds",
                 "Close 兑现 Hook",
                 "输出通过 Pydantic Schema 和独立 Narrative Critic",
             ],
             budget=TaskBudget(
-                max_steps=8,
+                max_steps=16,
                 max_retries=1,
                 fallback_policy="use_best_available",
             ),
@@ -138,13 +179,7 @@ class DramaFormatPack:
     format_id: NarrativeFormatId = "drama"
     planning_schema: type[BaseModel] = DramaPlanningArtifact
 
-    _TOOLS = (
-        "narrative.drama.design_world",
-        "narrative.drama.plan_story",
-        "narrative.drama.expand_scenes",
-        "narrative.drama.compile_shots",
-        SUBMIT_CANDIDATE_TOOL,
-    )
+    _TOOLS = DRAMA_TOOLS
 
     def capability_tools(self) -> tuple[str, ...]:
         return self._TOOLS
@@ -178,15 +213,15 @@ class DramaFormatPack:
             project_id=project_id,
             state_version=state_version,
             input_hash=input_hash,
-            goal="生成角色驱动、可连续生成的剧情规划与 ProductionShot",
+            goal="按层写出世界、场次、动作和 ProductionShot",
             required_outputs=["world_state", "planning", "shots"],
             acceptance_criteria=[
-                "人物目标、行动、反应和情绪变化形成因果链",
-                "角色、场景和物品引用均存在于 World State",
+                "至少两场、四镜；一镜一个主动作",
+                "角色、场景和物品引用均存在于身份册",
                 "Drama Shot 使用 generated_scene 与 embedded_in_video 音频",
                 "输出通过 Drama Schema 和独立 Drama Critic",
             ],
-            max_steps=10,
+            max_steps=16,
         )
 
     def create_repair_task(
@@ -216,13 +251,7 @@ class TutorialFormatPack:
     format_id: NarrativeFormatId = "tutorial"
     planning_schema: type[BaseModel] = TutorialPlanningArtifact
 
-    _TOOLS = (
-        "narrative.tutorial.define_result",
-        "narrative.tutorial.plan_steps",
-        "narrative.tutorial.plan_explanations",
-        "narrative.tutorial.compile_shots",
-        SUBMIT_CANDIDATE_TOOL,
-    )
+    _TOOLS = TUTORIAL_TOOLS
 
     def capability_tools(self) -> tuple[str, ...]:
         return self._TOOLS
@@ -252,7 +281,7 @@ class TutorialFormatPack:
             project_id=project_id,
             state_version=state_version,
             input_hash=input_hash,
-            goal="生成以制作步骤为主、讲解按需穿插的教程规划与 ProductionShot",
+            goal="按层写出成品、步骤、讲解和 ProductionShot",
             required_outputs=["world_state", "planning", "script", "shots"],
             acceptance_criteria=[
                 "每一步的输入状态能够由前一步输出满足",
@@ -260,7 +289,7 @@ class TutorialFormatPack:
                 "讲解不会替代或遮挡核心制作动作",
                 "输出通过 Tutorial Schema 和独立 Tutorial Critic",
             ],
-            max_steps=10,
+            max_steps=16,
         )
 
     def create_repair_task(
@@ -357,18 +386,10 @@ def _create_repair_task(
 
 
 class NarrativeFormatRegistry:
-    def __init__(
-        self,
-        packs: tuple[NarrativeFormatPack, ...],
-        *,
-        auto_default: NarrativeFormatId = "explainer",
-    ) -> None:
+    def __init__(self, packs: tuple[NarrativeFormatPack, ...]) -> None:
         self._packs = {pack.format_id: pack for pack in packs}
         if len(self._packs) != len(packs):
             raise ValueError("format pack ids must be unique")
-        if auto_default not in self._packs:
-            raise ValueError("auto_default must reference an installed format pack")
-        self.auto_default = auto_default
 
     @property
     def capability_tools(self) -> tuple[str, ...]:
@@ -381,12 +402,11 @@ class NarrativeFormatRegistry:
         )
 
     def resolve(self, mode: ProductionMode | str) -> NarrativeFormatPack:
-        format_id = self.auto_default if mode == "auto" else mode
-        pack = self._packs.get(format_id)
+        pack = self._packs.get(mode)
         if pack is None:
             installed = ", ".join(sorted(self._packs)) or "none"
             raise ValueError(
-                f"Narrative format {format_id!r} is not installed; "
+                f"Narrative format {mode!r} is not installed; "
                 f"installed formats: {installed}"
             )
         return pack

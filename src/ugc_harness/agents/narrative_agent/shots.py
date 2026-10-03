@@ -223,10 +223,6 @@ def compile_drama_shots(
             for constraint in character.appearance_constraints
         ]
         continuity = [*scene.continuity_constraints, *identity_constraints]
-        cast_description = "；".join(
-            f"{item.name}：{item.description}" for item in cast
-        ) or "无出镜人物"
-        dialogue = "；".join(action.dialogue_lines) or "无对白"
         binds = _unique_binds(
             [f"cast:{item}" for item in action.character_ids],
             [f"place:{scene.location_id}"] if scene.location_id else [],
@@ -240,15 +236,6 @@ def compile_drama_shots(
                 scene.purpose,
                 *scene.continuity_constraints,
             ),
-        )
-        prompt = (
-            f"剧情场景 {scene.scene_id}，地点 {scene.location_id}。"
-            f"人物：{cast_description}。动作：{action.description}。"
-            f"反应：{action.reaction or '自然承接动作'}。对白：{dialogue}。"
-            f"镜头：{action.camera_instruction}。"
-            f"连续性约束：{'；'.join(continuity) or '保持上一个镜头状态'}。"
-            f"身份绑定：{'；'.join(binds) or '无'}。"
-            "生成画面时同步生成对白、动作声与环境声，不添加外部旁白。"
         )
         shots.append(
             ProductionShot(
@@ -268,7 +255,7 @@ def compile_drama_shots(
                     action_description=action.description,
                     camera_instruction=action.camera_instruction,
                     continuity_constraints=continuity,
-                    generation_prompt=prompt,
+                    generation_prompt="",
                 ),
                 audio=EmbeddedSceneAudioSpec(
                     dialogue_lines=action.dialogue_lines,

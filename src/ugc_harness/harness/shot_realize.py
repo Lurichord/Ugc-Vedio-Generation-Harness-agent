@@ -70,7 +70,15 @@ def realize_identity_and_shots(
     ]
     assets: list[ShotVideoAsset] = []
     for shot_id in ordered:
-        assets.append(generate_shot_video(state, root, shot_id, video_provider))
+        assets.append(
+            generate_shot_video(
+                state,
+                root,
+                shot_id,
+                video_provider,
+                replace_existing_job=True,
+            )
+        )
     artifact = ShotAssetArtifact(
         project_id=state.context.project_id,
         format_id=_format_id(state),

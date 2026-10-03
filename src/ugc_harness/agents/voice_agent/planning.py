@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ...content import ArollCharacter
-from ..narrative_agent.models import CreativeBrief, ScriptArtifact
+from ..narrative_agent.models import CreativeBrief, ScriptArtifact, TutorialScriptArtifact
 from .models import (
     VoiceGlobalSettings,
     VoicePlan,
@@ -51,15 +51,31 @@ _TONE_SPEED_DELTA = {
 }
 
 
+_TUTORIAL_PAUSE = {
+    "before_action": (0, 180),
+    "during_action": (80, 80),
+    "after_action": (160, 80),
+}
+
+
 def build_voice_plan(
     brief: CreativeBrief,
-    script: ScriptArtifact,
+    script: ScriptArtifact | TutorialScriptArtifact,
     *,
     voice_id: str,
     provider: str = "volcengine",
     sample_rate: int = 24_000,
     character: ArollCharacter | None = None,
 ) -> VoicePlan:
+    if isinstance(script, TutorialScriptArtifact):
+        return _tutorial_voice_plan(
+            brief,
+            script,
+            voice_id=voice_id,
+            provider=provider,
+            sample_rate=sample_rate,
+            character=character,
+        )
     tone_delta = sum(
         _TONE_SPEED_DELTA.get(tone.lower(), 0.0)
         for tone in brief.communication.tone
@@ -83,26 +99,85 @@ def build_voice_plan(
                 delivery_instruction=(
                     f"{_ROLE_TONE[hint.speech_act]}；"
                     f"能量为{hint.energy}；语速倍率{speed:.2f}"
+                    + (
+                        f"；重读并拉长：{'、'.join(hint.emphasis_words)}"
+                        if hint.emphasis_words
+                        else ""
+                    )
+                    + "；注意抑扬顿挫，禁止平淡念白"
                 ),
             )
         )
     return VoicePlan(
         project_id=brief.project_id,
-        speaker=VoiceSpeaker(
-            provider=provider,
-            voice_id=voice_id,
-            language=brief.target.language,
-            persona=(
-                f"{character.visual_description}；声音："
-                f"{character.voice_profile.tone}"
-                if character
-                else brief.communication.creator_persona
-            ),
-            character_id=character.character_id if character else None,
-            gender=character.voice_profile.gender if character else None,
-            age_style=character.voice_profile.age_style if character else None,
-        ),
+        speaker=_speaker(brief, voice_id, provider, character),
         global_settings=VoiceGlobalSettings(sample_rate=sample_rate),
         source_tones=brief.communication.tone,
         segments=segments,
+    )
+
+
+def _tutorial_voice_plan(
+    brief: CreativeBrief,
+    script: TutorialScriptArtifact,
+    *,
+    voice_id: str,
+    provider: str,
+    sample_rate: int,
+    character: ArollCharacter | None,
+) -> VoicePlan:
+    tone_delta = sum(
+        _TONE_SPEED_DELTA.get(tone.lower(), 0.0)
+        for tone in brief.communication.tone
+    )
+    speed = max(0.8, min(1.25, _ROLE_SPEED["explanation"] + tone_delta))
+    tone = _ROLE_TONE["explanation"]
+    segments: list[VoiceSegmentPlan] = []
+    for index, segment in enumerate(script.segments, start=1):
+        pause_before_ms, pause_after_ms = _TUTORIAL_PAUSE[segment.placement]
+        segments.append(
+            VoiceSegmentPlan(
+                voice_segment_id=f"vs{index:02d}",
+                script_segment_id=segment.explanation_segment_id,
+                planned_beat_id=segment.step_id,
+                speech_act="explanation",
+                tone=tone,
+                speed_ratio=round(speed, 2),
+                energy="medium",
+                pause_before_ms=pause_before_ms,
+                pause_after_ms=pause_after_ms,
+                emphasis_words=[],
+                delivery_instruction=(
+                    f"{tone}；能量为medium；语速倍率{speed:.2f}"
+                ),
+            )
+        )
+    return VoicePlan(
+        project_id=brief.project_id,
+        speaker=_speaker(brief, voice_id, provider, character),
+        global_settings=VoiceGlobalSettings(sample_rate=sample_rate),
+        source_tones=brief.communication.tone,
+        segments=segments,
+    )
+
+
+def _speaker(
+    brief: CreativeBrief,
+    voice_id: str,
+    provider: str,
+    character: ArollCharacter | None,
+) -> VoiceSpeaker:
+    return VoiceSpeaker(
+        provider=provider,
+        voice_id=voice_id,
+        language=brief.target.language,
+        persona=(
+            f"{character.visual_description}；声音："
+            f"{character.voice_profile.tone}"
+            if character
+            else brief.communication.creator_persona
+        ),
+        character_id=character.character_id if character else None,
+        gender=character.voice_profile.gender if character else None,
+        age_style=character.voice_profile.age_style if character else None,
     )

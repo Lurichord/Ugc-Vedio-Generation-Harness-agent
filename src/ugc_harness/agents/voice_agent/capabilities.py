@@ -4,8 +4,15 @@ import re
 from pathlib import Path
 from typing import Protocol
 
+from ...content import ArollCharacter
 from .audio import concatenate_wavs, inspect_wav
-from ..narrative_agent.models import NarrativeArtifact
+from ..narrative_agent.models import (
+    CreativeBrief,
+    NarrativeArtifact,
+    ScriptArtifact,
+    TutorialPlanningArtifact,
+    TutorialScriptArtifact,
+)
 from .tts import NativeWord, SynthesisResult
 from .models import (
     AudioSegment,
@@ -17,6 +24,7 @@ from .models import (
     WordAlignment,
     WordTimestamp,
 )
+from .voice_select import VoiceChoice, VoicePicker, select_voice
 
 
 class TTSProvider(Protocol):
@@ -28,6 +36,8 @@ class TTSProvider(Protocol):
         text: str,
         speed_ratio: float,
         output_path: str | Path,
+        delivery_instruction: str | None = None,
+        energy: str | None = None,
     ) -> SynthesisResult: ...
 
 
@@ -36,6 +46,27 @@ class VoiceCapabilities:
 
     def __init__(self, provider: TTSProvider):
         self.provider = provider
+
+    def select_narration_voice(
+        self,
+        brief: CreativeBrief,
+        character: ArollCharacter | None,
+        *,
+        picker: VoicePicker | None = None,
+        override_voice_id: str | None = None,
+        instruction: str | None = None,
+    ) -> VoiceChoice:
+        voice_id = select_voice(
+            brief,
+            character,
+            picker=picker,
+            override_voice_id=override_voice_id,
+            instruction=instruction,
+        )
+        return VoiceChoice(
+            voice_id=voice_id,
+            reason="override" if override_voice_id else "catalog",
+        )
 
     def synthesize_narration(
         self,
@@ -48,10 +79,7 @@ class VoiceCapabilities:
         segment_dir = audio_dir / "segments"
         segment_dir.mkdir(parents=True, exist_ok=True)
 
-        scripts = {
-            segment.script_segment_id: segment
-            for segment in narrative.script.segments
-        }
+        spoken = _spoken_lines(narrative)
 
         cursor_ms = 0
         audio_segments: list[AudioSegment] = []
@@ -61,12 +89,14 @@ class VoiceCapabilities:
         word_counter = 1
 
         for index, segment_plan in enumerate(voice_plan.segments, start=1):
-            script = scripts[segment_plan.script_segment_id]
+            text, _beat_id = spoken[segment_plan.script_segment_id]
             segment_path = segment_dir / f"{segment_plan.voice_segment_id}.wav"
             result = self.provider.synthesize(
-                text=script.text,
+                text=text,
                 speed_ratio=segment_plan.speed_ratio,
                 output_path=segment_path,
+                delivery_instruction=segment_plan.delivery_instruction,
+                energy=segment_plan.energy,
             )
             wav_info = inspect_wav(segment_path)
             spoken_start_ms = cursor_ms + segment_plan.pause_before_ms
@@ -89,7 +119,7 @@ class VoiceCapabilities:
                 )
             )
             native_words = result.words or _fallback_words(
-                script.text, wav_info.duration_ms
+                text, wav_info.duration_ms
             )
             if result.words:
                 aligned_segment_count += 1
@@ -157,6 +187,21 @@ class VoiceCapabilities:
         )
 
 
+def _spoken_lines(narrative: NarrativeArtifact) -> dict[str, tuple[str, str]]:
+    script = narrative.script
+    if isinstance(script, TutorialScriptArtifact):
+        return {
+            item.explanation_segment_id: (item.text, item.step_id)
+            for item in script.segments
+        }
+    if isinstance(script, ScriptArtifact):
+        return {
+            item.script_segment_id: (item.text, item.planned_beat_id)
+            for item in script.segments
+        }
+    raise ValueError("voice synthesis requires a spoken script")
+
+
 def _fallback_words(text: str, duration_ms: int) -> list[NativeWord]:
     tokens = re.findall(r"[\u4e00-\u9fff]|[A-Za-z0-9]+", text)
     if not tokens:
@@ -178,15 +223,54 @@ def _build_realized_beats(
     audio_segments: list[AudioSegment],
     words: list[WordTimestamp],
 ) -> list[RealizedBeat]:
-    scripts_by_beat: dict[str, list] = {}
-    for segment in narrative.script.segments:
-        scripts_by_beat.setdefault(segment.planned_beat_id, []).append(segment)
     audio_by_beat: dict[str, list[AudioSegment]] = {}
     for segment in audio_segments:
         audio_by_beat.setdefault(segment.planned_beat_id, []).append(segment)
     words_by_beat: dict[str, list[WordTimestamp]] = {}
     for word in words:
         words_by_beat.setdefault(word.planned_beat_id, []).append(word)
+
+    if isinstance(narrative.planning, TutorialPlanningArtifact):
+        texts = {
+            item.explanation_segment_id: item.text
+            for item in narrative.script.segments
+        } if isinstance(narrative.script, TutorialScriptArtifact) else {}
+        realized: list[RealizedBeat] = []
+        for index, step in enumerate(narrative.planning.steps, start=1):
+            beat_audio = audio_by_beat.get(step.step_id, [])
+            if not beat_audio:
+                continue
+            start_ms = min(segment.start_ms for segment in beat_audio)
+            end_ms = max(segment.end_ms for segment in beat_audio)
+            script_ids = [segment.script_segment_id for segment in beat_audio]
+            realized.append(
+                RealizedBeat(
+                    beat_id=f"b{index:02d}",
+                    planned_beat_id=step.step_id,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    duration_ms=end_ms - start_ms,
+                    script_segment_ids=script_ids,
+                    audio_segment_ids=[
+                        segment.audio_segment_id for segment in beat_audio
+                    ],
+                    narration="".join(texts.get(item, "") for item in script_ids),
+                    proposition=step.instruction,
+                    discourse_role="explanation",
+                    relation_to_previous=(
+                        "opening" if index == 1 else "continuation"
+                    ),
+                    word_ids=[
+                        word.word_id
+                        for word in words_by_beat.get(step.step_id, [])
+                    ],
+                )
+            )
+        return realized
+
+    scripts_by_beat: dict[str, list] = {}
+    for segment in narrative.script.segments:
+        scripts_by_beat.setdefault(segment.planned_beat_id, []).append(segment)
 
     realized: list[RealizedBeat] = []
     for index, beat in enumerate(narrative.planning.beats, start=1):
@@ -230,16 +314,35 @@ def _evaluate_voice_stage(
     realized_beats: list[RealizedBeat],
 ) -> VoiceQuality:
     issues: list[str] = []
-    segment_coverage = len(timed_audio.segments) / len(narrative.script.segments)
-    beat_coverage = len(realized_beats) / len(narrative.planning.beats)
+    script = narrative.script
+    spoken_count = len(script.segments) if script is not None else 0
+    segment_coverage = (
+        len(timed_audio.segments) / spoken_count if spoken_count else 1.0
+    )
+    if isinstance(narrative.planning, TutorialPlanningArtifact):
+        explained = {
+            item.step_id for item in script.segments
+        } if isinstance(script, TutorialScriptArtifact) else set()
+        covered = {item.planned_beat_id for item in realized_beats}
+        beat_coverage = len(covered) / len(explained) if explained else 1.0
+        missing_audio = "部分讲解段没有对应音频"
+        missing_beats = "部分有讲解的步骤没有生成 RealizedBeat"
+    else:
+        beat_coverage = (
+            len(realized_beats) / len(narrative.planning.beats)
+            if narrative.planning.beats
+            else 1.0
+        )
+        missing_audio = "部分 ScriptSegment 没有对应音频"
+        missing_beats = "部分 PlannedBeat 没有生成 RealizedBeat"
     if not narration_path.is_file() or narration_path.stat().st_size <= 44:
         issues.append("完整旁白音频不存在或为空")
     if segment_coverage < 1:
-        issues.append("部分 ScriptSegment 没有对应音频")
+        issues.append(missing_audio)
     if alignment.coverage < 1:
         issues.append("部分音频段缺少服务端原生时间戳，已使用比例回退对齐")
     if beat_coverage < 1:
-        issues.append("部分 PlannedBeat 没有生成 RealizedBeat")
+        issues.append(missing_beats)
     return VoiceQuality(
         passed=not any(
             issue

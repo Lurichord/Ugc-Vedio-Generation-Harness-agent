@@ -303,6 +303,57 @@ def test_editorial_revision_appends_task_to_same_phase(
     assert "VisualRequirement" in generator.prompts[1]
 
 
+def test_last_direction_must_be_ai_fallback() -> None:
+    payload = {
+        "visual_request_id": "vr11",
+        "beat_id": "b11",
+        "purpose": "举例说明当下活动",
+        "selection_policy": "first_success",
+        "directions": [
+            {
+                "direction_id": "vr11_d01",
+                "order": 1,
+                "description": "市集实拍",
+                "visual_role": "illustration",
+                "asset_type": "real_image",
+                "query": "中秋市集",
+                "covers_claim_ids": [],
+                "grounding_requirement": "contextual",
+                "generated_media_disclosure_required": False,
+                "must_not_imply": [],
+            },
+            {
+                "direction_id": "vr11_d02",
+                "order": 2,
+                "description": "野餐实拍",
+                "visual_role": "illustration",
+                "asset_type": "real_image",
+                "query": "野餐赏月",
+                "covers_claim_ids": [],
+                "grounding_requirement": "contextual",
+                "generated_media_disclosure_required": False,
+                "must_not_imply": [],
+            },
+        ],
+    }
+    with pytest.raises(ValidationError, match="AI fallback"):
+        VisualRequirement.model_validate(payload)
+    payload["directions"][1] = {
+        "direction_id": "vr11_d02",
+        "order": 2,
+        "description": "市集失败后的 AI 说明图",
+        "visual_role": "illustration",
+        "asset_type": "ai_image",
+        "query": "中秋市集示意",
+        "covers_claim_ids": [],
+        "grounding_requirement": "contextual",
+        "generated_media_disclosure_required": True,
+        "must_not_imply": ["AI 画面不是真实活动记录"],
+    }
+    visual = VisualRequirement.model_validate(payload)
+    assert visual.directions[-1].asset_type == "ai_image"
+
+
 def test_generated_media_can_never_be_an_evidence_direction() -> None:
     with pytest.raises(ValidationError):
         VisualRequirement.model_validate(
@@ -379,3 +430,25 @@ def test_web_video_is_not_an_mvp_asset_type() -> None:
                 ],
             }
         )
+
+
+def test_editorial_prompts_match_explainer_search_and_still_pipeline(
+    tmp_path: Path,
+) -> None:
+    from ugc_harness.agents.editorial_agent.prompts import editorial_plan_prompt
+    from ugc_harness.agents.instructions import load_instructions
+
+    md = load_instructions("editorial")
+    assert "网页检索词" in md
+    assert "Seedream" in md
+    assert "整帧不能是 Logo" in md
+    assert "可以" in md and "画图表" in md
+
+    narrative = _narrative()
+    voice = _voice_run(narrative, tmp_path).artifact
+    prompt = editorial_plan_prompt(narrative, voice)
+    assert "说明动画" in prompt
+    assert "有出处时允许 AI 画图表" in prompt
+    assert '"asset_type": "ai_image"' in prompt
+    assert '"asset_type": "ai_video"' not in prompt
+    assert "不要 Logo" in prompt

@@ -52,13 +52,13 @@ def test_repair_service_drives_the_same_loop(tmp_path: Path) -> None:
     stored = repository.feedback(project_dir.name)[0]
     assert stored.status == "resolved"
     assert stored.resolved_at
-    assert runner.calls[0][0] == "narrative"
-    assert runner.calls[0][1] == "收成两句"
-    assert runner.calls[0][2] == ["shot:shot_b3"]
-    assert all(stage != "voice" for stage, _feedback, _refs in runner.calls)
+    assert [(stage, refs) for stage, _feedback, refs in runner.calls] == [
+        ("narrative", ["shot:shot_b3"]),
+    ]
     state = load_project_state(project_dir)
     assert state.dependency_graph.nodes["beat:b3"].status == "current"
     assert state.dependency_graph.nodes["shot:shot_b3"].status == "current"
+    assert state.dependency_graph.nodes["audio:ss3"].status == "current"
 
 
 def test_repair_service_reopens_feedback_when_runner_fails(tmp_path: Path) -> None:

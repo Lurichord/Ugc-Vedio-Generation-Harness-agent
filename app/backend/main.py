@@ -24,6 +24,8 @@ from .review_service import ReviewService
 from .schemas import (
     ApprovalRequest,
     AttachProjectRequest,
+    CatalogSkill,
+    CatalogView,
     CreateProjectRequest,
     FeedbackRequest,
     IntakeMessageRequest,
@@ -34,6 +36,8 @@ from .schemas import (
 from .stage_runner import StageRunner
 from .graph_projector import GraphProjector
 from .graph_history import install_hooks
+from .run_log_projector import RunLogProjector
+from .state_projector import StateProjector
 from .task_projector import TaskProjector
 from .timeline_projector import TimelineProjector
 
@@ -47,7 +51,9 @@ tasks = TaskProjector(projects, repository)
 timeline = TimelineProjector(projects)
 graph = GraphProjector(projects)
 install_hooks()
-runner = StageRunner(config.output_root)
+runner = StageRunner(config.output_root, repository)
+state_view = StateProjector(projects)
+runs = RunLogProjector(projects, repository)
 repairs = RepairService(projects, repository, runner)
 jobs = JobManager()
 production = ProductionView(projects, beats)
@@ -82,6 +88,11 @@ def valid_stage(stage: str) -> StageName:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/catalog")
+def get_catalog() -> CatalogView:
+    return CatalogView(skills=_catalog_skills())
 
 
 @app.post("/api/intake/sessions", status_code=201)
@@ -282,6 +293,16 @@ def run_repair(project_key: str, feedback_id: str):
     return jobs.submit("执行局部修复", operation)
 
 
+@app.get("/api/projects/{project_key}/state")
+def project_state_view(project_key: str):
+    return state_view.view(project_or_404(project_key))
+
+
+@app.get("/api/projects/{project_key}/runs")
+def project_run_log(project_key: str):
+    return runs.view(project_or_404(project_key))
+
+
 @app.get("/api/projects/{project_key}/tasks")
 def task_history(project_key: str):
     return tasks.view(project_or_404(project_key))
@@ -320,6 +341,38 @@ def artifact(project_key: str, artifact_path: str):
 
 
 app.mount("/", StaticFiles(directory=config.static_root, html=True), name="frontend")
+
+
+def _catalog_skills() -> list[CatalogSkill]:
+    from ugc_harness.agents.skills import list_agent_skills, load_agent_skill
+    from ugc_harness.intake.skills import list_skills, load_skill
+
+    items: list[CatalogSkill] = []
+    for item in list_skills():
+        items.append(
+            CatalogSkill(
+                name=item["name"],
+                group="对话 Intake",
+                description=item.get("description") or "",
+                body=load_skill(item["name"]),
+            )
+        )
+    for item in list_agent_skills():
+        agent = item.get("agent") or ""
+        try:
+            body = load_agent_skill(item["name"], agent=agent or "asset_stage")
+        except FileNotFoundError:
+            body = ""
+        items.append(
+            CatalogSkill(
+                name=item["name"],
+                group="制作阶段",
+                description=item.get("description") or "",
+                body=body,
+                agent=agent or None,
+            )
+        )
+    return items
 
 
 def main() -> None:

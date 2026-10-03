@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.tool_models import PendingItemToolModel
+from tests.fixtures.tool_models import AssetStageToolModel, PendingItemToolModel
 from tests.test_narrative_mcp import (
     DRAMA_HAPPY_PATH,
     TUTORIAL_HAPPY_PATH,
@@ -22,7 +22,6 @@ from ugc_harness.harness.shot_asset_controller import (
     load_shot_last_frame,
     write_shot_last_frame,
 )
-from ugc_harness.harness.shot_reference_controller import ShotReferenceHarnessController
 from ugc_harness.harness.shot_timeline_controller import ShotTimelineHarnessController
 from ugc_harness.harness.world_identities import (
     bound_identity_refs,
@@ -55,12 +54,16 @@ class FakeShotVideoProvider:
         *,
         progress_path: Path,
         reference_images: tuple[ShotReferenceImage, ...] | list[ShotReferenceImage] = (),
+        prompt: str | None = None,
+        replace_existing_job: bool = False,
     ) -> GeneratedShotVideo:
         del progress_path
         self.shot_ids.append(shot.shot_id)
         self.calls.append(
             {
                 "shot_id": shot.shot_id,
+                "prompt": prompt,
+                "replace_existing_job": replace_existing_job,
                 "reference_images": [
                     {"path": item.path, "description": item.description}
                     for item in reference_images
@@ -70,7 +73,7 @@ class FakeShotVideoProvider:
         return GeneratedShotVideo(
             content=f"video:{shot.shot_id}".encode(),
             model="fake-seedance",
-            prompt=f"prompt:{shot.shot_id}",
+            prompt=prompt or f"prompt:{shot.shot_id}",
             job_id=f"job:{shot.shot_id}",
             duration_ms=4000,
             last_frame=b"PNGFRAME",
@@ -86,10 +89,11 @@ def _narrative_run(format_id: str, tools: list[str]):
 
 
 def _run_references(narrative, project_dir: Path, state):
-    return ShotReferenceHarnessController.from_provider(
-        FakeIdentityImageProvider(),
+    return ShotAssetHarnessController.from_provider(
+        None,
         tool_model=PendingItemToolModel("ref"),
-    ).run(narrative, project_dir, state)
+        image_provider=FakeIdentityImageProvider(),
+    ).run(narrative, project_dir, state, identity_only=True)
 
 
 @pytest.mark.parametrize(
@@ -110,8 +114,12 @@ def test_drama_and_tutorial_assets_are_ai_video_only(
     state = narrative_run.record.project_state
     route = resolve_production_route(narrative)
     assert route.asset_route == "shot_ai_video"
-    assert route.stages == ("references", "asset", "timeline", "render")
-    assert "voice" not in route.stages
+    if format_id == "tutorial":
+        assert route.stages == ("references", "asset", "voice", "timeline", "render")
+        assert "voice" in route.stages
+    else:
+        assert route.stages == ("references", "asset", "timeline", "render")
+        assert "voice" not in route.stages
     assert "editorial" not in route.stages
     assert state.evaluation.stages.references == "ready"
     assert state.evaluation.stages.asset == "pending"
@@ -126,12 +134,12 @@ def test_drama_and_tutorial_assets_are_ai_video_only(
         assert item.reference_image
         assert (tmp_path / item.reference_image).is_file()
         assert next_state.dependency_graph.nodes[ref].status == "current"
-        assert next_state.dependency_graph.nodes[ref].produced_by == "references_agent"
+        assert next_state.dependency_graph.nodes[ref].produced_by == "asset_stage"
 
     provider = FakeShotVideoProvider()
     artifact, run = ShotAssetHarnessController(
         provider,
-        tool_model=PendingItemToolModel("shot_id"),
+        tool_model=AssetStageToolModel(),
     ).run(narrative, tmp_path, next_state)
 
     assert artifact.format_id == format_id
@@ -149,15 +157,25 @@ def test_drama_and_tutorial_assets_are_ai_video_only(
         "modify_narrative",
     ]
     assert run.project_state.evaluation.stages.asset == "passed"
-    assert run.project_state.evaluation.stages.timeline == "ready"
+    if format_id == "tutorial":
+        assert run.project_state.evaluation.stages.voice == "ready"
+        assert run.project_state.evaluation.stages.timeline == "pending"
+        run.project_state.evaluation.stages.voice = "passed"
+        run.project_state.evaluation.stages.timeline = "ready"
+    else:
+        assert run.project_state.evaluation.stages.timeline == "ready"
     assert all(action.result == "success" for action in run.actions)
     by_id = {shot.spec.shot_id: shot for shot in run.project_state.production.shots}
     for call in provider.calls:
         shot = by_id[str(call["shot_id"])]
+        join = shot.continuity.join
         images = call["reference_images"]
         assert images
-        if shot.continuity.join == "continue_from_previous":
+        if join == "continue_from_previous":
             assert "尾帧" in str(images[0]["description"])
+        elif join == "bridge_from_previous":
+            assert any("尾帧" in str(item["description"]) for item in images)
+            assert "尾帧" not in str(images[0]["description"])
         else:
             assert all("尾帧" not in str(item["description"]) for item in images)
         media = by_id[shot.spec.shot_id].media
@@ -196,7 +214,7 @@ def test_submit_accepts_on_disk_shots_without_media(tmp_path: Path) -> None:
     provider = FakeShotVideoProvider()
     artifact, run = ShotAssetHarnessController(
         provider,
-        tool_model=PendingItemToolModel("shot_id"),
+        tool_model=AssetStageToolModel(),
     ).run(narrative, tmp_path, next_state)
     assert provider.shot_ids == []
     assert [asset.shot_id for asset in artifact.assets] == [
@@ -341,19 +359,149 @@ def test_continue_shot_uses_seedance_last_frame(tmp_path: Path) -> None:
     assert "尾帧" in str(first["description"])
 
 
+def test_bridge_shot_keeps_last_frame_off_lead(tmp_path: Path) -> None:
+    narrative_run = _narrative_run("drama", DRAMA_HAPPY_PATH)
+    state = narrative_run.record.project_state
+    _plant_identity_images(state, tmp_path)
+    follow = next(
+        shot
+        for shot in state.production.shots
+        if shot.continuity.join == "bridge_from_previous"
+    )
+    previous_id = follow.continuity.previous_shot_id
+    video = tmp_path / "assets" / "generated_shots" / f"asset_{previous_id}.mp4"
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"mp4")
+    frame = write_shot_last_frame(tmp_path, previous_id, b"PNGFRAME")
+    provider = FakeShotVideoProvider()
+    generate_shot_video(state, tmp_path, follow.spec.shot_id, provider)
+    images = provider.calls[0]["reference_images"]
+    assert images[0]["path"] != frame
+    assert "尾帧" not in str(images[0]["description"])
+    assert any(item["path"] == frame for item in images)
+
+
 def test_continue_payload_uses_reference_image_mode(tmp_path: Path) -> None:
-    from ugc_harness.harness.shot_video_provider import _frame_images, _reference_prompt
+    from ugc_harness.harness.shot_video_provider import _frame_images
 
     last = tmp_path / "last.png"
     identity = tmp_path / "identity.png"
     last.write_bytes(b"first")
     identity.write_bytes(b"ref")
     refs = [
-        ShotReferenceImage(path=last, description="上一镜的尾帧。本镜动作从这里连续。"),
-        ShotReferenceImage(path=identity, description="人物参考图。"),
+        ShotReferenceImage(
+            path=last,
+            description="上一镜尾帧",
+            material_id="last_frame:shot_a1",
+            kind="previous_last_frame",
+            name="上一镜尾帧",
+        ),
+        ShotReferenceImage(
+            path=identity,
+            description="人物阿舟",
+            material_id="cast:character_azhou",
+            kind="identity",
+            name="阿舟",
+        ),
     ]
     frames = _frame_images(refs)
     assert [item["role"] for item in frames] == ["reference_image", "reference_image"]
-    prompt = _reference_prompt(refs)
-    assert "@image1 是上一镜的尾帧" in prompt
-    assert "@image2 是人物参考图" in prompt
+
+
+class _CaptureModel:
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.system = ""
+        self.user = ""
+
+    def decide(self, messages, tools):
+        if not self.system and messages:
+            self.system = str(messages[0].get("content") or "")
+            if len(messages) > 1:
+                self.user = str(messages[1].get("content") or "")
+        return self.inner.decide(messages, tools)
+
+
+def test_asset_memory_and_force_pending_remake(tmp_path: Path) -> None:
+    narrative_run = _narrative_run("drama", DRAMA_HAPPY_PATH)
+    narrative = narrative_run.artifact
+    state = narrative_run.record.project_state
+    _, reference_run = _run_references(narrative, tmp_path, state)
+    next_state = reference_run.project_state
+    first = next_state.production.shots[0]
+    identity = bound_identity_refs(next_state)[0]
+    record = identity_record(next_state, identity)
+    assert record is not None
+    assert record.generation_prompt
+
+    first_provider = FakeShotVideoProvider()
+    artifact, run = ShotAssetHarnessController(
+        first_provider,
+        tool_model=AssetStageToolModel(),
+    ).run(narrative, tmp_path, next_state)
+    media = next(
+        item.media
+        for item in run.project_state.production.shots
+        if item.spec.shot_id == first.spec.shot_id
+    )
+    assert media is not None
+    assert media.generation_prompt
+    assert media.generation_references
+    assert all(call["replace_existing_job"] is False for call in first_provider.calls)
+
+    capture = _CaptureModel(AssetStageToolModel())
+    remake = FakeShotVideoProvider()
+    ShotAssetHarnessController(
+        remake,
+        tool_model=capture,
+        image_provider=FakeIdentityImageProvider(),
+    ).run(
+        narrative,
+        tmp_path,
+        run.project_state,
+        instruction="机位再近一点，保留这句台词",
+        regenerate_shot_ids=[first.spec.shot_id],
+    )
+    assert first.spec.shot_id in remake.shot_ids
+    assert all(call["replace_existing_job"] is True for call in remake.calls)
+    assert "generation_prompt" in capture.system
+    assert "generation_references" in capture.system
+    assert "机位再近一点" in capture.user
+    assert first.spec.shot_id in capture.user
+    assert "narrative_artifact" not in capture.user
+
+
+def test_repair_continue_shot_does_not_stale_previous(tmp_path: Path) -> None:
+    from ugc_harness.harness.dependencies import DependencyGraph
+
+    narrative_run = _narrative_run("drama", DRAMA_HAPPY_PATH)
+    narrative = narrative_run.artifact
+    state = narrative_run.record.project_state
+    _, reference_run = _run_references(narrative, tmp_path, state)
+    _, run = ShotAssetHarnessController(
+        FakeShotVideoProvider(),
+        tool_model=AssetStageToolModel(),
+    ).run(narrative, tmp_path, reference_run.project_state)
+    follow = next(
+        shot
+        for shot in run.project_state.production.shots
+        if shot.continuity.join in {"continue_from_previous", "bridge_from_previous"}
+    )
+    previous_id = follow.continuity.previous_shot_id
+    assert previous_id
+    remake = FakeShotVideoProvider()
+    _, remade = ShotAssetHarnessController(
+        remake,
+        tool_model=AssetStageToolModel(),
+    ).run(
+        narrative,
+        tmp_path,
+        run.project_state,
+        instruction="动作再收一点",
+        regenerate_shot_ids=[follow.spec.shot_id],
+    )
+    assert remake.shot_ids == [follow.spec.shot_id]
+    graph = remade.project_state.dependency_graph
+    assert graph.nodes[f"shot:{previous_id}"].status == "current"
+    assert graph.nodes[f"shot:{follow.spec.shot_id}"].status == "current"
+    DependencyGraph(graph).validate_integrity()

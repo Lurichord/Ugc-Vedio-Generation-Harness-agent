@@ -121,9 +121,9 @@ UGC_LLM_MODEL="doubao-seed-2-0-lite-260215"
 UGC_IMAGE_MODEL="doubao-seedream-5-0-260128"
 UGC_VIDEO_MODEL="doubao-seedance-2-0-260128"
 VOLCENGINE_TTS_API_KEY="..."
-VOLCENGINE_TTS_ENDPOINT="https://openspeech.bytedance.com/api/v1/tts"
+VOLCENGINE_TTS_ENDPOINT="https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 VOLCENGINE_TTS_RESOURCE_ID="seed-tts-2.0"
-VOLCENGINE_TTS_VOICE_ID="zh_male_qingshuangnanda_mars_bigtts"
+VOLCENGINE_TTS_VOICE_ID="zh_male_qingshuangnanda_uranus_bigtts"
 ```
 
 `.env` 已加入 `.gitignore`，`.env.example` 可安全提交。

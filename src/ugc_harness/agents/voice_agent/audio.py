@@ -84,6 +84,57 @@ def concatenate_wavs(
     )
 
 
+def overlay_wavs(
+    parts: list[tuple[Path, int]],
+    duration_ms: int,
+    output_path: str | Path,
+) -> WavInfo:
+    """Place WAVs onto a silent canvas at start_ms offsets and mix overlaps."""
+    if not parts:
+        raise ValueError("at least one WAV part is required")
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    reference: WavInfo | None = None
+    loaded: list[tuple[array.array, int, WavInfo]] = []
+    for path, start_ms in parts:
+        info = inspect_wav(path)
+        if info.sample_width_bytes != 2:
+            raise ValueError(f"overlay only supports 16-bit PCM: {path}")
+        if reference is None:
+            reference = info
+        elif (
+            info.sample_rate,
+            info.channels,
+            info.sample_width_bytes,
+        ) != (
+            reference.sample_rate,
+            reference.channels,
+            reference.sample_width_bytes,
+        ):
+            raise ValueError(
+                f"WAV format mismatch for {path}: "
+                f"{(info.sample_rate, info.channels, info.sample_width_bytes)} != "
+                f"{(reference.sample_rate, reference.channels, reference.sample_width_bytes)}"
+            )
+        samples = array.array("h")
+        with wave.open(str(path), "rb") as source:
+            samples.frombytes(source.readframes(source.getnframes()))
+        loaded.append((samples, max(0, start_ms), info))
+    assert reference is not None
+    total_frames = max(1, round(reference.sample_rate * duration_ms / 1000))
+    mix = array.array("h", [0] * (total_frames * reference.channels))
+    for samples, start_ms, info in loaded:
+        start_frame = round(info.sample_rate * start_ms / 1000)
+        for index, sample in enumerate(samples):
+            dest = start_frame * info.channels + index
+            if dest >= len(mix):
+                break
+            mixed = mix[dest] + sample
+            mix[dest] = max(-32768, min(32767, mixed))
+    _write_wav(output, reference, mix.tobytes())
+    return inspect_wav(output)
+
+
 def fit_wav_to_windows(
     source: str | Path,
     windows: list[tuple[int, int, int]],

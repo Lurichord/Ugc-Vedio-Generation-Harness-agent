@@ -58,6 +58,143 @@ class ProductionSnapshot(BaseModel):
     stages: list[StageSnapshot] = Field(default_factory=list)
 
 
+class ProjectStateStageView(BaseModel):
+    stage: StageName
+    label: str
+    status: str
+    required: bool = True
+    current: bool = False
+    task_count: int = 0
+    last_goal: str | None = None
+    last_status: str | None = None
+    critic_passed: bool | None = None
+
+
+class ProjectStateProductionView(BaseModel):
+    cast: int = 0
+    props: int = 0
+    places: int = 0
+    shots: int = 0
+    structure_kind: str | None = None
+    structure_units: int = 0
+    has_timeline: bool = False
+    has_deliverable: bool = False
+
+
+class ProjectStateGraphView(BaseModel):
+    graph_version: int = 0
+    node_count: int = 0
+    stale_count: int = 0
+
+
+class ProjectStateView(BaseModel):
+    project_key: str | None = None
+    schema_version: str | None = None
+    project_id: str | None = None
+    state_version: int = 0
+    format_id: str | None = None
+    topic: str = ""
+    promise: str = ""
+    current_stage: StageName | None = None
+    pipeline: list[StageName] = Field(default_factory=list)
+    stages: list[ProjectStateStageView] = Field(default_factory=list)
+    production: ProjectStateProductionView = Field(
+        default_factory=ProjectStateProductionView
+    )
+    graph: ProjectStateGraphView = Field(default_factory=ProjectStateGraphView)
+    planes: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunActionView(BaseModel):
+    tool: str
+    result: str
+    duration_ms: int = 0
+    reason: str | None = None
+    skill: str | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntakeToolCall(BaseModel):
+    tool: str
+    skill: str | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    result_ok: bool | None = None
+    error: str | None = None
+
+
+class IntakeTurnRecord(BaseModel):
+    turn_id: str
+    session_id: str
+    project_key: str | None = None
+    received: str = ""
+    reply: str = ""
+    tools: list[IntakeToolCall] = Field(default_factory=list)
+    lines: list[str] = Field(default_factory=list)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+class RunLogRecord(BaseModel):
+    run_id: str
+    project_id: str = ""
+    source: Literal["studio", "intake"]
+    stage: StageName
+    task_id: str | None = None
+    agent: str | None = None
+    goal: str | None = None
+    instruction: str | None = None
+    status: str
+    allowed_tools: list[str] = Field(default_factory=list)
+    target_refs: list[str] = Field(default_factory=list)
+    shot_ids: list[str] = Field(default_factory=list)
+    actions: list[RunActionView] = Field(default_factory=list)
+    critic_passed: bool | None = None
+    error: str | None = None
+    received: str | None = None
+    lines: list[str] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    finished_at: str | None = None
+    duration_ms: int | None = None
+
+
+class RunLogItem(BaseModel):
+    run_id: str
+    source: Literal["studio", "intake", "trajectory"]
+    stage: StageName
+    label: str
+    agent: str | None = None
+    goal: str | None = None
+    instruction: str | None = None
+    status: str
+    task_id: str | None = None
+    task_kind: str | None = None
+    allowed_tools: list[str] = Field(default_factory=list)
+    target_refs: list[str] = Field(default_factory=list)
+    shot_ids: list[str] = Field(default_factory=list)
+    actions: list[RunActionView] = Field(default_factory=list)
+    critic_passed: bool | None = None
+    error: str | None = None
+    received: str | None = None
+    lines: list[str] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str | None = None
+    finished_at: str | None = None
+    duration_ms: int | None = None
+
+
+class RunLogView(BaseModel):
+    project_key: str | None = None
+    items: list[RunLogItem] = Field(default_factory=list)
+    intake_turns: list[IntakeTurnRecord] = Field(default_factory=list)
+
+
 class IntakeWorkspaceState(BaseModel):
     session_id: str
     project_key: str | None = None
@@ -80,6 +217,8 @@ class CreateIntakeSessionResponse(BaseModel):
     intent: dict[str, Any] = Field(default_factory=dict)
     progress: dict[str, Any] = Field(default_factory=dict)
     production: ProductionSnapshot = Field(default_factory=ProductionSnapshot)
+    project_state: ProjectStateView = Field(default_factory=ProjectStateView)
+    run_log: RunLogView = Field(default_factory=RunLogView)
     gate: PendingGate | None = None
     notices: list[IntakeNotice] = Field(default_factory=list)
 
@@ -104,6 +243,8 @@ class IntakeMessageResponse(BaseModel):
     intent: dict[str, Any] = Field(default_factory=dict)
     progress: dict[str, Any] = Field(default_factory=dict)
     production: ProductionSnapshot = Field(default_factory=ProductionSnapshot)
+    project_state: ProjectStateView = Field(default_factory=ProjectStateView)
+    run_log: RunLogView = Field(default_factory=RunLogView)
     gate: PendingGate | None = None
     notices: list[IntakeNotice] = Field(default_factory=list)
 
@@ -251,4 +392,16 @@ class ProjectSummary(BaseModel):
     current_stage: StageName
     state_version: int
     updated_at: str | None = None
+
+
+class CatalogSkill(BaseModel):
+    name: str
+    group: str
+    description: str = ""
+    body: str = ""
+    agent: str | None = None
+
+
+class CatalogView(BaseModel):
+    skills: list[CatalogSkill] = Field(default_factory=list)
 

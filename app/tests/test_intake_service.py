@@ -15,8 +15,18 @@ from app.backend.review_service import ReviewService
 from app.backend.schemas import PendingGate
 from app.backend.stage_runner import StageRunner
 from tests.test_intake import _write_demo_project
+from ugc_harness.intake.agent import _log_tool
 from ugc_harness.intake.host import append_message
 from ugc_harness.intake.models import AgentYield
+
+
+class _ToolLogAgent:
+    def run_until_yield(self, session, runtime) -> AgentYield:
+        _log_tool("call", "skill.activate", {"name": "inspect-graph"})
+        _log_tool("done", "skill.activate", {"name": "inspect-graph"}, {"ok": True})
+        _log_tool("call", "harness.list_graph", {})
+        _log_tool("done", "harness.list_graph", {}, {"ok": True, "nodes": []})
+        return AgentYield(session=session, message="图上看过了。", done=False)
 
 
 class _ReplyAgent:
@@ -84,6 +94,27 @@ def test_handle_message_persists_user_text_before_agent_runs(tmp_path: Path) -> 
     assert payload.reply == "记下了。"
 
 
+def test_handle_message_records_intake_tools_and_terminal(tmp_path: Path) -> None:
+    service = _service(tmp_path, agent=_ToolLogAgent())
+    created = service.create_session()
+    payload = service.handle_message(created.session_id, "先看看现在的图")
+    turns = payload.run_log.intake_turns
+    assert len(turns) == 1
+    turn = turns[0]
+    assert turn.received == "先看看现在的图"
+    assert turn.reply == "图上看过了。"
+    assert [item.tool for item in turn.tools] == ["skill.activate", "harness.list_graph"]
+    assert turn.tools[0].skill == "inspect-graph"
+    assert any("[intake] call skill.activate" in line for line in turn.lines)
+    assert any("harness.list_graph" in line for line in turn.lines)
+    assert turn.messages[0]["role"] == "system"
+    assert "Skill 目录" in turn.messages[0]["content"]
+    assert any(
+        item["role"] == "user" and item["content"] == "先看看现在的图"
+        for item in turn.messages
+    )
+
+
 def test_handle_message_sends_continue_phrases_to_the_host(tmp_path: Path) -> None:
     service = _service(tmp_path)
     created = service.create_session()
@@ -126,6 +157,45 @@ def test_attach_project_switches_chat_and_workspace(tmp_path: Path) -> None:
     assert again.session_id == alpha.session_id
     assert again.project_key == "alpha"
     assert any("alpha 的对话" in item["content"] for item in again.messages)
+
+
+def test_continue_production_writes_start_message_into_intake_context(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    service.runner.run = lambda *args, **kwargs: None
+    _seed_project(tmp_path / "outputs", "alpha")
+    created = service.create_session()
+    service.attach_project(created.session_id, "alpha")
+    payload = service.continue_production(created.session_id, user_text="可以")
+    texts = [item["content"] for item in payload.messages]
+    assert "可以" in texts
+    assert any(item.startswith("开始制作") for item in texts)
+    assert payload.gate is not None
+    assert payload.gate.kind == "running"
+    stored = service.store.load(created.session_id)
+    assert any(
+        item.role == "agent" and item.content.startswith("开始制作")
+        for item in stored.messages
+    )
+
+
+def test_handle_message_rejects_while_stage_is_running(tmp_path: Path) -> None:
+    service = _service(tmp_path, agent=_ReplyAgent())
+    created = service.create_session()
+    state = set_gate(
+        service.workspace.load(created.session_id),
+        PendingGate(kind="running", stage="asset", question="素材正在生成。"),
+    )
+    service.workspace.save(state)
+    try:
+        service.handle_message(created.session_id, "顺便改一下旁白")
+    except ValueError as exc:
+        assert "还在制作" in str(exc)
+    else:
+        raise AssertionError("expected running stage to block chat")
+    stored = service.store.load(created.session_id)
+    assert not any(item.content == "顺便改一下旁白" for item in stored.messages)
 
 
 def test_new_session_is_not_bound_to_previous_project(tmp_path: Path) -> None:

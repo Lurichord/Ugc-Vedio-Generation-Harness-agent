@@ -20,6 +20,33 @@ def test_health_and_frontend_are_available() -> None:
     assert "chat-dock" in response.text
     assert "依赖图" in response.text
     assert 'data-drawer="graph"' in response.text
+    assert "ProjectState" in response.text
+    assert "Agent 运行记录" in response.text
+    assert 'data-pane="state"' in response.text
+    assert 'id="pane-chat"' in response.text
+    assert 'id="catalogBoard"' in response.text
+    assert "技能与工具" in response.text
+    script = client.get("/app.js")
+    assert script.status_code == 200
+    assert "clarify-brief" in script.text
+    assert "voice.select_voice" in script.text
+    assert "voice.create_plan" in script.text
+    assert "asset.generate_shot" in script.text
+    assert "asset.generate_talking_head" in script.text
+    assert "注入上下文" in script.text
+    assert "调用参数" in script.text
+    assert "run-json" in script.text
+    assert "消息上下文" in script.text
+    assert "item.messages" in script.text
+    assert "查看全文" in script.text
+    catalog = client.get("/api/catalog")
+    assert catalog.status_code == 200
+    skills = {item["name"]: item for item in catalog.json()["skills"]}
+    assert "clarify-brief" in skills
+    assert "generate-shot" in skills
+    assert "generate-talking-head" in skills
+    assert "working_brief" in skills["clarify-brief"]["body"]
+    assert skills["clarify-brief"]["group"] == "对话 Intake"
 
 
 def test_intake_session_api_shape_and_continue_without_project() -> None:
@@ -30,6 +57,9 @@ def test_intake_session_api_shape_and_continue_without_project() -> None:
     assert payload["session_id"]
     assert payload["messages"]
     assert payload["production"]["stages"] == []
+    assert payload["project_state"]["pipeline"] == []
+    assert payload["run_log"]["items"] == []
+    assert payload["run_log"]["intake_turns"] == []
     assert payload["gate"] is None
     session_id = payload["session_id"]
     fetched = client.get(f"/api/intake/sessions/{session_id}")
@@ -110,6 +140,7 @@ def test_production_pipeline_follows_format() -> None:
     from app.backend.project_service import (
         EXPLAINER_PIPELINE,
         SHOT_PIPELINE,
+        TUTORIAL_PIPELINE,
         production_pipeline,
     )
 
@@ -118,15 +149,24 @@ def test_production_pipeline_follows_format() -> None:
             constraints={"narrative_format": "drama", "production_mode": "drama"}
         )
     )
+    tutorial = ProjectState(
+        context=ProjectContext(
+            constraints={"narrative_format": "tutorial", "production_mode": "tutorial"}
+        )
+    )
     explainer = ProjectState(
         context=ProjectContext(constraints={"narrative_format": "explainer"})
     )
     assert production_pipeline(drama) == SHOT_PIPELINE
+    assert production_pipeline(tutorial) == TUTORIAL_PIPELINE
     assert production_pipeline(explainer) == EXPLAINER_PIPELINE
     assert next_stage_after("narrative", pipeline=SHOT_PIPELINE) == "references"
     assert next_stage_after("references", pipeline=SHOT_PIPELINE) == "asset"
+    assert next_stage_after("asset", pipeline=TUTORIAL_PIPELINE) == "voice"
+    assert next_stage_after("voice", pipeline=TUTORIAL_PIPELINE) == "timeline"
     assert next_stage_after("narrative", pipeline=EXPLAINER_PIPELINE) == "voice"
     assert "voice" not in SHOT_PIPELINE
+    assert "voice" in TUTORIAL_PIPELINE
     assert "references" not in EXPLAINER_PIPELINE
 
 
@@ -141,6 +181,8 @@ def test_existing_projects_have_beat_task_and_timeline_views() -> None:
     task_history = client.get(f"/api/projects/{project_key}/tasks")
     timeline = client.get(f"/api/projects/{project_key}/timeline")
     graph = client.get(f"/api/projects/{project_key}/graph")
+    project_state = client.get(f"/api/projects/{project_key}/state")
+    run_log = client.get(f"/api/projects/{project_key}/runs")
 
     assert stage.status_code == 200
     assert stage.json()["beats"] or stage.json()["core_status"]
@@ -152,6 +194,11 @@ def test_existing_projects_have_beat_task_and_timeline_views() -> None:
     assert "nodes" in graph.json()
     assert "graph_version" in graph.json()
     assert "history" in graph.json()
+    assert project_state.status_code == 200
+    assert "pipeline" in project_state.json()
+    assert "stages" in project_state.json()
+    assert run_log.status_code == 200
+    assert "items" in run_log.json()
     for node in graph.json()["nodes"]:
         assert "content_hash" not in node
         assert "dependency_hashes" not in node
@@ -171,6 +218,8 @@ def test_project_path_cannot_escape_outputs() -> None:
     client = TestClient(app)
     assert client.get("/api/projects/not-a-project/tasks").status_code == 404
     assert client.get("/api/projects/not-a-project/graph").status_code == 404
+    assert client.get("/api/projects/not-a-project/state").status_code == 404
+    assert client.get("/api/projects/not-a-project/runs").status_code == 404
 
 
 def test_asset_media_is_projected_before_timeline_stage_runs() -> None:

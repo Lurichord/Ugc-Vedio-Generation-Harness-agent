@@ -6,10 +6,11 @@ from pathlib import Path
 
 import httpx
 
-from ..content import DramaVisualSpec, ProductionShot, TutorialVisualSpec
+from ..content import ProductionShot
 from ..shared.settings import AssetGenerationSettings
 from ..shared.video_generation import generate_seedance_video
 from .shot_asset_controller import GeneratedShotVideo, ShotReferenceImage
+from .shot_prompt import compose_shot_prompt
 
 
 class SeedanceShotVideoProvider:
@@ -31,9 +32,11 @@ class SeedanceShotVideoProvider:
         *,
         progress_path: Path,
         reference_images: tuple[ShotReferenceImage, ...] | list[ShotReferenceImage] = (),
+        prompt: str | None = None,
+        replace_existing_job: bool = False,
     ) -> GeneratedShotVideo:
         labeled = tuple(reference_images)
-        prompt = _shot_prompt(shot, labeled)
+        prompt = _shot_prompt(shot, labeled, prompt)
         target_seconds = (shot.timing.target_duration_ms or 5000) / 1000
         duration = min((4, 6, 8), key=lambda value: abs(value - target_seconds))
         frames = _frame_images(labeled)
@@ -50,6 +53,7 @@ class SeedanceShotVideoProvider:
             },
             progress_path=progress_path,
             allow_text_fallback=not frames,
+            replace_existing_job=replace_existing_job,
         )
         return GeneratedShotVideo(
             content=generated.content,
@@ -67,17 +71,6 @@ def _frame_images(references: Sequence[ShotReferenceImage]) -> list[dict[str, ob
     return [_image_item(item.path, "reference_image") for item in references]
 
 
-def _reference_prompt(references: Sequence[ShotReferenceImage]) -> str:
-    if not references:
-        return ""
-    lines = [
-        "参考图全部按参考图使用，不要当成首尾帧模式。",
-    ]
-    for index, item in enumerate(references, start=1):
-        lines.append(f"@image{index} 是{item.description}")
-    return "\n".join(lines)
-
-
 def _image_item(path: Path, role: str) -> dict[str, object]:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     suffix = path.suffix.lower()
@@ -90,30 +83,12 @@ def _image_item(path: Path, role: str) -> dict[str, object]:
     }
 
 
-def _shot_prompt(shot: ProductionShot, references: Sequence[ShotReferenceImage]) -> str:
-    labels = _reference_prompt(references)
-    visual = shot.visual
-    if isinstance(visual, DramaVisualSpec):
-        dialogue = "；".join(shot.audio.dialogue_lines)
-        ambient = shot.audio.ambient_audio or "自然环境声"
-        body = (
-            f"{visual.generation_prompt}\n动作：{visual.action_description}\n"
-            f"镜头：{visual.camera_instruction}\n台词：{dialogue or '无台词'}\n"
-            f"声音：生成并保留人物对白与{ambient}，音画同步。\n"
-            f"连续性约束：{'；'.join(visual.continuity_constraints) or '保持角色与场景一致'}"
-        )
-    elif isinstance(visual, TutorialVisualSpec):
-        source_types = "、".join(shot.audio.source_audio_types) or "真实制作操作声"
-        body = (
-            f"竖屏制作教程实拍风格视频。主体：{visual.subject_ref}。"
-            f"动作步骤：{shot.purpose}。机位：{visual.camera_angle}。"
-            f"关键细节：{visual.critical_detail}。"
-            f"{'双手清楚入镜。' if visual.hands_required else ''}"
-            f"保留{source_types}，不要生成旁白、字幕、贴纸或背景音乐。"
-            "动作必须真实、连续、可跟做，主体和工具在相邻镜头中保持一致。"
-        )
-    else:
-        raise ValueError(f"unsupported direct AI video visual: {visual.realization_type}")
-    if labels:
-        return f"{body}\n{labels}"
-    return body
+def _shot_prompt(
+    shot: ProductionShot,
+    references: Sequence[ShotReferenceImage],
+    prompt: str | None = None,
+) -> str:
+    text = (prompt or "").strip()
+    if text:
+        return text
+    return compose_shot_prompt(shot, references)

@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from uuid import uuid4
 
+from tests.fixtures.tool_models import AssetStageToolModel
 from tests.test_production_routes import (
     FakeIdentityImageProvider,
     FakeShotVideoProvider,
@@ -109,6 +110,7 @@ def test_repair_one_prop_regenerates_only_its_image_and_shots() -> None:
             tool_model=_SubmitPatchesModel(patches),
             image_provider=images,
             video_provider=videos,
+            asset_tool_model=AssetStageToolModel(),
         )
 
     _, result = repair_description(
@@ -121,7 +123,7 @@ def test_repair_one_prop_regenerates_only_its_image_and_shots() -> None:
     assert result["identity_refs"] == [prop_ref]
     assert set(result["shot_refs"]) == {f"shot:{shot_id}" for shot_id in dependent}
     assert images.refs == [prop_ref]
-    assert videos.shot_ids == dependent
+    assert set(videos.shot_ids) == set(dependent)
 
     final = load_project_state(project_dir)
     rewritten = next(
@@ -191,6 +193,7 @@ def test_identity_repair_before_asset_only_rewrites_image() -> None:
             tool_model=_SubmitPatchesModel(patches),
             image_provider=images,
             video_provider=videos,
+            asset_tool_model=AssetStageToolModel(),
         )
 
     _, result = repair_description(

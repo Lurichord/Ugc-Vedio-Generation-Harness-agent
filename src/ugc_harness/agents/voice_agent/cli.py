@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="运行 Voice Agent，生成配音、字级时间戳与 RealizedBeat。",
     )
     parser.add_argument("project", type=Path, help="Narrative 项目目录")
-    parser.add_argument("--voice-id", help="覆盖默认火山 TTS 音色")
+    parser.add_argument("--voice-id", help="覆盖音色表自动选择，直接指定火山 TTS 音色")
     parser.add_argument("--api-keys-file", type=Path)
     parser.add_argument("--fail-on-quality-error", action="store_true")
     return parser
@@ -38,18 +38,13 @@ def main(argv: list[str] | None = None) -> None:
             )
         )
         settings = TTSSettings.from_environment(args.api_keys_file)
-        if args.voice_id:
-            settings.voice_id = args.voice_id
-        else:
-            character = narrative.planning.world_state.aroll_character
-            if character is not None:
-                settings.voice_id = settings.voice_for_gender(
-                    character.voice_profile.gender
-                )
+        override = args.voice_id
+        if override:
+            settings.voice_id = override
         with VolcengineTTS(settings) as provider:
             run = VoiceHarnessController.from_provider(
                 provider,
-                settings.voice_id,
+                voice_id=override,
             ).run(narrative, project_dir, state)
         writer = ArtifactWriter(project_dir.parent)
         written = writer.write_voice(project_dir, run.artifact)
@@ -60,7 +55,7 @@ def main(argv: list[str] | None = None) -> None:
 
     summary = {
         "project_directory": str(project_dir.resolve()),
-        "voice_id": settings.voice_id,
+        "voice_id": run.artifact.voice_plan.speaker.voice_id,
         "audio_file": run.artifact.timed_audio.audio_file,
         "audio_duration_seconds": round(
             run.artifact.timed_audio.duration_ms / 1000, 2

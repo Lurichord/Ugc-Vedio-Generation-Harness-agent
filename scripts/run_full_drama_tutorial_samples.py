@@ -93,8 +93,13 @@ def main() -> None:
         writer = ArtifactWriter(OUTPUT_ROOT)
         writer.write_shot_assets(project_dir, assets)
         writer.write_shot_asset_run(project_dir, asset_run)
+        state = asset_run.project_state
+        if str(state.evaluation.stages.voice) == "ready":
+            # This sample does not run TTS; keep the visual chain runnable.
+            state.evaluation.stages.voice = "not_required"
+            state.evaluation.stages.timeline = "ready"
         timeline, timeline_run = ShotTimelineHarnessController().run(
-            narrative, assets, asset_run.project_state
+            narrative, assets, state
         )
         writer.write_shot_timeline(project_dir, timeline)
         writer.write_shot_timeline_run(project_dir, timeline_run)

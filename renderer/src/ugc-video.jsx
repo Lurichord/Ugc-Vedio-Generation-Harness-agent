@@ -140,9 +140,22 @@ const Overlay = ({item}) => {
 };
 
 export const UGCVideo = (props) => {
+  const narrationVolume = (frame) => {
+    const clip = (props.clips || []).find(
+      (item) =>
+        frame >= item.start_frame &&
+        frame < item.start_frame + item.duration_in_frames,
+    );
+    if (clip && clip.muted === false) {
+      return 0;
+    }
+    return 1;
+  };
   return (
     <AbsoluteFill style={{backgroundColor: '#05070a'}}>
-      {props.audio_path ? <Audio src={staticFile(props.audio_path)} /> : null}
+      {props.audio_path ? (
+        <Audio src={staticFile(props.audio_path)} volume={narrationVolume} />
+      ) : null}
       {props.clips.map((clip) => (
         <Sequence
           key={clip.clip_id}

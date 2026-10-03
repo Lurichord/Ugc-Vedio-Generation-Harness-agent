@@ -44,6 +44,15 @@ from .narrative_formats import (
     NarrativeFormatRegistry,
     default_narrative_format_registry,
 )
+from ..agents.narrative_agent.memory import (
+    narrative_opening_context,
+    seed_session_from_state,
+)
+from ..knowledge import (
+    merge_generation_context,
+    retrieve_prior_knowledge,
+)
+from ..knowledge.models import PriorKnowledge
 
 
 class NarrativeRunRecord(BaseModel):
@@ -81,6 +90,7 @@ class NarrativeHarnessController:
         self.model_name = model_name
         self.state_version = state_version
         self.format_registry = format_registry or default_narrative_format_registry()
+        self.generation_context: dict[str, object] = {}
 
     @classmethod
     def from_mcp(
@@ -124,13 +134,22 @@ class NarrativeHarnessController:
         ) -> McpToolTransport:
             brief = kwargs["brief"]
             assert isinstance(brief, CreativeBrief)
+            prior = kwargs.get("prior_knowledge")
+            prior_model = prior if isinstance(prior, PriorKnowledge) else None
+            gen_ctx = merge_generation_context(context, prior_model)
+            state = kwargs.get("state")
+            if isinstance(state, ProjectState):
+                gen_ctx.update(seed_session_from_state(state, brief))
+            instruction = kwargs.get("instruction") or context.get("instruction")
+            if isinstance(instruction, str) and instruction.strip():
+                gen_ctx["instruction"] = instruction.strip()
             return McpToolTransport(
                 selected_server,
                 configure_tool="narrative.configure_task",
                 configure_payload={
                     "brief": brief.model_dump(mode="json"),
                     "model": model_name,
-                    "generation_context": context,
+                    "generation_context": gen_ctx,
                 },
             )
 
@@ -140,9 +159,24 @@ class NarrativeHarnessController:
         ) -> dict[str, object]:
             brief = kwargs["brief"]
             assert isinstance(brief, CreativeBrief)
-            return {"creative_brief": brief.model_dump(mode="json")}
+            prior = kwargs.get("prior_knowledge")
+            prior_model = prior if isinstance(prior, PriorKnowledge) else None
+            state = kwargs.get("state")
+            project = state if isinstance(state, ProjectState) else None
+            instruction = kwargs.get("instruction")
+            note = instruction if isinstance(instruction, str) else None
+            if not note:
+                raw = context.get("instruction")
+                note = raw if isinstance(raw, str) else None
+            return narrative_opening_context(
+                task,
+                brief=brief,
+                prior=prior_model,
+                state=project,
+                instruction=note,
+            )
 
-        return cls(
+        controller = cls(
             GenericAgent(
                 tool_model=tool_model,
                 transport_factory=transport_factory,
@@ -156,6 +190,8 @@ class NarrativeHarnessController:
             state_version=state_version,
             format_registry=active_registry,
         )
+        controller.generation_context = context
+        return controller
 
     def create_task(self, brief: CreativeBrief) -> TaskEnvelope:
         input_hash = self._input_hash(brief)
@@ -200,15 +236,19 @@ class NarrativeHarnessController:
             )
         if envelope.format_id is None:
             raise ValueError("Narrative TaskEnvelope requires format_id")
-        if (
-            brief.production_mode != "auto"
-            and brief.production_mode != envelope.format_id
-        ):
+        if brief.production_mode != envelope.format_id:
             raise RuntimeError(
                 "CreativeBrief production_mode does not match TaskEnvelope"
             )
         pack = self.format_registry.resolve(envelope.format_id)
-        execution = self.agent.run(envelope, brief=brief)
+        prior = retrieve_prior_knowledge(brief)
+        execution = self.agent.run(
+            envelope,
+            brief=brief,
+            prior_knowledge=prior,
+            state=state,
+            instruction=self.generation_context.get("instruction"),
+        )
         candidate = execution.candidate
         missing_required = [
             name
@@ -282,13 +322,28 @@ class NarrativeHarnessController:
         )
         narrative_status = "passed" if evaluation.passed else "needs_revision"
         successor_status = "ready" if evaluation.passed else "blocked"
-        direct_to_assets = pack.format_id in {"drama", "tutorial"}
+        is_drama = pack.format_id == "drama"
+        is_tutorial = pack.format_id == "tutorial"
+        direct_to_assets = is_drama or is_tutorial
+        has_tutorial_voice = (
+            is_tutorial
+            and isinstance(candidate.script, TutorialScriptArtifact)
+            and bool(candidate.script.segments)
+        )
         script_status = (
             "not_required" if evaluation.passed else "blocked"
-        ) if pack.format_id == "drama" else narrative_status
-        voice_status = (
-            "not_required" if evaluation.passed else "blocked"
-        ) if direct_to_assets else successor_status
+        ) if is_drama else narrative_status
+        if is_drama:
+            voice_status = "not_required" if evaluation.passed else "blocked"
+        elif is_tutorial:
+            if not evaluation.passed:
+                voice_status = "blocked"
+            elif has_tutorial_voice:
+                voice_status = "pending"
+            else:
+                voice_status = "not_required"
+        else:
+            voice_status = successor_status
         editorial_status = (
             "not_required" if evaluation.passed else "blocked"
         ) if direct_to_assets else "pending"
@@ -473,7 +528,7 @@ def _narrative_completion(
         "shots": ArtifactRef(kind="shot_plan", id=brief.project_id),
     }
     is_drama = task.format_id == "drama"
-    skips_voice = task.format_id in {"drama", "tutorial"}
+    skips_voice = is_drama
     return CompletionSpec(
         artifact_refs=[
             refs_by_output[output]

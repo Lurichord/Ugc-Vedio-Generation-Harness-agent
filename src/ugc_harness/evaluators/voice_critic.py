@@ -16,6 +16,8 @@ class VoiceCritic:
         narrative: NarrativeArtifact,
         project_dir: str | Path,
         target_ref: str,
+        *,
+        lock_world_voice: bool = True,
     ) -> EvaluationResult:
         root = Path(project_dir)
         audio_path = root / artifact.timed_audio.audio_file
@@ -33,7 +35,7 @@ class VoiceCritic:
             if "不存在" in item or "没有对应音频" in item or "没有生成" in item
         ]
         character = narrative.planning.world_state.aroll_character
-        if character is not None:
+        if lock_world_voice and character is not None:
             speaker = artifact.voice_plan.speaker
             if (
                 speaker.character_id != character.character_id

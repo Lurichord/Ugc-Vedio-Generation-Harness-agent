@@ -16,7 +16,7 @@ from ..agents.narrative_agent.models import (
     TutorialPlanningArtifact,
     TutorialScriptArtifact,
 )
-from ..content import ProductionShot, TutorialVisualSpec
+from ..content import DramaVisualSpec, ProductionShot, TutorialVisualSpec
 from .description import (
     CastMember,
     CreativeBriefRecord,
@@ -63,6 +63,20 @@ def apply_narrative_document(
         artifact.brief.model_dump(mode="json")
     )
     state.evaluation.elements = initial_execution_state(document).elements
+
+
+def refresh_shot_continuity(state: ProjectState) -> None:
+    """Recompute 接/承/断 from current shot specs.
+
+    Existing projects may still store scene-only continue joins. Asset
+    listing, generation, and repair expansion should follow the live
+    specs rather than that stale field.
+    """
+
+    previous = None
+    for shot in sorted(state.production.shots, key=lambda item: item.spec.order):
+        shot.continuity = _continuity(previous, shot.spec)
+        previous = shot.spec
 
 
 def initial_execution_state(description: VideoDescription) -> ExecutionState:
@@ -289,40 +303,121 @@ def _continuity(
     previous: ProductionShot | None,
     current: ProductionShot,
 ) -> ShotContinuity:
-    """Tail-frame continuation is a generation constraint, not an edit.
+    """Tail-frame join is a generation constraint, not an edit.
 
-    Continue only when the shots stay inside one dramatic scene or one
-    tutorial step with an unchanged camera angle; a location or camera jump
-    must start fresh or the previous tail frame locks the model into the
-    wrong framing.
+    接: same scene, place, and overlapping cast (or tutorial same camera
+    with the same step or a shared workpiece). The previous last frame
+    leads, and the prompt names it and locks pose and camera.
+    承: not a hard continue, but the previous clip still matters because
+    the place, people, or workpiece overlap. The last frame is named in
+    the prompt as a look/wardrobe/set/material reference, not a pose
+    lock, and must not occupy slot 1.
+    断: new place and almost no shared people; generate without a tail.
     """
 
     if previous is None or current.shot_kind == "explainer":
         return ShotContinuity()
     if current.shot_kind == "drama":
-        if (
-            previous.payload.payload_type == "drama"
-            and current.payload.payload_type == "drama"
-            and previous.payload.scene_id == current.payload.scene_id
-        ):
-            return ShotContinuity(
-                join="continue_from_previous",
-                previous_shot_id=previous.shot_id,
-            )
-        return ShotContinuity()
+        return _drama_continuity(previous, current)
+    if current.shot_kind == "tutorial":
+        return _tutorial_continuity(previous, current)
+    return ShotContinuity()
+
+
+def _drama_continuity(
+    previous: ProductionShot,
+    current: ProductionShot,
+) -> ShotContinuity:
     if (
-        previous.payload.payload_type == "tutorial"
-        and current.payload.payload_type == "tutorial"
-        and previous.payload.step_id == current.payload.step_id
-        and isinstance(previous.visual, TutorialVisualSpec)
-        and isinstance(current.visual, TutorialVisualSpec)
-        and previous.visual.camera_angle == current.visual.camera_angle
+        previous.payload.payload_type != "drama"
+        or current.payload.payload_type != "drama"
     ):
+        return ShotContinuity()
+    same_scene = previous.payload.scene_id == current.payload.scene_id
+    same_place = _same_location(previous, current)
+    shared_cast = bool(_drama_characters(previous) & _drama_characters(current))
+    if same_scene and same_place and shared_cast:
         return ShotContinuity(
             join="continue_from_previous",
             previous_shot_id=previous.shot_id,
         )
+    if same_place or shared_cast:
+        return ShotContinuity(
+            join="bridge_from_previous",
+            previous_shot_id=previous.shot_id,
+        )
     return ShotContinuity()
+
+
+def _tutorial_continuity(
+    previous: ProductionShot,
+    current: ProductionShot,
+) -> ShotContinuity:
+    if (
+        previous.payload.payload_type != "tutorial"
+        or current.payload.payload_type != "tutorial"
+    ):
+        return ShotContinuity()
+    same_step = previous.payload.step_id == current.payload.step_id
+    same_camera = (
+        isinstance(previous.visual, TutorialVisualSpec)
+        and isinstance(current.visual, TutorialVisualSpec)
+        and previous.visual.camera_angle == current.visual.camera_angle
+    )
+    overlap = same_step or _tutorial_overlap(previous, current)
+    if overlap and same_camera:
+        return ShotContinuity(
+            join="continue_from_previous",
+            previous_shot_id=previous.shot_id,
+        )
+    if overlap:
+        return ShotContinuity(
+            join="bridge_from_previous",
+            previous_shot_id=previous.shot_id,
+        )
+    return ShotContinuity()
+
+
+def _same_location(previous: ProductionShot, current: ProductionShot) -> bool:
+    left = _drama_location(previous)
+    right = _drama_location(current)
+    return bool(left) and left == right
+
+
+def _drama_location(shot: ProductionShot) -> str:
+    visual = shot.visual
+    if isinstance(visual, DramaVisualSpec) and visual.location_id:
+        return visual.location_id
+    for bind in shot.binds:
+        if bind.startswith("place:"):
+            return bind.partition(":")[2]
+    return ""
+
+
+def _drama_characters(shot: ProductionShot) -> set[str]:
+    visual = shot.visual
+    if isinstance(visual, DramaVisualSpec) and visual.character_ids:
+        return set(visual.character_ids)
+    return {
+        bind.partition(":")[2]
+        for bind in shot.binds
+        if bind.startswith("cast:")
+    }
+
+
+def _tutorial_overlap(previous: ProductionShot, current: ProductionShot) -> bool:
+    left = _tutorial_subject(previous)
+    right = _tutorial_subject(current)
+    if left and left == right:
+        return True
+    return bool(set(previous.binds) & set(current.binds))
+
+
+def _tutorial_subject(shot: ProductionShot) -> str:
+    visual = shot.visual
+    if isinstance(visual, TutorialVisualSpec):
+        return visual.subject_ref
+    return ""
 
 
 def _deliverable(artifact: NarrativeArtifact) -> Deliverable | None:

@@ -7,7 +7,9 @@ the markdown text into the envelope.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 from ...harness.models import TaskEnvelope
 
@@ -60,3 +62,63 @@ def system_prompt_for_task(task: TaskEnvelope) -> str:
     """System prompt for one GenericAgent run: the md of the current step."""
 
     return load_instructions(instruction_name_for_task(task))
+
+
+def compose_opening_messages(
+    *,
+    system: str,
+    agent: str,
+    memory: Any | None,
+    user_payload: Any,
+) -> list[dict[str, Any]]:
+    """Opening messages: system prompt, then optional context / artifacts."""
+
+    from ..skills import list_agent_skills
+
+    catalog = list_agent_skills(agent)
+    catalog_block = (
+        f"\n\n## Skill 目录\n{json.dumps(catalog, ensure_ascii=False, indent=2)}"
+    )
+    if (
+        isinstance(memory, dict)
+        and "context" in memory
+        and "artifacts" in memory
+    ):
+        return [
+            {"role": "system", "content": f"{system}{catalog_block}"},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"上下文": memory["context"]},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"叙事产物": memory["artifacts"]},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            },
+        ]
+    text = system
+    if memory is not None:
+        text = (
+            f"{system}{catalog_block}\n\n"
+            f"## 当前 memory\n{json.dumps(memory, ensure_ascii=False, indent=2)}"
+        )
+    elif catalog_block:
+        text = f"{system}{catalog_block}"
+    return [
+        {"role": "system", "content": text},
+        {
+            "role": "user",
+            "content": json.dumps(
+                user_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        },
+    ]

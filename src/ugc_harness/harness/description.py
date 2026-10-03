@@ -74,7 +74,7 @@ class CreativeBriefRecord(StrictModel):
     target: TargetSpec = Field(default_factory=TargetSpec)
     audience: AudienceSpec = Field(default_factory=AudienceSpec)
     communication: CommunicationSpec | None = None
-    production_mode: ProductionMode = "auto"
+    production_mode: ProductionMode = "explainer"
     video_profile: VideoProfileRequest = "auto"
     content_policy: ContentPolicy = Field(default_factory=ContentPolicy)
 
@@ -96,6 +96,7 @@ class CastMember(StrictModel):
     voice_constraints: list[str] = Field(default_factory=list)
     voice_profile: ArollVoiceProfile | None = None
     reference_image: str | None = None
+    generation_prompt: str | None = None
 
 
 class WorldProp(StrictModel):
@@ -106,6 +107,7 @@ class WorldProp(StrictModel):
     description: str
     appearance: str | None = None
     reference_image: str | None = None
+    generation_prompt: str | None = None
 
 
 class WorldPlace(StrictModel):
@@ -116,6 +118,7 @@ class WorldPlace(StrictModel):
     description: str
     appearance: str | None = None
     reference_image: str | None = None
+    generation_prompt: str | None = None
 
 
 class VideoWorld(StrictModel):
@@ -254,16 +257,26 @@ class VoiceDesign(StrictModel):
 class ShotContinuity(StrictModel):
     """Generation-time join constraint, not an editing transition."""
 
-    join: Literal["fresh", "continue_from_previous"] = "fresh"
+    join: Literal["fresh", "continue_from_previous", "bridge_from_previous"] = "fresh"
     previous_shot_id: str | None = None
+
+    def uses_previous_tail(self) -> bool:
+        return self.join in {"continue_from_previous", "bridge_from_previous"}
 
     @model_validator(mode="after")
     def require_previous_for_continuation(self) -> "ShotContinuity":
-        if self.join == "continue_from_previous" and not self.previous_shot_id:
-            raise ValueError("continue_from_previous requires previous_shot_id")
+        if self.uses_previous_tail() and not self.previous_shot_id:
+            raise ValueError(f"{self.join} requires previous_shot_id")
         if self.join == "fresh" and self.previous_shot_id is not None:
             raise ValueError("fresh shots must not carry previous_shot_id")
         return self
+
+
+class ShotGenerationReference(StrictModel):
+    """One reference image used the last time this shot was generated."""
+
+    id: str
+    description: str
 
 
 class ShotMedia(StrictModel):
@@ -275,6 +288,7 @@ class ShotMedia(StrictModel):
     duration_ms: int | None = Field(default=None, gt=0)
     generator_model: str | None = None
     generation_prompt: str | None = None
+    generation_references: list[ShotGenerationReference] = Field(default_factory=list)
     generation_job_id: str | None = None
     generation_cost_usd: float | None = Field(default=None, ge=0)
 

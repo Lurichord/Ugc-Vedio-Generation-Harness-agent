@@ -168,8 +168,18 @@ def test_drama_description_cast_structure_and_continuity() -> None:
         same_scene = (
             previous.spec.payload.scene_id == current.spec.payload.scene_id
         )
-        if same_scene:
+        same_place = (
+            previous.spec.visual.location_id == current.spec.visual.location_id
+        )
+        shared_cast = bool(
+            set(previous.spec.visual.character_ids)
+            & set(current.spec.visual.character_ids)
+        )
+        if same_scene and same_place and shared_cast:
             assert current.continuity.join == "continue_from_previous"
+            assert current.continuity.previous_shot_id == previous.spec.shot_id
+        elif same_place or shared_cast:
+            assert current.continuity.join == "bridge_from_previous"
             assert current.continuity.previous_shot_id == previous.spec.shot_id
         else:
             assert current.continuity.join == "fresh"
@@ -177,8 +187,8 @@ def test_drama_description_cast_structure_and_continuity() -> None:
     scene_ids = {shot.spec.payload.scene_id for shot in shots}
     if len(scene_ids) > 1:
         assert any(
-            shot.continuity.join == "fresh" for shot in shots[1:]
-        ), "a scene switch must restart generation fresh"
+            shot.continuity.join != "continue_from_previous" for shot in shots[1:]
+        ), "a scene switch must not hard-continue from the previous clip"
 
 
 def test_tutorial_description_result_utterances_and_continuity() -> None:
@@ -204,8 +214,13 @@ def test_tutorial_description_result_utterances_and_continuity() -> None:
         same_camera = (
             previous.spec.visual.camera_angle == current.spec.visual.camera_angle
         )
-        if same_step and same_camera:
+        shared = bool(set(previous.spec.binds) & set(current.spec.binds)) or (
+            previous.spec.visual.subject_ref == current.spec.visual.subject_ref
+        )
+        if (same_step or shared) and same_camera:
             assert current.continuity.join == "continue_from_previous"
+        elif same_step or shared:
+            assert current.continuity.join == "bridge_from_previous"
         else:
             assert current.continuity.join == "fresh"
 

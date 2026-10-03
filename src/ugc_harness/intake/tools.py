@@ -77,7 +77,7 @@ def host_tool_specs() -> list[dict[str, Any]]:
                     "topic": {"type": "string"},
                     "production_mode": {
                         "type": "string",
-                        "enum": ["auto", "explainer", "drama", "tutorial"],
+                        "enum": ["explainer", "drama", "tutorial"],
                     },
                     "video_profile": {"type": "string"},
                     "target": {

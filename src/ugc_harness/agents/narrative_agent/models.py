@@ -36,7 +36,7 @@ class CreativeBrief(StrictModel):
     target: TargetSpec
     audience: AudienceSpec
     communication: CommunicationSpec
-    production_mode: ProductionMode = "auto"
+    production_mode: ProductionMode = "explainer"
     video_profile: VideoProfileRequest = "auto"
     content_policy: ContentPolicy = Field(default_factory=ContentPolicy)
 
@@ -369,6 +369,19 @@ NarrativeScriptArtifact = Annotated[
 ]
 
 
+class NarrativeIdentitiesArtifact(StrictModel):
+    """Identity book written with the first layer of each format."""
+
+    one_sentence_thesis: str
+    world_state: VideoWorldState
+    video_profile: VideoProfileDecision | None = None
+    characters: list[DramaCharacter] = Field(default_factory=list)
+    objective: str | None = None
+    materials: list[TutorialMaterial] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    coverage_requirements: list[str] = Field(default_factory=list)
+
+
 class ShotPlanArtifact(StrictModel):
     shots: list[ProductionShot] = Field(min_length=1)
 
@@ -453,7 +466,7 @@ class NarrativeArtifact(StrictModel):
     def validate_format_alignment(self) -> "NarrativeArtifact":
         requested = self.brief.production_mode
         actual = self.planning.planning_type
-        if requested != "auto" and requested != actual:
+        if requested != actual:
             raise ValueError("CreativeBrief production_mode does not match planning_type")
         if actual == "explainer" and not isinstance(self.script, ScriptArtifact):
             raise ValueError("explainer NarrativeArtifact requires explainer script")

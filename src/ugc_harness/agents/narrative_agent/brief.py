@@ -36,7 +36,7 @@ def make_brief(
     goal: str | None = None,
     tone: list[str] | None = None,
     creator_persona: str = "像朋友一样解释复杂话题的知识型创作者",
-    production_mode: ProductionMode = "auto",
+    production_mode: ProductionMode = "explainer",
     video_profile: VideoProfileRequest = "auto",
 ) -> CreativeBrief:
     clean_topic = topic.strip()

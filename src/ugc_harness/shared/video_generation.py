@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ def generate_seedance_video(
     *,
     progress_path: Path | None = None,
     allow_text_fallback: bool = True,
+    replace_existing_job: bool = False,
 ) -> GeneratedVideo:
     """Submit and download a Seedance video through Volcengine Ark's task API.
 
@@ -39,7 +41,11 @@ def generate_seedance_video(
     """
     api_key, base_url = seedance_api_config(settings)
     degraded_to_text = False
-    job = _resumable_job(progress_path, payload)
+    job = _resumable_job(
+        progress_path,
+        payload,
+        replace_existing_job=replace_existing_job,
+    )
     if job is None:
         request_payload = _ark_payload(payload)
         response = client.post(
@@ -125,12 +131,18 @@ def generate_seedance_video(
 def _resumable_job(
     progress_path: Path | None,
     payload: dict[str, object],
+    *,
+    replace_existing_job: bool = False,
 ) -> dict[str, Any] | None:
-    if progress_path is None or not progress_path.is_file():
+    if replace_existing_job or progress_path is None or not progress_path.is_file():
         return None
     try:
         record = json.loads(progress_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    stored = str(record.get("request_fingerprint") or "")
+    expected = _request_fingerprint(payload)
+    if stored and stored != expected:
         return None
     job = record.get("job") or {}
     same_model = record.get("model") == payload.get("model")
@@ -138,6 +150,9 @@ def _resumable_job(
     # A succeeded job is also resumable: its task endpoint still exposes the
     # signed download URL. Keeping it avoids submitting and charging for the
     # same Shot again when a later Shot or local render interrupted the run.
+    # Legacy progress files have no fingerprint; same-model resume still
+    # applies so an interrupted first pass is not billed twice. Repair must
+    # pass replace_existing_job so that path cannot reuse an old clip.
     if same_model and job.get("id") and status not in {
         "failed", "cancelled", "canceled", "expired"
     }:
@@ -157,6 +172,7 @@ def _write_progress(
         json.dumps(
             {
                 "model": payload.get("model"),
+                "request_fingerprint": _request_fingerprint(payload),
                 "updated_at": datetime.now(UTC).isoformat(),
                 "job": job,
             },
@@ -165,6 +181,37 @@ def _write_progress(
         ),
         encoding="utf-8",
     )
+
+
+def _request_fingerprint(payload: dict[str, object]) -> str:
+    hasher = hashlib.sha256()
+    for key in (
+        "model",
+        "prompt",
+        "duration",
+        "aspect_ratio",
+        "resolution",
+        "generate_audio",
+    ):
+        hasher.update(str(payload.get(key) or "").encode("utf-8"))
+        hasher.update(b"\0")
+    for frame in payload.get("frame_images") or []:
+        _hash_media_item(hasher, frame, "image_url")
+    for audio in payload.get("audio_urls") or []:
+        _hash_media_item(hasher, audio, "audio_url")
+    return hasher.hexdigest()
+
+
+def _hash_media_item(hasher: Any, item: object, url_key: str) -> None:
+    if not isinstance(item, dict):
+        return
+    blob = item.get(url_key)
+    url = ""
+    if isinstance(blob, dict):
+        url = str(blob.get("url") or "")
+    hasher.update(hashlib.sha256(url.encode("utf-8")).digest())
+    hasher.update(str(item.get("role") or item.get("frame_type") or "").encode())
+    hasher.update(b"\0")
 
 
 def seedance_api_config(
@@ -186,42 +233,62 @@ def _ark_payload(payload: dict[str, object]) -> dict[str, object]:
     prompt = str(payload.get("prompt") or "").strip()
     ratio = str(payload.get("aspect_ratio") or "9:16")
     duration = int(payload.get("duration") or 5)
+    extras = f"--ratio {ratio} --dur {duration}"
+    resolution = str(payload.get("resolution") or "").strip()
+    if resolution:
+        extras += f" --rs {resolution}"
     content: list[dict[str, object]] = [
-        {"type": "text", "text": f"{prompt} --ratio {ratio} --dur {duration}"}
+        {"type": "text", "text": f"{prompt} {extras}"}
     ]
     for frame in payload.get("frame_images") or []:
-        if not isinstance(frame, dict):
-            continue
-        image_url = frame.get("image_url")
-        if isinstance(image_url, dict) and image_url.get("url"):
-            item: dict[str, object] = {
-                "type": "image_url",
-                "image_url": {"url": str(image_url["url"])},
-            }
-            # Ark distinguishes first_frame / last_frame / reference_image via
-            # the "role" field, and those modes cannot be mixed in one request.
-            # A role-less single image defaults to first frame, so omitting the
-            # key preserves the legacy behaviour.
-            role = frame.get("role") or frame.get("frame_type")
-            if role:
-                item["role"] = str(role)
+        item = _content_media_item(frame, "image_url")
+        if item is not None:
             content.append(item)
-    return {
+    for audio in payload.get("audio_urls") or []:
+        item = _content_media_item(audio, "audio_url")
+        if item is not None:
+            content.append(item)
+    body: dict[str, object] = {
         "model": payload["model"],
         "content": content,
         "return_last_frame": True,
     }
+    if "generate_audio" in payload:
+        body["generate_audio"] = bool(payload["generate_audio"])
+    return body
+
+
+def _content_media_item(
+    frame: object,
+    url_key: str,
+) -> dict[str, object] | None:
+    if not isinstance(frame, dict):
+        return None
+    blob = frame.get(url_key)
+    if not (isinstance(blob, dict) and blob.get("url")):
+        return None
+    item: dict[str, object] = {
+        "type": url_key,
+        url_key: {"url": str(blob["url"])},
+    }
+    # Ark distinguishes first_frame / last_frame / reference_image via
+    # the "role" field, and those modes cannot be mixed in one request.
+    # A role-less single image defaults to first frame, so omitting the
+    # key preserves the legacy behaviour. Audio uses role=reference_audio.
+    role = frame.get("role") or frame.get("frame_type")
+    if role:
+        item["role"] = str(role)
+    return item
 
 
 def _has_inline_media(payload: dict[str, object]) -> bool:
     for item in payload.get("content") or []:
         if not isinstance(item, dict):
             continue
-        image_url = item.get("image_url")
-        if isinstance(image_url, dict) and str(image_url.get("url", "")).startswith(
-            "data:"
-        ):
-            return True
+        for key in ("image_url", "audio_url"):
+            blob = item.get(key)
+            if isinstance(blob, dict) and str(blob.get("url", "")).startswith("data:"):
+                return True
     return False
 
 

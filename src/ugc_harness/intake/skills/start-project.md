@@ -7,17 +7,20 @@ description: 用户明确要开做。确认 working_brief 够制作使用后派 
 
 ## 什么时候可以调
 
-五项同时非空：
+六项同时非空：
 
 - `topic`
 - `communication.goal`
 - `audience.description`
 - `target.platform`
 - `target.duration_target_ms`
+- `production_mode`
+
+`production_mode` 还空时：本拍先按 `clarify-brief` 自己选一个 `brief.update`，再开工。不要把体裁问成单独一道题。
 
 已经有 `project_dir` 且 `progress.narrative` 不是 `pending` 时，不要重复开工。
 
-五项有值但按 `clarify-brief` 的标准仍然太薄（goal 只是「讲清楚」、audience 只是「所有人」、topic 只是一个光秃名词）时：不要硬调开工，只针对太薄的那一项问一句，让用户确认更具体的措辞。用户明确说「就按现在的开做」则可以开工，不要再拦。
+前五项有值但按 `clarify-brief` 的标准仍然太薄（goal 只是「讲清楚」、audience 只是「所有人」、topic 只是一个光秃名词）时：不要硬调开工，只针对太薄的那一项问一句，让用户确认更具体的措辞。用户明确说「就按现在的开做」则可以开工，不要再拦。
 
 ## 开工之后实际发生什么
 

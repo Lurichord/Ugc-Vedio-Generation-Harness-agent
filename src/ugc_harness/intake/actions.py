@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from ..harness.dependencies import DependencyGraph
 from ..harness.models import TaskBudget, TaskEnvelope, TaskScope
+from ..harness.realization_scope import expand_asset_regenerate, expand_voice_refs
+from ..harness.repair import _TOOLS, repair_input_hash
 from ..harness.shot_repair import REPAIR_SUBMIT_TOOL, _stage_produced, resolve_shot_refs
 
 from pydantic import ValidationError
@@ -33,6 +36,19 @@ from .view import (
 StartProject = Callable[[CreativeBrief], Path]
 
 _BUSY_NARRATIVE = {"running", "ready", "passed", "locked"}
+_VOICE_PREFIXES = ("utterance:", "audio:", "script_segment:")
+_MIXED_REPAIR_ERROR = (
+    "一次 harness.repair 只派一个制作 agent。"
+    "画面圈 shot:（或身份 changed_refs），配音圈 audio:，分开两次。"
+)
+_NO_SHOT_REPAIR_ERROR = (
+    "画面修要圈 shot: 或身份；配音圈 audio:。这次 target_refs 扩不出 shot。"
+)
+_LAYER_ERROR = "layer 只能是 spec、asset 或 voice"
+_ASSET_TARGET_ERROR = "layer=asset 只能圈 shot: 或身份，不能圈配音。"
+_VOICE_TARGET_ERROR = "layer=voice 只能圈 audio: 或说话人，不能圈 shot。"
+_NO_ASSET_YET = "还没有参考图或成片，不能只改实现。先出片，或去掉 layer 走修规格。"
+_NO_VOICE_YET = "还没有配音节点。演绎换声音请用 layer=asset 圈 shot:。"
 
 
 def inspect_progress(session: IntakeSession) -> tuple[IntakeSession, dict[str, Any]]:
@@ -140,20 +156,63 @@ def start_project(
     }
 
 
+def repair_lane_seeds(state, graph_refs: list[str]) -> tuple[list[str], list[str], list[str], bool]:
+    """One repair call seeds one production agent.
+
+    Voice refs stay on audio. Identity / beat / shot expand to shots only.
+    Mixing the two lanes in one target_refs list is rejected so intake
+    must dispatch narrative and voice separately after inspect-graph.
+    """
+
+    if _mixed_repair_lanes(graph_refs):
+        raise ValueError(_MIXED_REPAIR_ERROR)
+    format_id = state.context.constraints.get(
+        "narrative_format"
+    ) or state.context.constraints.get("production_mode")
+    voice_only = bool(graph_refs) and all(
+        item.startswith(_VOICE_PREFIXES) for item in graph_refs
+    )
+    identity_refs = [
+        item for item in graph_refs if item.startswith(("cast:", "prop:", "place:"))
+    ]
+    if voice_only:
+        return _audio_repair_refs(state, graph_refs) or list(graph_refs), [], identity_refs, False
+    shot_refs = resolve_shot_refs(state, graph_refs)
+    direct_shots = format_id in {"drama", "tutorial"}
+    if direct_shots:
+        seeds = list(dict.fromkeys([*identity_refs, *shot_refs]))
+        if not seeds:
+            raise ValueError(_NO_SHOT_REPAIR_ERROR)
+        return seeds, shot_refs, identity_refs, True
+    if not shot_refs:
+        raise ValueError(_NO_SHOT_REPAIR_ERROR)
+    return shot_refs, shot_refs, identity_refs, False
+
+
+def _mixed_repair_lanes(graph_refs: list[str]) -> bool:
+    has_voice = any(item.startswith(_VOICE_PREFIXES) for item in graph_refs)
+    has_picture = any(not item.startswith(_VOICE_PREFIXES) for item in graph_refs)
+    return has_voice and has_picture
+
+
 def repair_description(
     session: IntakeSession,
     target_refs: list[str],
     instruction: str,
     *,
+    layer: str | None = None,
     dry_run: bool = False,
     run_task: Callable[[TaskEnvelope, str], None] | None = None,
 ) -> tuple[IntakeSession, dict[str, Any]]:
     refs = [item.strip() for item in target_refs if item and item.strip()]
     note = instruction.strip()
+    mode = (layer or "spec").strip() or "spec"
     if not refs:
         return session, {"ok": False, "error": "target_refs 不能为空"}
     if not note:
         return session, {"ok": False, "error": "instruction 不能为空"}
+    if mode not in {"spec", "asset", "voice"}:
+        return session, {"ok": False, "error": _LAYER_ERROR}
     if not session.project_dir:
         return session, {"ok": False, "error": "还没有项目目录，无法 repair"}
     project_dir = Path(session.project_dir)
@@ -174,28 +233,32 @@ def repair_description(
             "error": "；".join(item["reason"] for item in missing),
             "blockers": missing,
         }
-    format_id = state.context.constraints.get(
-        "narrative_format"
-    ) or state.context.constraints.get("production_mode")
-    voice_only = (
-        format_id not in {"drama", "tutorial"}
-        and bool(graph_refs)
-        and all(
-            item.startswith(("utterance:", "audio:", "script_segment:"))
-            for item in graph_refs
+    if mode == "asset":
+        return _repair_assets(
+            session,
+            project_dir,
+            state,
+            graph_refs=graph_refs,
+            instruction=note,
+            dry_run=dry_run,
+            run_task=run_task,
         )
-    )
-    identity_refs = [
-        item for item in graph_refs if item.startswith(("cast:", "prop:", "place:"))
-    ]
-    shot_refs = [] if voice_only else resolve_shot_refs(state, graph_refs)
-    direct_shots = format_id in {"drama", "tutorial"} and not voice_only
-    if voice_only:
-        seeds = _audio_repair_refs(state, graph_refs) or graph_refs
-    elif direct_shots:
-        seeds = list(dict.fromkeys([*identity_refs, *shot_refs]))
-    else:
-        seeds = shot_refs or graph_refs
+    if mode == "voice":
+        return _repair_voice_media(
+            session,
+            project_dir,
+            state,
+            graph_refs=graph_refs,
+            instruction=note,
+            dry_run=dry_run,
+            run_task=run_task,
+        )
+    try:
+        seeds, shot_refs, identity_refs, direct_shots = repair_lane_seeds(
+            state, graph_refs
+        )
+    except ValueError as exc:
+        return session, {"ok": False, "error": str(exc), "target_refs": graph_refs}
     try:
         working = state.model_copy(deep=True)
         invalidated = invalidate_subgraph(working, seeds)
@@ -362,6 +425,243 @@ def _repair_direct_shots(
         ),
         "progress": session.progress.model_dump(mode="json"),
     }
+
+
+def _repair_assets(
+    session: IntakeSession,
+    project_dir: Path,
+    state,
+    *,
+    graph_refs: list[str],
+    instruction: str,
+    dry_run: bool,
+    run_task: Callable[[TaskEnvelope, str], None] | None,
+) -> tuple[IntakeSession, dict[str, Any]]:
+    if any(item.startswith(_VOICE_PREFIXES) for item in graph_refs):
+        return session, {
+            "ok": False,
+            "error": _ASSET_TARGET_ERROR,
+            "target_refs": graph_refs,
+        }
+    identity_refs, shot_ids = expand_asset_regenerate(state, graph_refs)
+    if not identity_refs and not shot_ids:
+        return session, {
+            "ok": False,
+            "error": "layer=asset 要圈 shot: 或身份。",
+            "target_refs": graph_refs,
+        }
+    format_id = state.context.constraints.get(
+        "narrative_format"
+    ) or state.context.constraints.get("production_mode")
+    if format_id not in {"drama", "tutorial"}:
+        return session, {
+            "ok": False,
+            "error": "只有短剧/教程能按 layer=asset 重出参考图或成片。",
+            "target_refs": graph_refs,
+        }
+    if not _asset_realization_ready(state, identity_refs, shot_ids):
+        return session, {
+            "ok": False,
+            "error": _NO_ASSET_YET,
+            "target_refs": graph_refs,
+        }
+    shot_refs = [f"shot:{shot_id}" for shot_id in shot_ids]
+    preview = {
+        "layer": "asset",
+        "target_refs": graph_refs,
+        "identity_refs": identity_refs,
+        "shot_refs": shot_refs,
+        "regenerated_identity_refs": identity_refs,
+        "regenerated_shot_ids": shot_ids,
+        "invalidated": [],
+        "planned_tasks": 1,
+        "complete": False,
+    }
+    circled = ", ".join(identity_refs + shot_refs) or ", ".join(graph_refs)
+    if dry_run:
+        return session, {
+            "ok": True,
+            "dry_run": True,
+            **preview,
+            "text": f"dry-run：将按实现层重做 {circled}，不改规格。",
+        }
+    if run_task is None:
+        return session, {
+            "ok": False,
+            "error": "harness.repair 执行器未接线",
+            **preview,
+        }
+    from ..harness.shot_asset_controller import (
+        GENERATE_IDENTITY_TOOL,
+        GENERATE_TOOL,
+        GRAPH_TOOL,
+        LIST_IDENTITIES_TOOL,
+        LIST_TOOL,
+        SUBMIT_TOOL,
+    )
+
+    task = TaskEnvelope(
+        task_id=(
+            f"task_repair_asset_{state.context.project_id}_v"
+            f"{state.context.state_version}"
+        ),
+        agent="asset_stage",
+        goal="按 instruction 重做圈中参考图与成片，不改规格",
+        scope=TaskScope(
+            project_id=state.context.project_id,
+            shot_ids=shot_ids,
+            target_refs=list(dict.fromkeys([*identity_refs, *shot_refs])),
+        ),
+        based_on_state_version=state.context.state_version,
+        format_id=format_id,
+        allowed_tools=[
+            LIST_IDENTITIES_TOOL,
+            LIST_TOOL,
+            GRAPH_TOOL,
+            GENERATE_IDENTITY_TOOL,
+            GENERATE_TOOL,
+            SUBMIT_TOOL,
+        ],
+        required_outputs=["assets"] if shot_ids else ["identities"],
+        budget=TaskBudget(
+            max_steps=min(128, max(8, (len(identity_refs) + len(shot_ids)) * 2 + 6)),
+            max_retries=1,
+        ),
+        input_hash="repair-asset",
+    )
+    try:
+        run_task(task, instruction)
+    except Exception as exc:
+        session = refresh_session_from_disk(session)
+        return session, {
+            "ok": False,
+            "error": f"repair 执行失败：{exc}",
+            **preview,
+        }
+    session = refresh_session_from_disk(session)
+    return session, {
+        "ok": True,
+        "complete": True,
+        "dry_run": False,
+        **preview,
+        "text": (
+            f"repair 完成。已按实现层重做 {circled}。"
+            f"{format_progress(session.progress)}"
+        ),
+        "progress": session.progress.model_dump(mode="json"),
+    }
+
+
+def _repair_voice_media(
+    session: IntakeSession,
+    project_dir: Path,
+    state,
+    *,
+    graph_refs: list[str],
+    instruction: str,
+    dry_run: bool,
+    run_task: Callable[[TaskEnvelope, str], None] | None,
+) -> tuple[IntakeSession, dict[str, Any]]:
+    if any(item.startswith("shot:") for item in graph_refs):
+        return session, {
+            "ok": False,
+            "error": _VOICE_TARGET_ERROR,
+            "target_refs": graph_refs,
+        }
+    audio_refs = expand_voice_refs(state, graph_refs, instruction)
+    if not audio_refs:
+        return session, {
+            "ok": False,
+            "error": _NO_VOICE_YET,
+            "target_refs": graph_refs,
+        }
+    preview = {
+        "layer": "voice",
+        "target_refs": graph_refs,
+        "shot_refs": [],
+        "invalidated": [],
+        "audio_refs": audio_refs,
+        "planned_tasks": 1,
+        "complete": False,
+    }
+    circled = ", ".join(audio_refs)
+    if dry_run:
+        return session, {
+            "ok": True,
+            "dry_run": True,
+            **preview,
+            "text": f"dry-run：将按实现层重配 {circled}，不改词。",
+        }
+    if run_task is None:
+        return session, {
+            "ok": False,
+            "error": "harness.repair 执行器未接线",
+            **preview,
+        }
+    graph = DependencyGraph(state.dependency_graph)
+    required = sorted(
+        {
+            dep
+            for ref in audio_refs
+            for dep in state.dependency_graph.nodes[ref].depends_on
+        }
+    )
+    snapshots = graph.snapshot(required) if required else []
+    task = TaskEnvelope(
+        task_id=(
+            f"task_repair_voice_{state.context.project_id}_v"
+            f"{state.context.state_version}"
+        ),
+        agent="voice_agent",
+        goal="按 instruction 重配圈中音频，不改词",
+        scope=TaskScope(
+            project_id=state.context.project_id,
+            target_refs=audio_refs,
+        ),
+        based_on_state_version=state.context.state_version,
+        allowed_tools=_TOOLS["voice_agent"],
+        required_outputs=["timed_audio"],
+        budget=TaskBudget(max_steps=8, max_retries=1),
+        input_hash=repair_input_hash(snapshots, audio_refs),
+        dependency_snapshot=snapshots,
+    )
+    try:
+        run_task(task, instruction)
+    except Exception as exc:
+        session = refresh_session_from_disk(session)
+        return session, {
+            "ok": False,
+            "error": f"repair 执行失败：{exc}",
+            **preview,
+        }
+    session = refresh_session_from_disk(session)
+    return session, {
+        "ok": True,
+        "complete": True,
+        "dry_run": False,
+        **preview,
+        "text": (
+            f"repair 完成。已按实现层重配 {circled}。"
+            f"{format_progress(session.progress)}"
+        ),
+        "progress": session.progress.model_dump(mode="json"),
+    }
+
+
+def _asset_realization_ready(state, identity_refs: list[str], shot_ids: list[str]) -> bool:
+    if _stage_produced(state, "asset") or _stage_produced(state, "references"):
+        return True
+    from ..harness.world_identities import identity_record
+
+    for ref in identity_refs:
+        item = identity_record(state, ref)
+        if item is not None and getattr(item, "reference_image", None):
+            return True
+    wanted = set(shot_ids)
+    return any(
+        item.spec.shot_id in wanted and item.media is not None
+        for item in state.production.shots
+    )
 
 
 def _audio_repair_refs(state, graph_refs: list[str]) -> list[str]:

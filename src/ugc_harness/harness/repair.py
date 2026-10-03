@@ -49,6 +49,7 @@ AGENT_STAGE: dict[str, str] = {
     "voice_agent": "voice",
     "editorial_agent": "editorial",
     "asset_agent": "asset",
+    "asset_stage": "asset",
     "timeline_agent": "timeline",
     "render_agent": "render",
 }
@@ -62,6 +63,7 @@ _TOOLS: dict[str, list[str]] = {
         *_NARRATIVE_FORMATS.capability_tools,
     ],
     "voice_agent": [
+        "voice.select_voice",
         "voice.create_plan",
         "audio.synthesize_narration",
         "voice.submit_candidate",
@@ -69,6 +71,8 @@ _TOOLS: dict[str, list[str]] = {
     "editorial_agent": ["editorial.create_plan", "editorial.submit_candidate"],
     "asset_agent": [
         "asset.acquire_requirement",
+        "asset.list_talking_heads",
+        "asset.generate_talking_head",
         "asset.prepare_image",
         "asset.submit_candidate",
     ],
@@ -165,13 +169,10 @@ class RepairScheduler:
             if agent == "narrative_agent":
                 mode = state.context.constraints.get(
                     "narrative_format",
-                    state.context.constraints.get(
-                        "production_mode",
-                        "auto",
-                    ),
+                    state.context.constraints.get("production_mode", "explainer"),
                 )
                 if not isinstance(mode, str):
-                    mode = "auto"
+                    mode = "explainer"
                 pack = _NARRATIVE_FORMATS.resolve(mode)
                 tasks.append(
                     pack.create_repair_task(
@@ -207,7 +208,11 @@ class RepairScheduler:
                         "输出通过所属领域的独立 Critic",
                     ],
                     budget=TaskBudget(
-                        max_steps=8 if agent == "narrative_agent" else 4,
+                        max_steps=(
+                            8
+                            if agent in {"narrative_agent", "voice_agent"}
+                            else 4
+                        ),
                         max_retries=1,
                         fallback_policy="use_best_available",
                     ),
@@ -430,9 +435,9 @@ def drive_repair(
                 tasks_run=tasks_run,
                 error="repair scheduler produced no runnable task",
             )
-        for task in plan.tasks:
-            run_task(task, instruction)
-            tasks_run.append(task.task_id)
+        task = plan.tasks[0]
+        run_task(task, instruction)
+        tasks_run.append(task.task_id)
     return RepairRunResult(
         ok=False,
         target_refs=desired_refs,

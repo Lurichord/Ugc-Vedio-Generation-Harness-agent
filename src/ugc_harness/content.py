@@ -24,7 +24,7 @@ from .shared.models import StrictModel
 
 
 SectionRole = Literal["hook", "body", "close"]
-ProductionMode = Literal["auto", "explainer", "drama", "tutorial"]
+ProductionMode = Literal["explainer", "drama", "tutorial"]
 NarrativeFormatId = Literal["explainer", "drama", "tutorial"]
 BeatRole = Literal[
     "question",

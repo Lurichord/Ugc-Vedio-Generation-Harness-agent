@@ -77,15 +77,29 @@ def identity_record(state: ProjectState, ref: str) -> Any | None:
 
 def identity_prompt(item: Any) -> str:
     name = str(getattr(item, "name", "") or "subject")
-    description = str(getattr(item, "description", "") or "")
+    description = str(getattr(item, "description", "") or "").strip()
     appearance = getattr(item, "appearance", None)
     if appearance is None:
         constraints = getattr(item, "appearance_constraints", None) or []
-        appearance = "；".join(str(part) for part in constraints if part)
+        appearance = "、".join(str(part) for part in constraints if part)
+    else:
+        appearance = str(appearance).strip()
+    features = "、".join(part for part in (description, appearance) if part)
+    labeled = f"{name}：{features}" if features else name
+    if getattr(item, "character_id", None):
+        return (
+            f"9:16 竖屏锁脸静帧。{labeled}。"
+            "无表情，面部清楚，肩部以上占比大，浅色虚化背景。"
+            "不要全身远景，不要三视图，无文字无 logo。"
+        )
+    if getattr(item, "place_id", None):
+        return (
+            f"9:16 竖屏场景静帧。{labeled}。"
+            "主体占画面主要位置。无文字无 logo。"
+        )
     return (
-        "Vertical 9:16 identity reference still for a UGC video. "
-        f"Subject: {name}. {description}. {appearance or ''} "
-        "Clear recognizable subject, neutral pose, no text or logos."
+        f"9:16 竖屏道具静帧。{labeled}。"
+        "主体大、居中，形状材料颜色清楚。无文字无 logo。"
     )
 
 

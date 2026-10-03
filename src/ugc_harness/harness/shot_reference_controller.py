@@ -20,7 +20,7 @@ from ..agents.narrative_agent.models import NarrativeArtifact
 from ..shared.image_generation import generate_seedream_image
 from ..shared.models import StrictModel
 from ..shared.settings import AssetGenerationSettings
-from .dependencies import DependencyGraph
+from .dependencies import DependencyGraph, semantic_hash
 from .dependency_builders import content_commits, has_content_graph
 from .models import (
     ActionRecord,
@@ -77,6 +77,7 @@ class IdentityReferenceItem(StrictModel):
     kind: str
     name: str
     local_path: str
+    generation_prompt: str | None = None
 
 
 class IdentityReferenceArtifact(StrictModel):
@@ -250,7 +251,7 @@ class ShotReferenceHarnessController:
             forbidden_actions=["modify_shots", "generate_video"],
             acceptance_criteria=["每个被绑定的身份都有可读参考图"],
             budget=TaskBudget(
-                max_steps=min(128, max(4, len(refs) + 2)),
+                max_steps=min(128, max(8, len(refs) * 2 + 6)),
                 max_retries=1,
             ),
             input_hash=hashlib.sha256(
@@ -319,6 +320,7 @@ def write_identity_image(
     project_dir: str | Path,
     ref: str,
     provider: IdentityImageProvider,
+    prompt: str | None = None,
 ) -> str:
     token = ref.strip()
     item = identity_record(state, token)
@@ -326,12 +328,37 @@ def write_identity_image(
         raise ValueError(f"production 里没有身份 {token}")
     root = Path(project_dir)
     output = identity_image_path(root, token)
-    provider.generate(ref=token, prompt=identity_prompt(item), output=output)
+    text = (prompt or "").strip() or identity_prompt(item)
+    provider.generate(ref=token, prompt=text, output=output)
     if not output.is_file() or not output.stat().st_size:
         raise RuntimeError(f"identity image was not written: {output}")
     relative = output.relative_to(root).as_posix()
     set_reference_image(state, token, relative)
+    item.generation_prompt = text
     return relative
+
+
+def merge_identity_reference_artifact(
+    existing: IdentityReferenceArtifact,
+    incoming: IdentityReferenceArtifact,
+) -> IdentityReferenceArtifact:
+    by_ref = {item.ref: item for item in existing.identities}
+    for item in incoming.identities:
+        by_ref[item.ref] = item
+    ordered: list[IdentityReferenceItem] = []
+    seen: set[str] = set()
+    for item in existing.identities:
+        current = by_ref.get(item.ref)
+        if current is None or item.ref in seen:
+            continue
+        ordered.append(current)
+        seen.add(item.ref)
+    for item in incoming.identities:
+        if item.ref in seen:
+            continue
+        ordered.append(item)
+        seen.add(item.ref)
+    return incoming.model_copy(update={"identities": ordered})
 
 
 def apply_identity_references(
@@ -341,17 +368,34 @@ def apply_identity_references(
     refs = [item.ref for item in artifact.identities]
     for item in artifact.identities:
         set_reference_image(state, item.ref, item.local_path)
+        record = identity_record(state, item.ref)
+        if record is not None and item.generation_prompt:
+            record.generation_prompt = item.generation_prompt
     document = document_from_state(state)
     allowed = set(refs)
     commits = [item for item in content_commits(document) if item.ref in allowed]
     missing = allowed - {item.ref for item in commits}
     if missing:
         raise ValueError(f"无法提交这些身份节点：{sorted(missing)}")
+    nodes = state.dependency_graph.nodes
+    changed = [
+        item
+        for item in commits
+        if _identity_node_changed(nodes.get(item.ref), item.value)
+    ]
+    if not changed:
+        return
     DependencyGraph(state.dependency_graph).commit_batch(
         task_id="references_submit",
-        produced_by="references_agent",
-        commits=commits,
+        produced_by="asset_stage",
+        commits=changed,
     )
+
+
+def _identity_node_changed(node: object, value: object) -> bool:
+    if node is None or getattr(node, "status", None) != "current":
+        return True
+    return getattr(node, "content_hash", None) != semantic_hash(value)
 
 
 def _existing_images(state: ProjectState, project_dir: Path) -> dict[str, str]:
@@ -385,6 +429,9 @@ def _list_payload(
                 "name": name,
                 "path": path if has_image else None,
                 "has_image": has_image,
+                "generation_prompt": (
+                    getattr(item, "generation_prompt", None) if item is not None else None
+                ),
             }
         )
         if not has_image:

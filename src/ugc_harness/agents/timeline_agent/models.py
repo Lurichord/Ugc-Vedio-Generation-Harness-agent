@@ -42,6 +42,7 @@ class TimelineClip(StrictModel):
         "fit_narration_to_video",
     ]
     transition_in: Literal["none", "hard_cut", "punch_cut"]
+    preserve_source_audio: bool = False
 
     @model_validator(mode="after")
     def validate_times(self) -> "TimelineClip":

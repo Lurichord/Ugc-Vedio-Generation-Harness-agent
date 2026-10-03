@@ -8,14 +8,21 @@ from typing import Any
 from mcp.server import MCPServer
 
 from tests.test_quality import sample_plan, sample_script
+from ugc_harness.agents.narrative_agent.assemble import (
+    assemble_candidate,
+    fill_generation_prompt,
+    with_resolved_profile,
+)
+from ugc_harness.agents.narrative_agent.memory import summarize_identities, summarize_shots
 from ugc_harness.agents.narrative_agent.models import (
     BeatPlanArtifact,
+    CreativeBrief,
     DramaActionPlanArtifact,
     DramaPlanningArtifact,
     DramaStoryArtifact,
     DramaWorldArtifact,
     NarrativeCandidate,
-    PlanningArtifact,
+    NarrativeIdentitiesArtifact,
     ScriptArtifact,
     SectionPlanArtifact,
     ShotPlanArtifact,
@@ -29,100 +36,39 @@ from ugc_harness.agents.narrative_agent.shots import (
     compile_explainer_shots,
     compile_tutorial_shots,
 )
+from ugc_harness.content import ProductionShot
 
 
-mcp = MCPServer("test-narrative", version="2.0.0")
-_section_plan: SectionPlanArtifact | None = None
-_planning: PlanningArtifact | None = None
-_script: ScriptArtifact | None = None
-_shots: ShotPlanArtifact | None = None
+mcp = MCPServer("test-narrative", version="3.1.0")
+_brief: CreativeBrief | None = None
 _format_id = "explainer"
-_drama_world: DramaWorldArtifact | None = None
-_drama_story: DramaStoryArtifact | None = None
-_drama_actions: DramaActionPlanArtifact | None = None
-_drama_planning: DramaPlanningArtifact | None = None
-_tutorial_definition: TutorialDefinitionArtifact | None = None
-_tutorial_procedure: TutorialProcedureArtifact | None = None
-_tutorial_planning: TutorialPlanningArtifact | None = None
-_tutorial_script: TutorialScriptArtifact | None = None
+_identities: NarrativeIdentitiesArtifact | None = None
+_shots: ShotPlanArtifact | None = None
+_section_plan: SectionPlanArtifact | None = None
+_beat_plan: BeatPlanArtifact | None = None
+_script: ScriptArtifact | TutorialScriptArtifact | None = None
+_world: DramaWorldArtifact | None = None
+_story: DramaStoryArtifact | None = None
+_action_plan: DramaActionPlanArtifact | None = None
+_definition: TutorialDefinitionArtifact | None = None
+_procedure: TutorialProcedureArtifact | None = None
 
 
-def _sample_explainer() -> tuple[PlanningArtifact, ScriptArtifact]:
+def _sample_explainer() -> tuple[object, object]:
     baseline_path = os.getenv("NARRATIVE_EXPLAINER_ARTIFACT")
     if baseline_path:
         payload = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
+        from ugc_harness.agents.narrative_agent.models import (
+            PlanningArtifact,
+            ScriptArtifact,
+        )
+
         return (
             PlanningArtifact.model_validate(payload["planning"]),
             ScriptArtifact.model_validate(payload["script"]),
         )
     plan = sample_plan()
     return plan, sample_script(plan)
-
-
-@mcp.tool(name="narrative.configure_task", structured_output=True)
-def configure_task(
-    brief: dict[str, Any],
-    model: str,
-    generation_context: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    global _section_plan, _planning, _script, _shots, _format_id
-    global _drama_world, _drama_story, _drama_actions, _drama_planning
-    global _tutorial_definition, _tutorial_procedure, _tutorial_planning
-    global _tutorial_script
-    _section_plan = None
-    _planning = None
-    _script = None
-    _shots = None
-    _format_id = str(brief.get("production_mode") or "explainer")
-    if _format_id == "auto":
-        _format_id = "explainer"
-    _drama_world = None
-    _drama_story = None
-    _drama_actions = None
-    _drama_planning = None
-    _tutorial_definition = None
-    _tutorial_procedure = None
-    _tutorial_planning = None
-    _tutorial_script = None
-    return {
-        "project_id": brief["project_id"],
-        "model": model,
-        "format_id": _format_id,
-        "status": "configured",
-    }
-
-
-@mcp.tool(name="narrative.submit_candidate", structured_output=True)
-def submit_candidate() -> NarrativeCandidate:
-    if _format_id == "drama":
-        if _drama_world is None or _drama_planning is None or _shots is None:
-            raise ValueError("drama candidate is incomplete")
-        return NarrativeCandidate(
-            world_state=_drama_world.world_state,
-            planning=_drama_planning,
-            shots=_shots,
-        )
-    if _format_id == "tutorial":
-        if _tutorial_planning is None or _tutorial_script is None or _shots is None:
-            raise ValueError(
-                "tutorial candidate is incomplete: "
-                f"planning={_tutorial_planning is not None}, "
-                f"script={_tutorial_script is not None}, shots={_shots is not None}"
-            )
-        return NarrativeCandidate(
-            world_state=_tutorial_planning.world_state,
-            planning=_tutorial_planning,
-            script=_tutorial_script,
-            shots=_shots,
-        )
-    if _planning is None or _script is None or _shots is None:
-        raise ValueError("explainer candidate is incomplete")
-    return NarrativeCandidate(
-        world_state=_planning.world_state,
-        planning=_planning,
-        script=_script,
-        shots=_shots,
-    )
 
 
 def _sample_drama_world() -> DramaWorldArtifact:
@@ -228,47 +174,6 @@ def _sample_drama_actions() -> DramaActionPlanArtifact:
     )
 
 
-@mcp.tool(name="narrative.drama.design_world", structured_output=True)
-def design_drama_world(problems: list[str] | None = None) -> DramaWorldArtifact:
-    global _drama_world
-    _drama_world = _sample_drama_world()
-    return _drama_world
-
-
-@mcp.tool(name="narrative.drama.plan_story", structured_output=True)
-def plan_drama_story(problems: list[str] | None = None) -> DramaStoryArtifact:
-    global _drama_story
-    _drama_story = _sample_drama_story()
-    return _drama_story
-
-
-@mcp.tool(name="narrative.drama.expand_scenes", structured_output=True)
-def expand_drama_scenes(
-    problems: list[str] | None = None,
-) -> DramaActionPlanArtifact:
-    global _drama_actions, _drama_planning
-    if _drama_world is None or _drama_story is None:
-        raise RuntimeError("narrative.drama.plan_story must succeed first")
-    _drama_actions = _sample_drama_actions()
-    _drama_planning = DramaPlanningArtifact.from_parts(
-        _drama_world,
-        _drama_story,
-        _drama_actions,
-    )
-    return _drama_actions
-
-
-@mcp.tool(name="narrative.drama.compile_shots", structured_output=True)
-def compile_drama_fixture_shots(
-    problems: list[str] | None = None,
-) -> ShotPlanArtifact:
-    global _shots
-    if _drama_planning is None:
-        raise RuntimeError("narrative.drama.expand_scenes must succeed first")
-    _shots = compile_drama_shots(_drama_planning)
-    return _shots
-
-
 def _sample_tutorial_definition() -> TutorialDefinitionArtifact:
     plan = sample_plan()
     return TutorialDefinitionArtifact.model_validate(
@@ -353,101 +258,401 @@ def _sample_tutorial_procedure() -> TutorialProcedureArtifact:
     )
 
 
-@mcp.tool(name="narrative.tutorial.define_result", structured_output=True)
-def define_tutorial_result(problems: list[str] | None = None) -> TutorialDefinitionArtifact:
-    global _tutorial_definition, _tutorial_planning
-    _tutorial_definition = _sample_tutorial_definition()
-    if _tutorial_procedure is not None:
-        _tutorial_planning = TutorialPlanningArtifact.from_parts(
-            _tutorial_definition, _tutorial_procedure
-        )
-    return _tutorial_definition
-
-
-@mcp.tool(name="narrative.tutorial.plan_steps", structured_output=True)
-def plan_tutorial_steps(problems: list[str] | None = None) -> TutorialProcedureArtifact:
-    global _tutorial_definition, _tutorial_procedure, _tutorial_planning
-    if _tutorial_definition is None:
-        _tutorial_definition = _sample_tutorial_definition()
-    _tutorial_procedure = _sample_tutorial_procedure()
-    if _tutorial_definition is not None:
-        _tutorial_planning = TutorialPlanningArtifact.from_parts(
-            _tutorial_definition, _tutorial_procedure
-        )
-    return _tutorial_procedure
-
-
-@mcp.tool(name="narrative.tutorial.plan_explanations", structured_output=True)
-def plan_tutorial_explanations(problems: list[str] | None = None) -> TutorialScriptArtifact:
-    global _tutorial_planning, _tutorial_script
-    if _tutorial_definition is None or _tutorial_procedure is None:
-        raise RuntimeError("tutorial planning drafts are incomplete")
-    _tutorial_planning = TutorialPlanningArtifact.from_parts(
-        _tutorial_definition, _tutorial_procedure
-    )
-    _tutorial_script = TutorialScriptArtifact.model_validate(
+def plan_tutorial_explanations(
+    problems: list[str] | None = None,
+) -> TutorialScriptArtifact:
+    del problems
+    return TutorialScriptArtifact.model_validate(
         {
             "segments": [
-                {"explanation_segment_id": "te01", "step_id": "step_fold", "placement": "during_action", "text": "关键不是卷得紧，而是让底部折角完全闭合。"},
-                {"explanation_segment_id": "te02", "step_id": "step_fill", "placement": "after_action", "text": "米不要装满，留下的这一指空间就是封口余量。"},
-                {"explanation_segment_id": "te03", "step_id": "step_tie", "placement": "during_action", "text": "棉线要跨过容易张开的两个方向，固定后再打结。"},
+                {
+                    "explanation_segment_id": "te01",
+                    "step_id": "step_fold",
+                    "placement": "during_action",
+                    "text": "关键不是卷得紧，而是让底部折角完全闭合。",
+                },
+                {
+                    "explanation_segment_id": "te02",
+                    "step_id": "step_fill",
+                    "placement": "after_action",
+                    "text": "米不要装满，留下的这一指空间就是封口余量。",
+                },
+                {
+                    "explanation_segment_id": "te03",
+                    "step_id": "step_tie",
+                    "placement": "during_action",
+                    "text": "棉线要跨过容易张开的两个方向，固定后再打结。",
+                },
             ]
         }
     )
-    return _tutorial_script
 
 
-@mcp.tool(name="narrative.tutorial.compile_shots", structured_output=True)
-def compile_tutorial_fixture_shots(problems: list[str] | None = None) -> ShotPlanArtifact:
-    global _shots
-    if _tutorial_planning is None or _tutorial_script is None:
-        raise RuntimeError("tutorial explanations must succeed first")
-    _shots = compile_tutorial_shots(_tutorial_planning, _tutorial_script)
-    return _shots
-
-
-@mcp.tool(name="narrative.explainer.plan_sections", structured_output=True)
-def plan_sections(problems: list[str] | None = None) -> SectionPlanArtifact:
-    global _section_plan
+def _canned_section_plan() -> SectionPlanArtifact:
     plan, _ = _sample_explainer()
-    _section_plan = SectionPlanArtifact.model_validate(
+    return SectionPlanArtifact(
+        narrative_pattern=plan.narrative_pattern,
+        one_sentence_thesis=plan.one_sentence_thesis,
+        world_state=plan.world_state,
+        video_profile=plan.video_profile,
+        sections=plan.sections,
+    )
+
+
+def _canned_beat_plan() -> BeatPlanArtifact:
+    plan, _ = _sample_explainer()
+    return BeatPlanArtifact(beats=plan.beats)
+
+
+def _canned_script() -> ScriptArtifact:
+    _, script = _sample_explainer()
+    return script
+
+
+def _canned_identities(format_id: str) -> NarrativeIdentitiesArtifact:
+    if format_id == "drama":
+        world = _sample_drama_world()
+        return NarrativeIdentitiesArtifact(
+            one_sentence_thesis=world.one_sentence_thesis,
+            world_state=world.world_state,
+            video_profile=world.video_profile,
+            characters=world.characters,
+        )
+    if format_id == "tutorial":
+        definition = _sample_tutorial_definition()
+        return NarrativeIdentitiesArtifact(
+            one_sentence_thesis=definition.one_sentence_thesis,
+            world_state=definition.world_state,
+            video_profile=definition.video_profile,
+            objective=definition.objective,
+            materials=definition.materials,
+            tools=definition.tools,
+            coverage_requirements=definition.coverage_requirements,
+        )
+    plan, _ = _sample_explainer()
+    return NarrativeIdentitiesArtifact(
+        one_sentence_thesis=plan.one_sentence_thesis,
+        world_state=plan.world_state,
+        video_profile=plan.video_profile,
+    )
+
+
+def _canned_shots(format_id: str) -> ShotPlanArtifact:
+    if format_id == "drama":
+        planning = DramaPlanningArtifact.from_parts(
+            _sample_drama_world(),
+            _sample_drama_story(),
+            _sample_drama_actions(),
+        )
+        return compile_drama_shots(planning)
+    if format_id == "tutorial":
+        definition = _sample_tutorial_definition()
+        procedure = _sample_tutorial_procedure()
+        planning = TutorialPlanningArtifact.from_parts(definition, procedure)
+        return compile_tutorial_shots(planning, plan_tutorial_explanations())
+    plan, script = _sample_explainer()
+    return compile_explainer_shots(plan, script)
+
+
+def _reset_layers() -> None:
+    global _identities, _shots, _section_plan, _beat_plan, _script
+    global _world, _story, _action_plan, _definition, _procedure
+    _identities = None
+    _shots = None
+    _section_plan = None
+    _beat_plan = None
+    _script = None
+    _world = None
+    _story = None
+    _action_plan = None
+    _definition = None
+    _procedure = None
+
+
+def _layers() -> dict[str, Any]:
+    return {
+        "section_plan": _section_plan,
+        "beat_plan": _beat_plan,
+        "script": _script,
+        "world": _world,
+        "story": _story,
+        "action_plan": _action_plan,
+        "definition": _definition,
+        "procedure": _procedure,
+    }
+
+
+def _store_identities(book: NarrativeIdentitiesArtifact) -> NarrativeIdentitiesArtifact:
+    global _identities
+    if _brief is not None:
+        book = with_resolved_profile(book, _brief, _format_id)
+    _identities = book
+    return book
+
+
+@mcp.tool(name="narrative.configure_task", structured_output=True)
+def configure_task(
+    brief: dict[str, Any],
+    model: str,
+    generation_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    global _brief, _format_id, _identities, _shots
+    _brief = CreativeBrief.model_validate(brief)
+    _format_id = str(brief.get("production_mode") or "explainer")
+    _reset_layers()
+    context = generation_context or {}
+    seed_identities = context.get("seed_identities")
+    if isinstance(seed_identities, dict):
+        _store_identities(NarrativeIdentitiesArtifact.model_validate(seed_identities))
+    seed_shots = context.get("seed_shots")
+    if isinstance(seed_shots, list) and seed_shots:
+        _shots = ShotPlanArtifact(
+            shots=[ProductionShot.model_validate(item) for item in seed_shots]
+        )
+    return {
+        "project_id": brief["project_id"],
+        "model": model,
+        "format_id": _format_id,
+        "status": "configured",
+    }
+
+
+@mcp.tool(name="narrative.write_identities", structured_output=True)
+def write_identities(identities: dict[str, Any] | None = None) -> dict[str, Any]:
+    if identities:
+        book = NarrativeIdentitiesArtifact.model_validate(identities)
+    else:
+        book = _canned_identities(_format_id)
+    return summarize_identities(_store_identities(book))
+
+
+@mcp.tool(name="narrative.write_sections", structured_output=True)
+def write_sections(sections: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _section_plan
+    plan = (
+        SectionPlanArtifact.model_validate(sections)
+        if sections
+        else _canned_section_plan()
+    )
+    _section_plan = plan
+    _store_identities(
+        NarrativeIdentitiesArtifact(
+            one_sentence_thesis=plan.one_sentence_thesis,
+            world_state=plan.world_state,
+            video_profile=plan.video_profile,
+        )
+    )
+    return {
+        "ok": True,
+        "sections": [
+            {"section_id": item.section_id, "role": item.role, "goal": item.goal}
+            for item in plan.sections
+        ],
+    }
+
+
+@mcp.tool(name="narrative.write_beats", structured_output=True)
+def write_beats(beats: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _beat_plan
+    if _section_plan is None and beats is None:
+        write_sections()
+    plan = BeatPlanArtifact.model_validate(beats) if beats else _canned_beat_plan()
+    _beat_plan = plan
+    return {"ok": True, "count": len(plan.beats)}
+
+
+@mcp.tool(name="narrative.write_script", structured_output=True)
+def write_script(script: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _script
+    if _beat_plan is None and script is None:
+        write_beats()
+    artifact = ScriptArtifact.model_validate(script) if script else _canned_script()
+    _script = artifact
+    return {"ok": True, "segments": len(artifact.segments)}
+
+
+@mcp.tool(name="narrative.write_world", structured_output=True)
+def write_world(world: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _world
+    artifact = (
+        DramaWorldArtifact.model_validate(world) if world else _sample_drama_world()
+    )
+    _world = artifact
+    _store_identities(
+        NarrativeIdentitiesArtifact(
+            one_sentence_thesis=artifact.one_sentence_thesis,
+            world_state=artifact.world_state,
+            video_profile=artifact.video_profile,
+            characters=list(artifact.characters),
+        )
+    )
+    return summarize_identities(_identities) if _identities is not None else {"ok": True}
+
+
+@mcp.tool(name="narrative.write_story", structured_output=True)
+def write_story(story: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _story
+    if _world is None and story is None:
+        write_world()
+    artifact = (
+        DramaStoryArtifact.model_validate(story) if story else _sample_drama_story()
+    )
+    _story = artifact
+    return {"ok": True, "scenes": len(artifact.scenes)}
+
+
+@mcp.tool(name="narrative.write_actions", structured_output=True)
+def write_actions(actions: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _action_plan
+    if _story is None and actions is None:
+        write_story()
+    artifact = (
+        DramaActionPlanArtifact.model_validate(actions)
+        if actions
+        else _sample_drama_actions()
+    )
+    _action_plan = artifact
+    return {"ok": True, "count": len(artifact.actions)}
+
+
+@mcp.tool(name="narrative.write_definition", structured_output=True)
+def write_definition(definition: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _definition
+    artifact = (
+        TutorialDefinitionArtifact.model_validate(definition)
+        if definition
+        else _sample_tutorial_definition()
+    )
+    _definition = artifact
+    _store_identities(
+        NarrativeIdentitiesArtifact(
+            one_sentence_thesis=artifact.one_sentence_thesis,
+            world_state=artifact.world_state,
+            video_profile=artifact.video_profile,
+            objective=artifact.objective,
+            materials=list(artifact.materials),
+            tools=list(artifact.tools),
+            coverage_requirements=list(artifact.coverage_requirements),
+        )
+    )
+    return summarize_identities(_identities) if _identities is not None else {"ok": True}
+
+
+@mcp.tool(name="narrative.write_procedure", structured_output=True)
+def write_procedure(procedure: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _procedure
+    if _definition is None and procedure is None:
+        write_definition()
+    artifact = (
+        TutorialProcedureArtifact.model_validate(procedure)
+        if procedure
+        else _sample_tutorial_procedure()
+    )
+    _procedure = artifact
+    return {"ok": True, "steps": len(artifact.steps)}
+
+
+@mcp.tool(name="narrative.write_explanations", structured_output=True)
+def write_explanations(explanations: dict[str, Any] | None = None) -> dict[str, Any]:
+    global _script
+    if _procedure is None and explanations is None:
+        write_procedure()
+    artifact = (
+        TutorialScriptArtifact.model_validate(explanations)
+        if explanations
+        else plan_tutorial_explanations()
+    )
+    _script = artifact
+    return {"ok": True, "segments": len(artifact.segments)}
+
+
+@mcp.tool(name="narrative.write_shots", structured_output=True)
+def write_shots(
+    shots: list[dict[str, Any]] | None = None,
+    identities: dict[str, Any] | None = None,
+    merge: bool = True,
+) -> dict[str, Any]:
+    global _identities, _shots
+    if identities:
+        _store_identities(NarrativeIdentitiesArtifact.model_validate(identities))
+    if shots:
+        incoming = [
+            fill_generation_prompt(ProductionShot.model_validate(item)) for item in shots
+        ]
+        if merge and _shots is not None:
+            by_id = {item.shot_id: item for item in _shots.shots}
+            for item in incoming:
+                by_id[item.shot_id] = item
+            ordered = sorted(by_id.values(), key=lambda item: item.order)
+        else:
+            ordered = incoming
+        _shots = ShotPlanArtifact(shots=ordered)
+    elif identities is None and shots is None:
+        if _identities is None:
+            if _format_id == "drama":
+                write_world()
+            elif _format_id == "tutorial":
+                write_definition()
+            else:
+                write_sections()
+        _shots = _canned_shots(_format_id)
+    if _identities is None:
+        raise ValueError("前置未满足：先写身份层，或在本调用带 identities")
+    if _shots is None:
+        raise ValueError("candidate is incomplete: shots")
+    return {
+        "ok": True,
+        "identities": summarize_identities(_identities),
+        "shots": summarize_shots(_shots),
+    }
+
+
+@mcp.tool(name="narrative.list_state", structured_output=True)
+def list_state() -> dict[str, Any]:
+    return {
+        "format_id": _format_id,
+        "identities": (
+            summarize_identities(_identities)
+            if _identities is not None
+            else {"ok": True, "identities": [], "count": 0}
+        ),
+        "layers": {name: value is not None for name, value in _layers().items()},
+        "shots": (
+            summarize_shots(_shots)
+            if _shots is not None
+            else {"ok": True, "spine": [], "count": 0}
+        ),
+    }
+
+
+@mcp.tool(name="narrative.submit_candidate", structured_output=True)
+def submit_candidate() -> NarrativeCandidate:
+    if _identities is None:
+        raise ValueError("candidate is incomplete: identities")
+    if _shots is None:
+        raise ValueError("candidate is incomplete: shots")
+    brief = _brief or CreativeBrief.model_validate(
         {
-            key: value
-            for key, value in plan.model_dump(mode="json").items()
-            if key != "beats"
+            "project_id": "fixture",
+            "topic": "测试",
+            "target": {"duration_target_ms": 90_000},
+            "audience": {},
+            "communication": {"goal": "测试"},
+            "production_mode": _format_id,
         }
     )
-    return _section_plan
-
-
-@mcp.tool(name="narrative.explainer.expand_beats", structured_output=True)
-def expand_beats(problems: list[str] | None = None) -> BeatPlanArtifact:
-    global _planning
-    if _section_plan is None:
-        raise RuntimeError("narrative.explainer.plan_sections must succeed first")
-    _planning, _ = _sample_explainer()
-    return BeatPlanArtifact.model_validate(
-        {"beats": _planning.model_dump(mode="json")["beats"]}
+    return assemble_candidate(
+        brief=brief,
+        format_id=_format_id,  # type: ignore[arg-type]
+        identities=_identities,
+        shots=_shots,
+        layers=_layers(),
     )
 
 
-@mcp.tool(name="narrative.explainer.write_script", structured_output=True)
-def write_script(problems: list[str] | None = None) -> ScriptArtifact:
-    global _script
-    if _planning is None:
-        raise RuntimeError("narrative.explainer.expand_beats must succeed first")
-    _, _script = _sample_explainer()
-    return _script
-
-
-@mcp.tool(name="narrative.explainer.compile_shots", structured_output=True)
-def compile_shots(problems: list[str] | None = None) -> ShotPlanArtifact:
-    global _shots
-    if _planning is None or _script is None:
-        raise RuntimeError("narrative.explainer.write_script must succeed first")
-    _shots = compile_explainer_shots(_planning, _script)
-    return _shots
+def main() -> None:
+    mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    main()

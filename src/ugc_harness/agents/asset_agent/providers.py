@@ -6,8 +6,10 @@ import html
 import ipaddress
 import json
 import re
+import shutil
 import subprocess
 import time
+import wave
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -20,6 +22,7 @@ from ...shared.media_duration import probe_duration_ms
 from ...shared.settings import AssetGenerationSettings, LLMSettings
 from ...shared.video_generation import generate_seedance_video, last_frame_bytes_from_job
 from ..editorial_agent.models import ExplorationDirection
+from ..voice_agent.audio import concatenate_wavs, inspect_wav
 from ..voice_agent.models import RealizedBeat
 from .models import (
     AssetCard,
@@ -233,12 +236,16 @@ class VolcengineWebAssetProvider:
         endpoint = (
             self.settings.base_url.rstrip("/") + "/responses"
         )
-        prompt = f"""为一个 UGC 视频视觉方向寻找一份公开网页来源。
+        prompt = f"""为一个竖屏科普 UGC 视觉方向寻找一份公开网页来源。
 只选择一个最匹配且无需登录即可访问的来源，不要返回候选列表。
 旁白：{beat.narration}
 视觉方向：{direction.description}
 查询：{direction.query or direction.description}
 素材类型：{direction.asset_type}
+
+优先：实景照片、带数据的图表/统计页、可读的文档或新闻内文图。
+不要选主图是品牌 Logo、App 图标、吉祥物或百科信息框小标的页面。
+chart 类型必须能看到坐标、数字或对比系列，不能是一张商标。
 
 只返回 JSON：
 {{"url":"https://...","title":"页面标题","publisher":"发布者"}}
@@ -417,6 +424,58 @@ def _image_suffix(mime: str) -> str:
     }.get(mime.lower(), ".img")
 
 
+SEEDANCE_AUDIO_MIN_MS = 2_000
+SEEDANCE_AUDIO_MAX_MS = 15_000
+
+
+def _image_item(path: Path, role: str) -> dict[str, object]:
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    suffix = path.suffix.lower()
+    mime = "image/jpeg" if suffix in {".jpg", ".jpeg"} else "image/png"
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{mime};base64,{encoded}"},
+        "role": role,
+        "frame_type": role,
+    }
+
+
+def _audio_item(path: Path) -> dict[str, object]:
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return {
+        "type": "audio_url",
+        "audio_url": {"url": f"data:audio/wav;base64,{encoded}"},
+        "role": "reference_audio",
+    }
+
+
+def _clamp_reference_audio(source: Path, dest: Path) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    info = inspect_wav(source)
+    if info.duration_ms < SEEDANCE_AUDIO_MIN_MS:
+        concatenate_wavs(
+            [(source, 0, SEEDANCE_AUDIO_MIN_MS - info.duration_ms)],
+            dest,
+        )
+        return dest
+    if info.duration_ms <= SEEDANCE_AUDIO_MAX_MS:
+        if source.resolve() != dest.resolve():
+            shutil.copy2(source, dest)
+        return dest
+    frame_size = info.channels * info.sample_width_bytes
+    keep_frames = round(info.sample_rate * SEEDANCE_AUDIO_MAX_MS / 1000)
+    with wave.open(str(source), "rb") as audio:
+        frames = audio.readframes(keep_frames)
+    if len(frames) < frame_size:
+        frames = bytes(frame_size)
+    with wave.open(str(dest), "wb") as output:
+        output.setnchannels(info.channels)
+        output.setsampwidth(info.sample_width_bytes)
+        output.setframerate(info.sample_rate)
+        output.writeframes(frames)
+    return dest
+
+
 class VolcengineGeneratedAssetProvider:
     """Generate non-web visual directions as disclosed AI media."""
 
@@ -455,11 +514,21 @@ class VolcengineGeneratedAssetProvider:
         character_description: str | None = None,
         continuity_group_id: str | None = None,
         previous_character_asset: AssetCard | None = None,
+        generation_prompt: str | None = None,
+        generation_references: list[dict[str, str]] | None = None,
+        reference_audio_path: str | Path | None = None,
     ) -> ProviderResult:
         del project_id
         try:
             prompt = _generation_prompt(beat, direction)
             if direction.asset_type == "talking_head":
+                text = str(generation_prompt or "").strip()
+                if not text:
+                    return ProviderResult(
+                        None,
+                        "not_supported",
+                        "口播镜请用 asset.generate_talking_head 自己写提示词",
+                    )
                 if not character_id or not character_description:
                     raise ValueError("talking_head requires a world-state character")
                 return self._generate_talking_head_video(
@@ -471,6 +540,9 @@ class VolcengineGeneratedAssetProvider:
                     character_description=character_description,
                     continuity_group_id=continuity_group_id,
                     previous_character_asset=previous_character_asset,
+                    prompt=text,
+                    generation_references=generation_references,
+                    reference_audio_path=reference_audio_path,
                 )
             if direction.asset_type == "ai_video":
                 return self._generate_video(
@@ -499,12 +571,13 @@ class VolcengineGeneratedAssetProvider:
         character_description: str,
         continuity_group_id: str | None,
         previous_character_asset: AssetCard | None,
+        prompt: str,
+        generation_references: list[dict[str, str]] | None,
+        reference_audio_path: str | Path | None,
     ) -> ProviderResult:
-        reference = self._character_reference(
+        identity = self._character_reference(
             character_id, character_description, project_dir
         )
-        # Defensive re-check of the agent-level validation: only a real
-        # talking-head video file may feed the frame-continuity chain.
         if previous_character_asset is not None and not is_talking_head_video(
             previous_character_asset,
             project_dir / previous_character_asset.local_path,
@@ -516,46 +589,30 @@ class VolcengineGeneratedAssetProvider:
                 flush=True,
             )
             previous_character_asset = None
-        previous_asset_id = None
-        if previous_character_asset is not None:
-            first_frame = self._last_frame(
-                project_dir,
-                previous_character_asset.asset_id,
-            )
-            previous_asset_id = previous_character_asset.asset_id
-            continuity_instruction = (
-                "Continue the exact body pose, hand position, gaze, camera, and "
-                "motion from the supplied first frame. Movement must begin smoothly."
-            )
-        else:
-            first_frame = reference
-            continuity_instruction = (
-                "Begin a fresh natural gesture while preserving the exact identity, "
-                "wardrobe, room, camera, and lighting from the reference frame."
-            )
-        encoded = base64.b64encode(first_frame.read_bytes()).decode("ascii")
+        frames, previous_asset_id = self._talking_head_frames(
+            project_dir=project_dir,
+            character_id=character_id,
+            identity=identity,
+            previous_character_asset=previous_character_asset,
+            generation_references=generation_references,
+        )
+        if not frames:
+            raise RuntimeError("口播镜至少要带一张 reference_image")
+        audio_path = Path(reference_audio_path) if reference_audio_path else None
+        if audio_path is None or not audio_path.is_file() or not audio_path.stat().st_size:
+            raise RuntimeError("口播镜需要本 beat 的 TTS 参考音频")
+        fitted_audio = project_dir / "harness" / "seedance_audio" / f"{visual_request_id}.wav"
+        _clamp_reference_audio(audio_path, fitted_audio)
         duration = min((4, 6, 8), key=lambda item: abs(item - beat.duration_ms / 1000))
-        prompt = f"""Vertical authentic phone-camera creator video.
-Character identity: {character_description}
-Spoken content context: {beat.narration}
-{continuity_instruction}
-Natural blinking, breathing, subtle head and hand gestures, realistic posture shifts.
-One continuous take, direct eye contact, no cuts, no text, no logos, no audio.
-Do not change face, age, hair, clothing, background, lens, framing, or lighting."""
         payload = {
             "model": self.generation_settings.video_model,
             "prompt": prompt,
             "resolution": self.generation_settings.video_resolution,
             "aspect_ratio": "9:16",
             "duration": duration,
-            "generate_audio": False,
-            "frame_images": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{encoded}"},
-                    "frame_type": "first_frame",
-                }
-            ],
+            "generate_audio": True,
+            "frame_images": frames,
+            "audio_urls": [_audio_item(fitted_audio)],
         }
         return self._submit_video(
             visual_request_id,
@@ -567,9 +624,55 @@ Do not change face, age, hair, clothing, background, lens, framing, or lighting.
             character_id=character_id,
             continuity_group_id=continuity_group_id,
             previous_asset_id=previous_asset_id,
-            identity_reference_path=reference.relative_to(project_dir).as_posix(),
+            identity_reference_path=identity.relative_to(project_dir).as_posix(),
             modality="talking_head",
         )
+
+    def _talking_head_frames(
+        self,
+        *,
+        project_dir: Path,
+        character_id: str,
+        identity: Path,
+        previous_character_asset: AssetCard | None,
+        generation_references: list[dict[str, str]] | None,
+    ) -> tuple[list[dict[str, object]], str | None]:
+        previous_asset_id: str | None = None
+        if not generation_references:
+            frames = [_image_item(identity, "reference_image")]
+            if previous_character_asset is not None:
+                frames.insert(
+                    0,
+                    _image_item(
+                        self._last_frame(project_dir, previous_character_asset.asset_id),
+                        "reference_image",
+                    ),
+                )
+                previous_asset_id = previous_character_asset.asset_id
+            return frames, previous_asset_id
+        frames = []
+        for item in generation_references:
+            ident = str(item.get("id") or "").strip()
+            if ident == f"identity:{character_id}":
+                frames.append(_image_item(identity, "reference_image"))
+                continue
+            if ident.startswith("last_frame:"):
+                visual_id = ident.split(":", 1)[1]
+                asset_id = (
+                    previous_character_asset.asset_id
+                    if previous_character_asset is not None
+                    else f"asset_{visual_id}"
+                )
+                frames.append(
+                    _image_item(
+                        self._last_frame(project_dir, asset_id),
+                        "reference_image",
+                    )
+                )
+                previous_asset_id = asset_id
+                continue
+            raise RuntimeError(f"口播镜没有参考图 {ident}")
+        return frames, previous_asset_id
 
     def _character_reference(
         self,
@@ -913,28 +1016,37 @@ def _generation_prompt(
             "product screenshot."
         ),
         "motion_graphic": (
-            "Create a polished motion-graphics keyframe with clear visual hierarchy "
-            "and simple shapes that can be animated later."
+            "Create a polished motion-graphics keyframe of a real scene or a "
+            "sourced chart, not a brand mark or two concept icons."
         ),
         "kinetic_typography": (
-            "Create a bold kinetic-typography keyframe with very little readable text."
+            "Create a bold motion-graphics keyframe with almost no readable text. "
+            "Do not copy the voice-over onto the image as a subtitle."
         ),
         "ai_video": (
             "Create a natural short vertical UGC insert with one coherent action, "
-            "subtle camera motion, and no cinematic film look."
+            "subtle camera motion, and no cinematic film look. Not a logo sting."
         ),
         "talking_head": (
             "Create a casual creator-style talking-head visual, authentic phone-camera "
             "lighting, direct eye contact, and no celebrity likeness."
         ),
-    }.get(direction.asset_type, "Create a clear illustrative vertical UGC visual.")
+        "ai_image": (
+            "Create one 9:16 still. Prefer real-looking scenes. If the query gives "
+            "sourced figures, a simple chart with short axis/category labels is allowed. "
+            "Do not make an animation, split-logo comparison, or brand emblem."
+        ),
+    }.get(direction.asset_type, "Create a clear illustrative 9:16 still of a real scene.")
     constraints = "；".join(direction.must_not_imply) or "不得伪装成事实记录"
-    return f"""Vertical 9:16 asset for a 1–2 minute UGC explainer, not a film.
-Narration context: {beat.narration}
+    return f"""画面无任何字幕。Vertical 9:16 still for a 1–2 minute UGC explainer, not a film.
+The next line is spoken audio only. Never paint it on the image as subtitles, captions, lower-thirds, speech bubbles, posters, or signs.
+Spoken voice-over (do not render): {beat.narration}
 Visual direction: {direction.description}
-Generation/search instruction: {direction.query or 'none'}
+Generation instruction: {direction.query or 'none'}
 Purpose: {direction.visual_role}
 {special}
-Avoid logos, watermarks, fake citations, fake news pages, and dense small text.
+No Chinese or English sentences on the image. No caption bar. Subtitles are added later in the video editor, not by this image.
+Never fill the frame with a logo, trademark, app icon, mascot, or two concept icons standing in for a comparison.
+If the query includes specific numbers or named series, you MAY draw a simple sourced chart. Labels must be 1–3 short words or numerals from the query, never the full voice-over. Do not invent statistics, fake news mastheads, URLs, or agency seals.
 Do not imply: {constraints}
 Generated media is illustrative and must never be presented as factual evidence."""

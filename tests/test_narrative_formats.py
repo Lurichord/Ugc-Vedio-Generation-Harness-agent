@@ -5,6 +5,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from tests.test_quality import sample_plan, sample_script
 from ugc_harness.agents.instructions import (
+    compose_opening_messages,
     instruction_name_for_task,
     system_prompt_for_task,
 )
@@ -31,10 +32,9 @@ from ugc_harness.agents.narrative_agent.models import (
 from ugc_harness.agents.narrative_agent.shots import compile_explainer_shots
 
 
-def test_default_registry_resolves_auto_and_explicit_explainer() -> None:
+def test_default_registry_resolves_installed_formats() -> None:
     registry = default_narrative_format_registry()
 
-    assert registry.resolve("auto") is EXPLAINER_PACK
     assert registry.resolve("explainer") is EXPLAINER_PACK
     assert registry.resolve("drama") is DRAMA_PACK
     assert registry.resolve("tutorial") is TUTORIAL_PACK
@@ -105,6 +105,23 @@ def test_system_prompt_follows_the_task_step() -> None:
     assert instruction_name_for_task(repair) == "shot_repair"
     assert "shot 局部修复" in system_prompt_for_task(repair)
 
+
+def test_narrative_opening_splits_context_and_artifacts() -> None:
+    messages = compose_opening_messages(
+        system="explainer workflow",
+        agent="narrative_agent",
+        memory={
+            "context": {"creative_brief": {"topic": "粽子"}},
+            "artifacts": {"shots": [], "structure": None},
+        },
+        user_payload={"instruction": "首跑"},
+    )
+    assert [item["role"] for item in messages] == ["system", "user", "user"]
+    assert "explainer workflow" in messages[0]["content"]
+    assert "Skill 目录" in messages[0]["content"]
+    assert "上下文" in messages[1]["content"]
+    assert "叙事产物" in messages[2]["content"]
+
     assert (
         instruction_name_for_task(
             TaskEnvelope(
@@ -156,13 +173,13 @@ def test_system_prompt_follows_the_task_step() -> None:
             DRAMA_PACK,
             "drama",
             ["world_state", "planning", "shots"],
-            "narrative.drama.",
+            "narrative.",
         ),
         (
             TUTORIAL_PACK,
             "tutorial",
             ["world_state", "planning", "script", "shots"],
-            "narrative.tutorial.",
+            "narrative.",
         ),
     ],
 )
@@ -214,32 +231,16 @@ def test_tutorial_pack_is_installed_in_the_default_registry() -> None:
     assert extended_registry.resolve("tutorial") is TUTORIAL_PACK
 
 
-def test_format_session_states_keep_format_specific_drafts_disjoint() -> None:
-    from ugc_harness.mcp_servers.narrative import (
-        DramaFormatState,
-        ExplainerFormatState,
-        NarrativeTaskSession,
-        TutorialFormatState,
+def test_narrative_session_holds_identities_and_shots() -> None:
+    from ugc_harness.mcp_servers.narrative import NarrativeTaskSession
+
+    session = NarrativeTaskSession(
+        brief=make_brief(topic="端午节", production_mode="drama"),
+        format_id="drama",
     )
-
-    explainer = ExplainerFormatState()
-    drama = DramaFormatState()
-    tutorial = TutorialFormatState()
-
-    assert hasattr(explainer, "section_plan")
-    assert not hasattr(drama, "section_plan")
-    assert hasattr(drama, "characters")
-    assert not hasattr(tutorial, "characters")
-    assert hasattr(tutorial, "definition")
-    assert hasattr(tutorial, "procedure")
-
-    with pytest.raises(ValueError, match="format_state.format_id"):
-        NarrativeTaskSession(
-            brief=make_brief(topic="端午节"),
-            generator=object(),  # type: ignore[arg-type]
-            format_id="drama",
-            format_state=explainer,
-        )
+    assert session.identities is None
+    assert session.shots is None
+    assert session.format_id == "drama"
 
 
 def test_planning_union_uses_planning_type_discriminator() -> None:

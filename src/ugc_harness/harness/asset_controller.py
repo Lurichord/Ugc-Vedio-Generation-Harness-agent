@@ -47,6 +47,8 @@ from .transitions import transition_after_review
 
 
 ACQUIRE_TOOL = "asset.acquire_requirement"
+LIST_TALKING_HEADS_TOOL = "asset.list_talking_heads"
+GENERATE_TALKING_HEAD_TOOL = "asset.generate_talking_head"
 PREPARE_TOOL = "asset.prepare_image"
 SUBMIT_TOOL = "asset.submit_candidate"
 
@@ -91,9 +93,16 @@ class AssetHarnessController:
         tool_model: object | None = None,
     ) -> "AssetHarnessController":
         acquire_capability = AssetCapabilities(provider).acquire_requirement
+        generate_capability = AssetCapabilities(provider).generate_talking_head
         prepare_capability = ImagePreparationCapabilities().prepare_image
         tools = ToolRegistry()
-        for tool_name in (ACQUIRE_TOOL, PREPARE_TOOL, SUBMIT_TOOL):
+        for tool_name in (
+            ACQUIRE_TOOL,
+            LIST_TALKING_HEADS_TOOL,
+            GENERATE_TALKING_HEAD_TOOL,
+            PREPARE_TOOL,
+            SUBMIT_TOOL,
+        ):
             tools.register(tool_name, lambda: None)
 
         def transport_factory(
@@ -115,6 +124,7 @@ class AssetHarnessController:
                 project_dir=project_dir,
                 current=current,
                 acquire_capability=acquire_capability,
+                generate_capability=generate_capability,
                 prepare_capability=prepare_capability,
             )
             return RegistryToolTransport(
@@ -124,8 +134,60 @@ class AssetHarnessController:
                         description=(
                             "处理下一个待办 VisualRequirement：按 first-success "
                             "规则获取素材并给出 resolution；返回剩余待办清单。"
+                            "口播镜应先用 asset.generate_talking_head。"
                         ),
                         handler=session.acquire_next,
+                    ),
+                    RegistryTool(
+                        name=LIST_TALKING_HEADS_TOOL,
+                        description=(
+                            "列出待办口播镜、旁白、接镜关系和 materials。"
+                            "TTS 参考音频由 generate 自动带上，不要放进 references。"
+                        ),
+                        handler=session.list_talking_heads,
+                    ),
+                    RegistryTool(
+                        name=GENERATE_TALKING_HEAD_TOOL,
+                        description=(
+                            "为指定口播镜生成 Seedance 视频。必须自己写 prompt；"
+                            "references 全是 reference_image，数组顺序就是图片1、图片2。"
+                        ),
+                        handler=session.generate_talking_head,
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "visual_request_id": {"type": "string"},
+                                "prompt": {
+                                    "type": "string",
+                                    "description": (
+                                        "发给 Seedance 的完整导演句。"
+                                        "用图片N指代 references 数组顺序；口型跟旁白走。"
+                                    ),
+                                },
+                                "references": {
+                                    "type": "array",
+                                    "description": (
+                                        "本镜参考图。id 来自 list_talking_heads.materials；"
+                                        "description 只写职务。"
+                                    ),
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {"type": "string"},
+                                            "description": {"type": "string"},
+                                        },
+                                        "required": ["id", "description"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                                "problems": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["visual_request_id", "prompt"],
+                            "additionalProperties": False,
+                        },
                     ),
                     RegistryTool(
                         name=PREPARE_TOOL,
@@ -180,7 +242,12 @@ class AssetHarnessController:
                 ],
             ),
             based_on_state_version=state.context.state_version,
-            allowed_tools=[ACQUIRE_TOOL, SUBMIT_TOOL],
+            allowed_tools=[
+                ACQUIRE_TOOL,
+                LIST_TALKING_HEADS_TOOL,
+                GENERATE_TALKING_HEAD_TOOL,
+                SUBMIT_TOOL,
+            ],
             forbidden_actions=[
                 "modify_narrative",
                 "modify_voice",
@@ -196,8 +263,8 @@ class AssetHarnessController:
             ],
             budget=TaskBudget(
                 max_steps=min(
-                    32,
-                    len(editorial.editorial_plan.visual_requirements) + 2,
+                    48,
+                    len(editorial.editorial_plan.visual_requirements) * 2 + 6,
                 ),
                 max_retries=0,
             ),
@@ -502,13 +569,16 @@ class _AssetSession:
         project_dir: object,
         current: AssetArtifact | None,
         acquire_capability: Any,
+        generate_capability: Any,
         prepare_capability: Any,
     ) -> None:
         self.task = task
         self.editorial = editorial
+        self.voice = voice
         self.project_dir = project_dir
         self.current = current
         self.acquire_capability = acquire_capability
+        self.generate_capability = generate_capability
         self.prepare_capability = prepare_capability
         self.prepare_mode = _is_prepare_task(task)
         self.beats = {beat.beat_id: beat for beat in voice.realized_beats}
@@ -589,26 +659,7 @@ class _AssetSession:
             raise ValueError(
                 f"VisualRequirement references unknown beat: {visual.beat_id}"
             )
-        visual_index = self.visuals.index(visual)
-        prior_visual = self.visuals[visual_index - 1] if visual_index else None
-        adjacent_aroll = bool(
-            prior_visual
-            and prior_visual.track == "a_roll"
-            and visual.track == "a_roll"
-            and prior_visual.character_id == visual.character_id
-        )
-        previous_character_asset = (
-            self.assets_by_request.get(prior_visual.visual_request_id)
-            if adjacent_aroll and prior_visual
-            else None
-        )
-        if previous_character_asset is not None and not is_talking_head_video(
-            previous_character_asset
-        ):
-            # The plan said "adjacent a_roll", but the prior direction actually
-            # fell back to a non-video asset. Break the continuity chain so the
-            # provider restarts from the identity reference.
-            previous_character_asset = None
+        previous_character_asset = self._previous_character_asset(visual)
         acquired = self.acquire_capability(
             project_id=self.editorial.project_id,
             visual=visual,
@@ -630,6 +681,211 @@ class _AssetSession:
         ):
             raise TypeError("asset tool returned an invalid acquisition result")
         asset, resolution = acquired
+        return self._record_acquisition(visual_id, asset, resolution)
+
+    def list_talking_heads(self, problems: list[str] | None = None) -> dict[str, Any]:
+        del problems
+        if self.prepare_mode:
+            raise RuntimeError(
+                "这是图像修复任务，请调用 asset.prepare_image"
+            )
+        talking_heads = []
+        for visual_id in self.pending:
+            visual = next(
+                item for item in self.visuals if item.visual_request_id == visual_id
+            )
+            if not any(
+                direction.asset_type == "talking_head"
+                for direction in visual.directions
+            ):
+                continue
+            talking_heads.append(self._talking_head_item(visual))
+        return {
+            "talking_heads": talking_heads,
+            "pending": list(self.pending),
+        }
+
+    def generate_talking_head(
+        self,
+        visual_request_id: str,
+        prompt: str,
+        references: list[dict[str, str]] | None = None,
+        problems: list[str] | None = None,
+    ) -> dict[str, Any]:
+        del problems
+        if self.prepare_mode:
+            raise RuntimeError(
+                "这是图像修复任务，请调用 asset.prepare_image"
+            )
+        text = prompt.strip()
+        if not text:
+            raise RuntimeError(
+                "generate_talking_head 必须自己写 prompt，先读 list_talking_heads"
+            )
+        if references is not None and not references:
+            raise RuntimeError("口播镜至少要选一张参考图")
+        visual_id = visual_request_id.strip()
+        if visual_id not in self.pending:
+            raise RuntimeError(f"{visual_id} 不在待办口播镜里")
+        visual = next(
+            item for item in self.visuals if item.visual_request_id == visual_id
+        )
+        beat = self.beats.get(visual.beat_id)
+        if beat is None:
+            raise ValueError(
+                f"VisualRequirement references unknown beat: {visual.beat_id}"
+            )
+        generated = self.generate_capability(
+            project_id=self.editorial.project_id,
+            visual=visual,
+            beat=beat,
+            project_dir=self.project_dir,
+            prompt=text,
+            references=references,
+            reference_audio_path=self._beat_tts_path(beat),
+            character_description=(
+                self.editorial.editorial_plan.video_profile.character_description
+            ),
+            continuity_group_id=getattr(self, "group_by_request", {}).get(visual_id),
+            previous_character_asset=self._previous_character_asset(visual),
+        )
+        if not (
+            isinstance(generated, tuple)
+            and len(generated) == 2
+            and (generated[0] is None or isinstance(generated[0], AssetCard))
+            and isinstance(generated[1], VisualResolution)
+        ):
+            raise TypeError("asset tool returned an invalid talking-head result")
+        asset, resolution = generated
+        if asset is None:
+            raise RuntimeError(resolution.attempts[-1].reason)
+        recorded = self._record_acquisition(visual_id, asset, resolution)
+        listed = self.list_talking_heads()
+        recorded["talking_heads"] = listed["talking_heads"]
+        recorded["pending"] = listed["pending"]
+        return recorded
+
+    def _talking_head_item(self, visual: Any) -> dict[str, Any]:
+        beat = self.beats.get(visual.beat_id)
+        join, previous = self._talking_head_join(visual)
+        existing = self.assets_by_request.get(visual.visual_request_id)
+        return {
+            "visual_request_id": visual.visual_request_id,
+            "beat_id": visual.beat_id,
+            "character_id": visual.character_id,
+            "character_description": (
+                self.editorial.editorial_plan.video_profile.character_description
+            ),
+            "narration": beat.narration if beat is not None else "",
+            "continuity": {"join": join, "previous_visual_request_id": previous},
+            "generation_prompt": (
+                existing.generation_prompt if existing is not None else None
+            ),
+            "materials": self._talking_head_materials(visual, join, previous),
+            "audio": {
+                "id": f"tts:{visual.beat_id}",
+                "ready": beat is not None and self._beat_tts_exists(beat),
+                "note": "工具自动作为 @音频1 带上，不要放进 references",
+            },
+        }
+
+    def _talking_head_materials(
+        self,
+        visual: Any,
+        join: str,
+        previous_visual_id: str | None,
+    ) -> list[dict[str, Any]]:
+        character_id = visual.character_id
+        identity_rel = f"assets/character_reference/{character_id}.png"
+        identity_path = Path(self.project_dir) / identity_rel
+        materials = [
+            {
+                "id": f"identity:{character_id}",
+                "kind": "identity",
+                "name": "口播人设",
+                "path": identity_rel if identity_path.is_file() else None,
+                "ready": identity_path.is_file() and identity_path.stat().st_size > 0,
+                "default_description": "口播人设",
+            }
+        ]
+        if join != "continue_from_previous" or not previous_visual_id:
+            return materials
+        last_rel = (
+            f"assets/character_reference/asset_{previous_visual_id}_last.png"
+        )
+        last_path = Path(self.project_dir) / last_rel
+        materials.insert(
+            0,
+            {
+                "id": f"last_frame:{previous_visual_id}",
+                "kind": "previous_last_frame",
+                "name": "上一镜尾帧",
+                "path": last_rel if last_path.is_file() else None,
+                "ready": last_path.is_file() and last_path.stat().st_size > 0,
+                "default_description": "上一镜尾帧",
+            },
+        )
+        return materials
+
+    def _talking_head_join(self, visual: Any) -> tuple[str, str | None]:
+        visual_index = self.visuals.index(visual)
+        prior = self.visuals[visual_index - 1] if visual_index else None
+        if (
+            prior
+            and prior.track == "a_roll"
+            and visual.track == "a_roll"
+            and prior.character_id == visual.character_id
+        ):
+            return "continue_from_previous", prior.visual_request_id
+        return "fresh", None
+
+    def _previous_character_asset(self, visual: Any) -> AssetCard | None:
+        visual_index = self.visuals.index(visual)
+        prior_visual = self.visuals[visual_index - 1] if visual_index else None
+        adjacent_aroll = bool(
+            prior_visual
+            and prior_visual.track == "a_roll"
+            and visual.track == "a_roll"
+            and prior_visual.character_id == visual.character_id
+        )
+        previous_character_asset = (
+            self.assets_by_request.get(prior_visual.visual_request_id)
+            if adjacent_aroll and prior_visual
+            else None
+        )
+        if previous_character_asset is not None and not is_talking_head_video(
+            previous_character_asset
+        ):
+            return None
+        return previous_character_asset
+
+    def _beat_tts_path(self, beat: Any) -> Path:
+        segments = {
+            item.audio_segment_id: item
+            for item in self.voice.timed_audio.segments
+        }
+        if not beat.audio_segment_ids:
+            raise RuntimeError(f"{beat.beat_id} 没有 TTS 分段")
+        first = segments.get(beat.audio_segment_ids[0])
+        if first is None:
+            raise RuntimeError(f"{beat.beat_id} 找不到 TTS 文件")
+        path = Path(self.project_dir) / first.file
+        if not path.is_file() or not path.stat().st_size:
+            raise RuntimeError(f"{beat.beat_id} 的 TTS 文件不存在")
+        return path
+
+    def _beat_tts_exists(self, beat: Any) -> bool:
+        try:
+            return self._beat_tts_path(beat).is_file()
+        except RuntimeError:
+            return False
+
+    def _record_acquisition(
+        self,
+        visual_id: str,
+        asset: AssetCard | None,
+        resolution: VisualResolution,
+    ) -> dict[str, Any]:
         self.assets_by_request.pop(visual_id, None)
         if current_asset := next(
             (
@@ -644,7 +900,7 @@ class _AssetSession:
         if asset is not None:
             self.assets_by_request[visual_id] = asset
         self.resolutions_by_request[visual_id] = resolution
-        self.pending.pop(0)
+        self.pending.remove(visual_id)
         self.acquired_ids.append(visual_id)
         return {
             "visual_request_id": visual_id,

@@ -13,8 +13,9 @@ Stage differences are data, not code:
 
 The loop never varies: budget gate -> decide -> optional tool -> append
 JSON exchange -> repeat until a candidate is accepted. Critics and commits
-stay outside, in the controllers. ``skill.activate`` is built into the loop
-so a stage can load a markdown playbook before it chooses tool arguments.
+stay outside, in the controllers. ``skill.activate`` loads a markdown
+playbook into a side channel for this run. The body is not appended to the
+rolling transcript.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from ..shared.llm import _extract_json
 from ..shared.models import StrictModel
 from ..tools.mcp import StdioMCPServerConfig, forward_child_stderr
 from ..tools.registry import ToolRegistry
-from .instructions import system_prompt_for_task
+from .instructions import compose_opening_messages, system_prompt_for_task
 from .skills import (
     SKILL_ACTIVATE,
     activate_agent_skill,
@@ -396,20 +397,19 @@ class GenericAgent:
             if self.context_builder is not None
             else {}
         )
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": system_prompt_for_task(task),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {"task": task.model_dump(mode="json"), **context},
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-            },
-        ]
+        memory = context.pop("memory", None) if isinstance(context, dict) else None
+        turn = context.pop("turn", None) if isinstance(context, dict) else None
+        user_payload = (
+            turn
+            if turn is not None
+            else {"task": task.model_dump(mode="json"), **context}
+        )
+        messages = compose_opening_messages(
+            system=system_prompt_for_task(task),
+            agent=task.agent,
+            memory=memory,
+            user_payload=user_payload,
+        )
         try:
             transport = self.transport_factory(task, kwargs)
             async with transport.open() as channel:
@@ -433,12 +433,16 @@ class GenericAgent:
                     allowed.add(SKILL_ACTIVATE)
                 candidate: BaseModel | None = None
                 steps = 0
+                active_skills: dict[str, str] = {}
                 while candidate is None:
                     if steps >= task.budget.max_steps:
                         raise RuntimeError("task step budget exhausted")
                     steps += 1
                     _log(f"[{task.agent}] step={steps} deciding")
-                    decision = self.tool_model.decide(messages, catalog)
+                    decision = self.tool_model.decide(
+                        _messages_with_active_skills(messages, active_skills),
+                        catalog,
+                    )
                     tool_name = (decision.tool or "").strip()
                     if not tool_name:
                         candidate = self._accept_message_candidate(
@@ -479,17 +483,20 @@ class GenericAgent:
                     actions.append(
                         _action(task, actions, tool_name, "success", None, started)
                     )
+                    history_value = _history_tool_result(
+                        tool_name, value, active_skills
+                    )
                     _log_tool(
                         task.agent,
                         "done",
                         tool_name,
                         arguments=arguments,
-                        result=value,
+                        result=history_value if tool_name == SKILL_ACTIVATE else value,
                         duration_ms=round(
                             (time.perf_counter() - started) * 1000
                         ),
                     )
-                    _append_exchange(messages, tool_name, arguments, value)
+                    _append_exchange(messages, tool_name, arguments, history_value)
                     if tool_name == submit_tool:
                         _log(f"[{task.agent}] candidate submitted")
         except Exception as exc:
@@ -620,6 +627,46 @@ def _unwrap_exception(exc: Exception) -> Exception:
             break
         exc = inner
     return exc
+
+
+def _history_tool_result(
+    tool_name: str,
+    value: dict[str, Any],
+    active_skills: dict[str, str],
+) -> dict[str, Any]:
+    """Keep skill markdown off the rolling transcript."""
+
+    if tool_name != SKILL_ACTIVATE or not isinstance(value, dict):
+        return value
+    name = str(value.get("name") or "")
+    body = value.get("skill")
+    if value.get("ok") and isinstance(body, str) and name:
+        active_skills[name] = body
+    stored: dict[str, Any] = {"ok": bool(value.get("ok")), "name": name}
+    if value.get("error"):
+        stored["error"] = value["error"]
+    return stored
+
+
+def _messages_with_active_skills(
+    messages: list[dict[str, Any]],
+    active_skills: dict[str, str],
+) -> list[dict[str, Any]]:
+    if not active_skills:
+        return messages
+    overlay = [dict(item) for item in messages]
+    blocks = "\n\n".join(
+        f"## 已激活 skill：{name}\n{body}"
+        for name, body in active_skills.items()
+    )
+    if overlay and overlay[0].get("role") == "system":
+        overlay[0] = {
+            **overlay[0],
+            "content": f"{overlay[0].get('content') or ''}\n\n{blocks}",
+        }
+        return overlay
+    overlay.insert(0, {"role": "system", "content": blocks})
+    return overlay
 
 
 def _append_exchange(
