@@ -19,6 +19,7 @@ from ugc_agent.tools.video_gen_minimax import video_gen_minimax
 from ugc_agent.tools.video_gen_minimax.client import (
     _encode_multipart,
     _form_parts,
+    download_content,
     generate_video as generate_minimax_video,
 )
 from ugc_agent.tools.vision_understanding import vision_understanding
@@ -249,7 +250,7 @@ def test_minimax_http_paths_use_reference_url():
     assert files == []
 
 
-def test_minimax_create_posts_multipart_then_polls(tmp_path, monkeypatch):
+def test_minimax_create_posts_multipart_then_downloads_content(tmp_path, monkeypatch):
     image = tmp_path / "frame.png"
     image.write_bytes(b"png")
     monkeypatch.setenv("MINIMAX_API_KEY", "mm-key")
@@ -266,13 +267,17 @@ def test_minimax_create_posts_multipart_then_polls(tmp_path, monkeypatch):
         captured["query_url"] = url
         captured["query_method"] = method
         assert method == "GET"
-        return {"status": "completed", "url": "https://cdn.example/out.mp4"}
+        return {"status": "completed", "file_path": "/data/videos/4240.mp4"}
+
+    def fake_content(task_id, *, timeout=180):
+        captured["content_id"] = task_id
+        return b"mp4-bytes"
 
     monkeypatch.setattr("ugc_agent.tools.video_gen_minimax.client.post_form", fake_post)
     monkeypatch.setattr("ugc_agent.tools.video_gen_minimax.client.request_json", fake_get)
     monkeypatch.setattr(
-        "ugc_agent.tools.video_gen_minimax.client.download_bytes",
-        lambda url: b"mp4-bytes",
+        "ugc_agent.tools.video_gen_minimax.client.download_content",
+        fake_content,
     )
     data = generate_minimax_video(
         "图1作为首帧，人物向前走",
@@ -290,3 +295,35 @@ def test_minimax_create_posts_multipart_then_polls(tmp_path, monkeypatch):
     assert captured["files"][0][0] == "input_reference"
     assert captured["query_url"] == "https://api.minimax.cn/v1/videos/4240"
     assert captured["query_method"] == "GET"
+    assert captured["content_id"] == "4240"
+    assert "url" not in captured
+
+
+def test_minimax_download_content_hits_v1_content(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-key")
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"mp4-bytes"
+
+    def fake_urlopen(request, timeout=180):
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["authorization"] = request.headers.get("Authorization")
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        "ugc_agent.tools.video_gen_minimax.client.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    assert download_content("4240") == b"mp4-bytes"
+    assert captured["url"] == "https://api.minimax.cn/v1/videos/4240/content"
+    assert captured["method"] == "GET"
+    assert captured["authorization"] == "Bearer mm-key"

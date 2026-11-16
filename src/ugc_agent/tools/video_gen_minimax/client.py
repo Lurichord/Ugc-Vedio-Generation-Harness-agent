@@ -8,7 +8,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from ..ark import download_bytes, env_value, join_url, request_json, require_env
+from ..ark import env_value, join_url, request_json, require_env
 from ..video_gen.client import VIDEO_SUFFIXES, _duration_seconds, write_video
 
 __all__ = ["generate_video", "write_video"]
@@ -185,7 +185,7 @@ def wait_for_video(
     sleep=time.sleep,
     interval: int = 10,
     timeout: int = 1800,
-) -> str:
+) -> None:
     url = join_url(_base_url(), "v1/videos", task_id)
     deadline = time.monotonic() + timeout
     while True:
@@ -193,11 +193,7 @@ def wait_for_video(
         task = result.get("task") or result
         status = result.get("status") or task.get("status")
         if status in {"succeeded", "completed"}:
-            content = task.get("content") or {}
-            video_url = content.get("url") or content.get("video_url") or task.get("url")
-            if not video_url:
-                raise RuntimeError("video-gen-minimax succeeded without video url")
-            return str(video_url)
+            return
         if status in {"failed", "cancelled", "expired"}:
             error = task.get("error") or result.get("error")
             if isinstance(error, dict):
@@ -206,6 +202,24 @@ def wait_for_video(
         if time.monotonic() >= deadline:
             raise TimeoutError(f"video-gen-minimax timed out: {task_id}")
         sleep(interval)
+
+
+def download_content(task_id: str, *, timeout: int = 180) -> bytes:
+    url = join_url(_base_url(), "v1/videos", task_id, "content")
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={"Authorization": f"Bearer {_api_key()}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = response.read()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"minimax http {exc.code}: {detail}") from exc
+    if not data:
+        raise RuntimeError("video-gen-minimax returned empty video content")
+    return data
 
 
 def generate_video(
@@ -228,4 +242,5 @@ def generate_video(
         aspect_ratio=aspect_ratio,
         resolution=resolution,
     )
-    return download_bytes(wait_for_video(task_id, sleep=sleep))
+    wait_for_video(task_id, sleep=sleep)
+    return download_content(task_id)
