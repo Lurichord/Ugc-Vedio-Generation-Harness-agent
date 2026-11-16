@@ -19,6 +19,14 @@ def _resolution(value: str | None) -> str:
     return raw
 
 
+def _base_url() -> str:
+    return env_value("MINIMAX_BASE_URL") or "https://api.minimax.cn"
+
+
+def _api_key() -> str:
+    return require_env("MINIMAX_API_KEY", "UGC_VIDEO_API_KEY")
+
+
 def create_video_task(
     prompt: str,
     *,
@@ -30,7 +38,7 @@ def create_video_task(
     resolution: str | None = None,
 ) -> str:
     payload = {
-        "model": env_value("MINIMAX_VIDEO_MODEL") or "MiniMax-H3",
+        "model": env_value("MINIMAX_VIDEO_MODEL") or "/models/MiniMax-H3",
         "content": _content(prompt, reference_paths, audio_paths, mode),
         "duration": _duration_seconds(duration_seconds),
         "resolution": _resolution(resolution),
@@ -38,12 +46,12 @@ def create_video_task(
         "aigc_watermark": False,
     }
     result = request_json(
-        join_url(env_value("MINIMAX_BASE_URL") or "https://api.minimax.cn", "v2/video_generation"),
-        api_key=require_env("MINIMAX_API_KEY", "UGC_VIDEO_API_KEY"),
+        join_url(_base_url(), "v1/videos"),
+        api_key=_api_key(),
         payload=payload,
         timeout=60,
     )
-    task_id = result.get("task_id") or (result.get("task") or {}).get("id")
+    task_id = result.get("task_id") or result.get("id") or (result.get("task") or {}).get("id")
     if not task_id:
         raise RuntimeError(f"video-gen-minimax did not return a task id: {result}")
     return str(task_id)
@@ -56,29 +64,20 @@ def wait_for_video(
     interval: int = 10,
     timeout: int = 1800,
 ) -> str:
-    url = join_url(
-        env_value("MINIMAX_BASE_URL") or "https://api.minimax.cn",
-        "v2/query/video_generation",
-        task_id,
-    )
+    url = join_url(_base_url(), "v1/videos", task_id)
     deadline = time.monotonic() + timeout
     while True:
-        result = request_json(
-            url,
-            api_key=require_env("MINIMAX_API_KEY", "UGC_VIDEO_API_KEY"),
-            method="GET",
-            timeout=60,
-        )
+        result = request_json(url, api_key=_api_key(), method="GET", timeout=60)
         task = result.get("task") or result
-        status = task.get("status")
-        if status == "succeeded":
+        status = result.get("status") or task.get("status")
+        if status in {"succeeded", "completed"}:
             content = task.get("content") or {}
-            video_url = content.get("url") or content.get("video_url")
+            video_url = content.get("url") or content.get("video_url") or task.get("url")
             if not video_url:
-                raise RuntimeError("video-gen-minimax succeeded without content.url")
+                raise RuntimeError("video-gen-minimax succeeded without video url")
             return str(video_url)
-        if status in {"failed", "cancelled"}:
-            error = task.get("error")
+        if status in {"failed", "cancelled", "expired"}:
+            error = task.get("error") or result.get("error")
             if isinstance(error, dict):
                 error = error.get("message") or error
             raise RuntimeError(error or f"video-gen-minimax {status}")

@@ -195,7 +195,7 @@ def test_system_prompt_picks_minimax_tool_and_skill(monkeypatch):
     assert "不要调用 video-gen-minimax" in seedance
 
 
-def test_minimax_create_polls_v2_and_downloads(tmp_path, monkeypatch):
+def test_minimax_create_polls_v1_and_downloads(tmp_path, monkeypatch):
     image = tmp_path / "frame.png"
     image.write_bytes(b"png")
     monkeypatch.setenv("MINIMAX_API_KEY", "mm-key")
@@ -204,8 +204,8 @@ def test_minimax_create_polls_v2_and_downloads(tmp_path, monkeypatch):
     def fake_request(url, *, api_key, payload=None, method="POST", timeout=60):
         calls.append({"url": url, "method": method, "payload": payload})
         if method == "POST":
-            return {"task_id": "4240"}
-        return {"task": {"status": "succeeded", "content": {"url": "https://cdn.example/out.mp4"}}}
+            return {"id": "4240"}
+        return {"status": "succeeded", "content": {"url": "https://cdn.example/out.mp4"}}
 
     monkeypatch.setattr("ugc_agent.tools.video_gen_minimax.client.request_json", fake_request)
     monkeypatch.setattr(
@@ -220,8 +220,8 @@ def test_minimax_create_polls_v2_and_downloads(tmp_path, monkeypatch):
         sleep=lambda _: None,
     )
     assert data == b"mp4-bytes"
-    assert calls[0]["url"] == "https://api.minimax.cn/v2/video_generation"
-    assert calls[0]["payload"]["model"] == "MiniMax-H3"
-    assert calls[0]["payload"]["resolution"] == "768P"
-    assert "generate_audio" not in calls[0]["payload"]
-    assert calls[1]["url"] == "https://api.minimax.cn/v2/query/video_generation/4240"
+    assert calls[0]["url"] == "https://api.minimax.cn/v1/videos"
+    assert calls[0]["payload"]["model"] == "/models/MiniMax-H3"
+    assert calls[0]["payload"]["content"][1]["role"] == "first_frame"
+    assert calls[1]["url"] == "https://api.minimax.cn/v1/videos/4240"
+    assert calls[1]["method"] == "GET"
