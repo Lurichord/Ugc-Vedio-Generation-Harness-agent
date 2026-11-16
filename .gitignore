@@ -10,4 +10,6 @@ __pycache__/
 outputs/**
 !outputs/.gitkeep
 .tmp/
+var/
+.pytest-tmp/
 knowledge/.index/

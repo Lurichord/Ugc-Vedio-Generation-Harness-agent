@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UGC Video Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="studio">
+      <header class="studio-topbar">
+        <div class="brand">
+          <span class="brand-mark">UA</span>
+          <div>
+            <strong>UGC Video Agent</strong>
+            <small>对话制作 · 栏目查看状态和运行记录</small>
+          </div>
+        </div>
+        <div class="project-control">
+          <label class="sr-only" for="projectSelect">打开已有项目</label>
+          <select id="projectSelect"><option value="">打开已有项目</option></select>
+          <button id="newSessionButton" class="secondary" type="button">新对话</button>
+        </div>
+      </header>
+
+      <nav class="studio-nav" aria-label="栏目">
+        <button class="nav-tab active" type="button" data-pane="chat" aria-current="page">对话</button>
+        <button class="nav-tab" type="button" data-pane="state">ProjectState</button>
+        <button class="nav-tab" type="button" data-pane="runs">Agent 运行记录</button>
+      </nav>
+
+      <div id="pane-chat" class="studio-body is-chat-only">
+        <section class="chat-pane" aria-label="制作对话">
+          <div id="chatThread" class="chat-thread"></div>
+          <div class="chat-dock">
+            <form id="composer" class="composer">
+              <textarea id="composerInput" rows="1" placeholder="想做什么视频、给谁看、大概多长……"></textarea>
+              <button id="sendButton" class="primary" type="submit">发送</button>
+            </form>
+          </div>
+        </section>
+      </div>
+
+      <section id="pane-state" class="studio-page hidden" aria-label="ProjectState">
+        <div class="page-header">
+          <p class="eyebrow">PROJECT STATE</p>
+          <h1>ProjectState</h1>
+          <p id="stateHint" class="muted">对话写入之后，这里列出大纲、故事、分镜和媒体。只读，不在这里改账本。</p>
+        </div>
+        <div id="stateBoard"></div>
+      </section>
+
+      <section id="pane-runs" class="studio-page hidden" aria-label="Agent 运行记录">
+        <div class="page-header">
+          <p class="eyebrow">AGENT RUNS</p>
+          <h1>Agent 运行记录</h1>
+          <p id="runHint" class="muted">按 Turn 查看每一步的模型回复、工具调用和结果。对话气泡里不会出现这些。</p>
+        </div>
+        <div id="runBoard"></div>
+      </section>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
