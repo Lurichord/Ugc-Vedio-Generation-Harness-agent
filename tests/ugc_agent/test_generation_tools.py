@@ -16,7 +16,11 @@ from ugc_agent.tools.image_gen import image_gen
 from ugc_agent.tools.video_gen import video_gen
 from ugc_agent.tools.video_gen.client import _content, _duration_seconds
 from ugc_agent.tools.video_gen_minimax import video_gen_minimax
-from ugc_agent.tools.video_gen_minimax.client import generate_video as generate_minimax_video
+from ugc_agent.tools.video_gen_minimax.client import (
+    _encode_multipart,
+    _form_parts,
+    generate_video as generate_minimax_video,
+)
 from ugc_agent.tools.vision_understanding import vision_understanding
 
 
@@ -195,19 +199,77 @@ def test_system_prompt_picks_minimax_tool_and_skill(monkeypatch):
     assert "不要调用 video-gen-minimax" in seedance
 
 
-def test_minimax_create_polls_v1_and_downloads(tmp_path, monkeypatch):
+def test_minimax_create_form_uses_prompt_seconds_size(tmp_path):
+    image = tmp_path / "frame.png"
+    image.write_bytes(b"png")
+    fields, files = _form_parts(
+        "图1作为首帧",
+        duration_seconds=5,
+        mode="fl2va",
+        reference_paths=[str(image)],
+        audio_paths=None,
+        aspect_ratio="9:16",
+        resolution="720p",
+    )
+    names = [name for name, _ in fields]
+    assert ("model", "/models/MiniMax-H3") in fields
+    assert ("prompt", "图1作为首帧") in fields
+    assert ("seconds", "5") in fields
+    assert ("size", "768x1344") in fields
+    assert "content" not in names
+    assert "duration" not in names
+    assert "resolution" not in names
+    assert "ratio" not in names
+    assert files[0][0] == "input_reference"
+    assert files[0][1] == "frame.png"
+    body, content_type = _encode_multipart(fields, files)
+    assert content_type.startswith("multipart/form-data")
+    text = body.decode("utf-8", errors="replace")
+    assert 'name="prompt"' in text
+    assert 'name="seconds"' in text
+    assert 'name="size"' in text
+    assert 'name="input_reference"' in text
+    assert 'name="content"' not in text
+    assert 'name="duration"' not in text
+    assert 'name="resolution"' not in text
+    assert 'name="ratio"' not in text
+
+
+def test_minimax_http_paths_use_reference_url():
+    fields, files = _form_parts(
+        "参考图1",
+        duration_seconds=6,
+        mode="ref2va",
+        reference_paths=["https://cdn.example/a.png"],
+        audio_paths=None,
+        aspect_ratio="9:16",
+        resolution="768P",
+    )
+    assert ("reference_url", "https://cdn.example/a.png") in fields
+    assert files == []
+
+
+def test_minimax_create_posts_multipart_then_polls(tmp_path, monkeypatch):
     image = tmp_path / "frame.png"
     image.write_bytes(b"png")
     monkeypatch.setenv("MINIMAX_API_KEY", "mm-key")
-    calls = []
+    captured = {}
 
-    def fake_request(url, *, api_key, payload=None, method="POST", timeout=60):
-        calls.append({"url": url, "method": method, "payload": payload})
-        if method == "POST":
-            return {"id": "4240"}
-        return {"status": "succeeded", "content": {"url": "https://cdn.example/out.mp4"}}
+    def fake_post(url, fields, files, *, timeout=60):
+        captured["create_url"] = url
+        captured["fields"] = fields
+        captured["files"] = files
+        captured["content_type"] = "multipart/form-data"
+        return {"id": "4240"}
 
-    monkeypatch.setattr("ugc_agent.tools.video_gen_minimax.client.request_json", fake_request)
+    def fake_get(url, *, api_key, payload=None, method="POST", timeout=60):
+        captured["query_url"] = url
+        captured["query_method"] = method
+        assert method == "GET"
+        return {"status": "completed", "url": "https://cdn.example/out.mp4"}
+
+    monkeypatch.setattr("ugc_agent.tools.video_gen_minimax.client.post_form", fake_post)
+    monkeypatch.setattr("ugc_agent.tools.video_gen_minimax.client.request_json", fake_get)
     monkeypatch.setattr(
         "ugc_agent.tools.video_gen_minimax.client.download_bytes",
         lambda url: b"mp4-bytes",
@@ -220,8 +282,11 @@ def test_minimax_create_polls_v1_and_downloads(tmp_path, monkeypatch):
         sleep=lambda _: None,
     )
     assert data == b"mp4-bytes"
-    assert calls[0]["url"] == "https://api.minimax.cn/v1/videos"
-    assert calls[0]["payload"]["model"] == "/models/MiniMax-H3"
-    assert calls[0]["payload"]["content"][1]["role"] == "first_frame"
-    assert calls[1]["url"] == "https://api.minimax.cn/v1/videos/4240"
-    assert calls[1]["method"] == "GET"
+    assert captured["create_url"] == "https://api.minimax.cn/v1/videos"
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert ("prompt", "图1作为首帧，人物向前走") in captured["fields"]
+    assert ("seconds", "5") in captured["fields"]
+    assert ("size", "768x1344") in captured["fields"]
+    assert captured["files"][0][0] == "input_reference"
+    assert captured["query_url"] == "https://api.minimax.cn/v1/videos/4240"
+    assert captured["query_method"] == "GET"
