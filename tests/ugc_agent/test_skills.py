@@ -12,12 +12,14 @@ def test_composition_catalog_lists_four_skills_without_bodies():
         "ad",
         "explainer",
         "seedance-prompt",
+        "h3-prompt",
     }
     for name, skill in skills.items():
         assert f"- {name}: {skill.description}" in catalog
         assert skill.body not in catalog
     assert "先问清片子类型" not in catalog
     assert "fl2va / ref2va" in skills["seedance-prompt"].description
+    assert "fl2va / ref2va" in skills["h3-prompt"].description
 
 
 def test_load_skill_returns_full_body_or_unknown():
@@ -37,6 +39,13 @@ def test_load_skill_returns_full_body_or_unknown():
     assert "视频延长" in seedance
     assert "音乐卡点" in seedance
     assert load_skill.invoke({"name": "missing"}) == "unknown skill: missing"
+    h3 = load_skill.invoke({"name": "h3-prompt"})
+    assert "name: h3-prompt" in h3
+    assert "图1作为首帧" in h3
+    assert "运镜语言参考" in h3
+    assert "提示词模版库" in h3
+    assert "视频延长" in h3
+    assert "音乐卡点" in h3
 
 
 def test_composition_skills_keep_distinct_workflows():

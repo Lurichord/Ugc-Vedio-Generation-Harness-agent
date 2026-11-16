@@ -11,9 +11,12 @@ from langchain_core.language_models.fake_chat_models import (
 from ugc_agent.agent import build_agent, invoke_turn, resume_turn
 from ugc_agent.context import AgentContext
 from ugc_agent.store import ProjectStore
+from ugc_agent.agent import system_prompt
 from ugc_agent.tools.image_gen import image_gen
 from ugc_agent.tools.video_gen import video_gen
 from ugc_agent.tools.video_gen.client import _content, _duration_seconds
+from ugc_agent.tools.video_gen_minimax import video_gen_minimax
+from ugc_agent.tools.video_gen_minimax.client import generate_video as generate_minimax_video
 from ugc_agent.tools.vision_understanding import vision_understanding
 
 
@@ -46,6 +49,10 @@ def test_generation_tools_describe_usage_and_parameters():
     assert "audio_paths" in properties
     assert "[图1]" in properties["prompt"]["description"]
     assert "图片≤9" in properties["prompt"]["description"]
+    minimax = video_gen_minimax.tool_call_schema.model_json_schema()["properties"]
+    assert "h3-prompt" in minimax["prompt"]["description"]
+    assert "图1 图2" in minimax["prompt"]["description"]
+    assert "video-gen-minimax" in (video_gen_minimax.name or "")
     assert "UGC_LLM_MODEL" in vision_understanding.description
     assert "media_paths" in vision_understanding.tool_call_schema.model_json_schema()[
         "properties"
@@ -174,3 +181,47 @@ def test_vision_understanding_returns_model_text(monkeypatch):
     )
     result = vision_understanding.invoke({"prompt": "描述这个人"})
     assert result == "人物穿白衬衫，面对镜头说话"
+
+
+def test_system_prompt_picks_minimax_tool_and_skill(monkeypatch):
+    monkeypatch.setenv("UGC_VIDEO_PROVIDER", "minimax")
+    prompt = system_prompt()
+    assert "video-gen-minimax" in prompt
+    assert "h3-prompt" in prompt
+    assert "不要调用 video-gen" in prompt
+    monkeypatch.setenv("UGC_VIDEO_PROVIDER", "seedance")
+    seedance = system_prompt()
+    assert "load_skill seedance-prompt" in seedance
+    assert "不要调用 video-gen-minimax" in seedance
+
+
+def test_minimax_create_polls_v2_and_downloads(tmp_path, monkeypatch):
+    image = tmp_path / "frame.png"
+    image.write_bytes(b"png")
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-key")
+    calls = []
+
+    def fake_request(url, *, api_key, payload=None, method="POST", timeout=60):
+        calls.append({"url": url, "method": method, "payload": payload})
+        if method == "POST":
+            return {"task_id": "4240"}
+        return {"task": {"status": "succeeded", "content": {"url": "https://cdn.example/out.mp4"}}}
+
+    monkeypatch.setattr("ugc_agent.tools.video_gen_minimax.client.request_json", fake_request)
+    monkeypatch.setattr(
+        "ugc_agent.tools.video_gen_minimax.client.download_bytes",
+        lambda url: b"mp4-bytes",
+    )
+    data = generate_minimax_video(
+        "图1作为首帧，人物向前走",
+        duration_seconds=5,
+        mode="fl2va",
+        reference_paths=[str(image)],
+        sleep=lambda _: None,
+    )
+    assert data == b"mp4-bytes"
+    assert calls[0]["url"] == "https://api.minimax.cn/v2/video_generation"
+    assert calls[0]["payload"]["model"] == "MiniMax-H3"
+    assert calls[0]["payload"]["resolution"] == "768P"
+    assert "generate_audio" not in calls[0]["payload"]
+    assert calls[1]["url"] == "https://api.minimax.cn/v2/query/video_generation/4240"

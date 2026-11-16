@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -25,7 +26,25 @@ from .step_pause import StepPauseMiddleware
 from .tools import AGENT_TOOLS
 
 
-SYSTEM_PROMPT = """你是短视频制作搭档，用中文和用户把片子做出来。用户听到的是在聊片子的人，不是系统、问卷或后台组件。不要自称 agent / system，不要把字段名念出来（例如 video_type、owner_ref）。
+def system_prompt() -> str:
+    provider = (os.environ.get("UGC_VIDEO_PROVIDER") or "seedance").strip().lower()
+    if provider == "minimax":
+        skill, tool, other_skill, other_tool, vendor = (
+            "h3-prompt",
+            "video-gen-minimax",
+            "seedance-prompt",
+            "video-gen",
+            "MiniMax H3",
+        )
+    else:
+        skill, tool, other_skill, other_tool, vendor = (
+            "seedance-prompt",
+            "video-gen",
+            "h3-prompt",
+            "video-gen-minimax",
+            "Seedance",
+        )
+    return f"""你是短视频制作搭档，用中文和用户把片子做出来。用户听到的是在聊片子的人，不是系统、问卷或后台组件。不要自称 agent / system，不要把字段名念出来（例如 video_type、owner_ref）。
 
 ## 职责
 1. 先弄清要做什么片子，再按对应 composition skill 推进。
@@ -40,9 +59,12 @@ SYSTEM_PROMPT = """你是短视频制作搭档，用中文和用户把片子做�
 ## Skill
 下面目录只有名字和一句描述。写大纲前必须先 load_skill 加载对应 composition 全文。
 制作过程必须严格按已选定的那份 composition skill 逐步走，禁止跳步，禁止自己另排流程。下一步该 save_shot_design 就先写分镜，不要先 image-gen / record_media。
-写分镜 prompt 或调用 video-gen 前，再 load_skill seedance-prompt。
+写分镜 prompt 或调用 {tool} 前，再 load_skill {skill}。
 对当前该做哪一步不清楚、记不清前置条件、或工具报错像 shot design is missing：立刻再 load_skill 加载同一条 composition 全文，对照步骤继续，不要靠记忆硬做。
-不要一次加载多条 composition。foundation 的 seedance-prompt 可以和当前片种一起用。片种做法以 composition 全文为准，画面正文写法以 seedance-prompt 为准。
+不要一次加载多条 composition。foundation 的 {skill} 可以和当前片种一起用。片种做法以 composition 全文为准，画面正文写法以 {skill} 为准。
+
+## 视频厂商
+当前视频厂商是 {vendor}。写 prompt 用 {skill}，出片调用 {tool}。不要 load_skill {other_skill}，不要调用 {other_tool}。
 
 ## 账本
 先 read_project。
@@ -60,6 +82,9 @@ SYSTEM_PROMPT = """你是短视频制作搭档，用中文和用户把片子做�
 素材不够就说缺什么，不要假装已经生成。
 当前 Turn 只推进能确定的一步；前置步骤还没写入项目状态，就不要跳到后面。
 """
+
+
+SYSTEM_PROMPT = system_prompt()
 
 
 def on_tool_error(exc: Exception, request) -> str:
@@ -87,19 +112,21 @@ def build_agent(
     checkpointer: Any | None = None,
     max_steps: int = 32,
 ):
+    video_interrupt = {
+        "allowed_decisions": ["approve", "edit", "reject"],
+        "description": _video_gen_review,
+    }
     return create_agent(
         model=model,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt(),
         middleware=[
             SkillsMiddleware(),
             StepPauseMiddleware(),
             HumanInTheLoopMiddleware(
                 interrupt_on={
-                    "video-gen": {
-                        "allowed_decisions": ["approve", "edit", "reject"],
-                        "description": _video_gen_review,
-                    }
+                    "video-gen": video_interrupt,
+                    "video-gen-minimax": video_interrupt,
                 },
                 interrupt_mode="per_call",
             ),
